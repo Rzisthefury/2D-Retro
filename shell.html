@@ -1,0 +1,218 @@
+<title>Aerial Finisher</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  /* Deliberately single-theme: this is an arcade screen, not a document.
+     Every colour is painted explicitly so it holds on any host background. */
+  :root {
+    --bg: #090b12;
+    --panel: #131728;
+    --panel-2: #1b2036;
+    --line: #262c44;
+    --text: #e9ecf8;
+    --dim: #949dbd;
+    --accent: #6f9bff;
+    --gold: #ffd54a;
+    --display: 'Chakra Petch', 'Trebuchet MS', system-ui, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 var(--mono);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-block: 16px;
+    padding-left: 16px;
+    padding-right: 16px;
+    gap: 12px;
+  }
+
+  header { width: 100%; max-width: 980px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 {
+    font-family: var(--display);
+    font-size: 19px; font-weight: 700; margin: 0;
+    letter-spacing: 0.22em; text-transform: uppercase; color: var(--text);
+  }
+  h1 .fin { color: var(--gold); }
+  header .sub { color: var(--dim); font-size: 12px; }
+
+  #stage {
+    width: 100%;
+    max-width: 980px;
+    aspect-ratio: 960 / 540;
+    max-height: 70vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #05070d;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    position: relative;
+  }
+  canvas { display: block; image-rendering: auto; touch-action: none; }
+
+  #help {
+    width: 100%;
+    max-width: 980px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 6px 18px;
+    color: var(--dim);
+    font-size: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  #help b { color: var(--text); font-weight: 600; font-family: var(--display); letter-spacing: 0.05em; }
+  #help .k {
+    display: inline-block; min-width: 20px; text-align: center;
+    background: #232a40; border: 1px solid #38415f; border-bottom-width: 2px;
+    border-radius: 4px; padding: 0 5px; color: var(--text); font-size: 11px;
+  }
+
+  #debug {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: 300px;
+    max-width: 86vw;
+    background: rgba(14,18,30,0.97);
+    border-left: 1px solid var(--line);
+    padding: 12px 14px 28px;
+    overflow-y: auto;
+    transform: translateX(101%);
+    transition: transform 0.18s ease;
+    z-index: 20;
+    font-size: 12px;
+  }
+  #debug.open { transform: translateX(0); }
+  .dbg-head { font-family: var(--display); font-weight: 700; letter-spacing: 0.1em; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: baseline; }
+  .dbg-hint { color: var(--dim); font-weight: 500; font-size: 10px; }
+  .dbg-group { font-family: var(--display); margin: 14px 0 6px; color: var(--accent); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; font-size: 10px; }
+  .dbg-row { display: grid; grid-template-columns: 1fr 110px 42px; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--dim); }
+  .dbg-row output { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  .dbg-row input[type=range] { width: 100%; accent-color: var(--accent); }
+  .dbg-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+  .dbg-actions button {
+    background: #222941; color: var(--text); border: 1px solid #38415f;
+    border-radius: 5px; padding: 4px 8px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .dbg-actions button:hover { background: #2c3550; }
+
+  footer { color: var(--dim); font-size: 11px; max-width: 980px; width: 100%; }
+
+  #rotate { display: none; }
+
+  /* ---- phones and tablets: the game takes the whole screen.
+     Page chrome is a desktop affordance; on a phone it just steals pixels. */
+  @media (pointer: coarse), (max-width: 760px) {
+    body {
+      padding: 0;
+      gap: 0;
+      height: 100dvh;
+      overflow: hidden;
+      justify-content: center;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+    header, #help, footer { display: none; }
+    #stage {
+      width: 100dvw;
+      height: 100dvh;
+      max-width: none;
+      max-height: none;
+      aspect-ratio: auto;
+      border: 0;
+      border-radius: 0;
+      background: #000;
+    }
+    #debug { width: 86vw; font-size: 13px; }
+    .dbg-row { grid-template-columns: 1fr 90px 40px; }
+
+    /* portrait: the arena is 16:9, so ask for a turn rather than showing
+       the player a third of the fight */
+    @media (orientation: portrait) {
+      #stage { display: none; }
+      #rotate {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        width: 100dvw;
+        height: 100dvh;
+        color: var(--text);
+        text-align: center;
+        padding: 24px;
+      }
+      #rotate .glyph {
+        width: 76px; height: 120px;
+        border: 3px solid var(--accent);
+        border-radius: 12px;
+        animation: tip 2.2s ease-in-out infinite;
+      }
+      #rotate h2 { font-family: var(--display); letter-spacing: 0.18em; font-size: 17px; margin: 0; }
+      #rotate p { color: var(--dim); font-size: 13px; margin: 0; max-width: 300px; }
+    }
+  }
+
+  @keyframes tip {
+    0%, 40% { transform: rotate(0deg); }
+    60%, 100% { transform: rotate(-90deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #rotate .glyph { animation: none; transform: rotate(-90deg); }
+  }
+</style>
+
+<header>
+  <h1>Aerial <span class="fin">Finisher</span></h1>
+  <div class="sub">action-hybrid JRPG combat prototype &middot; press <span style="color:var(--text)">`</span> for the tuning panel</div>
+</header>
+
+<div id="rotate">
+  <div class="glyph"></div>
+  <h2>Rotate to play</h2>
+  <p>The arena is widescreen. Turn your phone sideways &mdash; and add this page to your Home Screen for a fullscreen run.</p>
+</div>
+
+<div id="stage"><canvas id="game" width="960" height="540"></canvas></div>
+
+<div id="help">
+  <div><b>Move</b> <span class="k">W</span><span class="k">A</span><span class="k">S</span><span class="k">D</span></div>
+  <div><b>Attack</b> <span class="k">J</span> &nbsp; <b>Jump</b> <span class="k">K</span>/<span class="k">Space</span></div>
+  <div><b>Lock-on / cycle</b> <span class="k">L</span> &nbsp; <b>Dash</b> <span class="k">Shift</span></div>
+  <div><b>Command menu</b> <span class="k">&uarr;</span><span class="k">&darr;</span> <span class="k">Enter</span> <span class="k">Esc</span></div>
+  <div><b>Magic</b> <span class="k">1</span> Fire <span class="k">2</span> Blizzard <span class="k">3</span> Thunder <span class="k">4</span> Cure</div>
+  <div><b>Potion</b> <span class="k">Q</span> &nbsp; <b>Pause</b> <span class="k">P</span> &nbsp; <b>Mute</b> <span class="k">M</span></div>
+  <div><b>Gear / Synthesis / Talents</b> <span class="k">Tab</span></div>
+  <div>On a phone: touch controls and auto lock-on turn on automatically.</div>
+  <div><b>Retry</b> <span class="k">R</span> &nbsp; <b>Tuning</b> <span class="k">`</span></div>
+  <div>Gamepad works too: <b>&#9723;</b> attack, <b>&#10005;</b> jump, triggers lock-on.</div>
+</div>
+
+<footer>
+  Everything enemies drop is a crafting material, a potion or an ether. Press <b>Tab</b> to forge the next
+  weapon tier (more power, slightly more reach) or armour tier (flat damage reduction), and to spend AP in the
+  talent tree &mdash; <b>Dash</b> and the <b>Whirl</b> spin finisher both live there, along with the fourth and
+  fifth combo hits. Bulwarks block anything from the front: go around them, or break the guard with a finisher.
+  Cure spends your entire MP bar and locks it while it recharges. The score follows the fight, dropping to
+  harpsichord and strings at a rest point and climbing to blast beats when the arena fills up.
+  Levels, gear, materials and talents all persist: dying costs you the wave, not the grind.
+</footer>
+
+<div id="debug"></div>
+
+<script>
+/*__GAME_JS__*/
+</script>
