@@ -81,7 +81,8 @@ class Renderer {
 
   private drawArena(g: Game) {
     const c = this.ctx;
-    const look = g.location.look;
+    const scene = g.scene();
+    const look = scene.look;
     const grad = c.createLinearGradient(0, 0, 0, VIEW_H);
     grad.addColorStop(0, look.sky);
     grad.addColorStop(1, look.floor);
@@ -89,34 +90,47 @@ class Renderer {
     c.fillRect(0, 0, VIEW_W, VIEW_H);
 
     const a = g.arena;
-    this.drawBackdrop(c, g);
+    this.drawBackdrop(c, g, scene);
 
     // floor plate
     c.fillStyle = look.floorAlt;
     c.fillRect(a.x, a.y, a.w, a.h);
 
-    // grid
+    // grid — on the road it scrolls, so the ground moves under you
+    const off = g.screen === 'travel' ? -(g.scroll % 60) : 0;
+    c.save();
+    c.beginPath(); c.rect(a.x, a.y, a.w, a.h); c.clip();
     c.strokeStyle = look.grid;
     c.lineWidth = 1;
     c.beginPath();
-    for (let x = a.x; x <= a.x + a.w + 0.5; x += 60) { c.moveTo(x, a.y); c.lineTo(x, a.y + a.h); }
+    for (let x = a.x + off; x <= a.x + a.w + 0.5; x += 60) { c.moveTo(x, a.y); c.lineTo(x, a.y + a.h); }
     for (let y = a.y; y <= a.y + a.h + 0.5; y += 60) { c.moveTo(a.x, y); c.lineTo(a.x + a.w, y); }
     c.stroke();
-
-    // centre motif
-    c.save();
-    c.globalAlpha = 0.20;
-    c.strokeStyle = look.motif;
-    c.lineWidth = 3;
-    c.beginPath();
-    c.arc(a.x + a.w / 2, a.y + a.h / 2, 110, 0, Math.PI * 2);
-    c.stroke();
-    c.beginPath();
-    c.arc(a.x + a.w / 2, a.y + a.h / 2, 76, 0, Math.PI * 2);
-    c.stroke();
+    if (g.screen === 'travel') {
+      // a worn path down the middle of the road
+      c.globalAlpha = 0.18;
+      c.fillStyle = look.motif;
+      for (let x = a.x + (off * 2 % 80) - 80; x < a.x + a.w; x += 80) c.fillRect(x, a.y + a.h / 2 - 3, 44, 6);
+    }
     c.restore();
 
-    this.drawFloorDeco(c, g);
+    if (g.screen !== 'travel') {
+      // centre motif
+      c.save();
+      c.globalAlpha = 0.20;
+      c.strokeStyle = look.motif;
+      c.lineWidth = 3;
+      c.beginPath();
+      c.arc(a.x + a.w / 2, a.y + a.h / 2, 110, 0, Math.PI * 2);
+      c.stroke();
+      c.beginPath();
+      c.arc(a.x + a.w / 2, a.y + a.h / 2, 76, 0, Math.PI * 2);
+      c.stroke();
+      c.restore();
+    }
+
+    this.drawFloorDeco(c, g, scene);
+    if (g.screen === 'location' && scene.hasCraftingStation) this.drawStation(c, g, scene);
 
     // rest-point glow
     if (g.restPoint) {
@@ -139,15 +153,16 @@ class Renderer {
     c.strokeRect(a.x, a.y, a.w, a.h);
   }
 
-  /** Scenery behind the arena plate, one style per location. */
-  private drawBackdrop(c: CanvasRenderingContext2D, g: Game) {
-    const look = g.location.look;
+  /** Scenery behind the arena plate, one style per theme. */
+  private drawBackdrop(c: CanvasRenderingContext2D, g: Game, scene: WorldLocation) {
+    const look = scene.look;
     const a = g.arena;
     const t = g.time;
+    const drift = g.screen === 'travel' ? g.scroll * 0.4 : 0;   // parallax on the road
+    const wrap = (x: number) => ((x % VIEW_W) + VIEW_W) % VIEW_W;
     c.save();
-    switch (look.deco) {
-      case 'plaza': {
-        // distant lamp posts along the back wall
+    switch (scene.theme) {
+      case 'Haven': {
         for (let x = a.x + 40; x < a.x + a.w; x += 120) {
           c.fillStyle = '#20263a';
           c.fillRect(x - 2, a.y - 46, 4, 46);
@@ -158,52 +173,71 @@ class Renderer {
         }
         break;
       }
-      case 'bastion': {
-        // crenellated rampart across the top
+      case 'Forest': {
+        // a ragged treeline
+        for (let i = 0; i < 18; i++) {
+          const x = wrap(i * 61 - drift);
+          const h = 40 + ((i * 37) % 30);
+          c.fillStyle = i % 2 ? '#0c1a10' : '#10221a';
+          c.beginPath(); c.moveTo(x - 26, a.y); c.lineTo(x, a.y - h); c.lineTo(x + 26, a.y); c.fill();
+        }
+        for (let i = 0; i < 14; i++) {
+          c.globalAlpha = 0.25 + 0.25 * Math.abs(Math.sin(t * 1.5 + i));
+          c.fillStyle = look.accent;
+          c.fillRect(wrap(i * 71 + Math.sin(t + i) * 10 - drift), 20 + (i * 29) % 60, 2, 2);
+        }
+        break;
+      }
+      case 'Coast': {
+        c.fillStyle = '#16303e';
+        c.fillRect(0, 0, VIEW_W, a.y);
+        c.strokeStyle = look.accent;
+        c.globalAlpha = 0.35;
+        c.lineWidth = 1.5;
+        for (let row = 0; row < 3; row++) {
+          c.beginPath();
+          for (let x = 0; x <= VIEW_W; x += 8) {
+            const y = 30 + row * 20 + Math.sin(x * 0.04 + t * 1.4 + row - drift * 0.02) * 3;
+            if (x === 0) c.moveTo(x, y); else c.lineTo(x, y);
+          }
+          c.stroke();
+        }
+        break;
+      }
+      case 'Ruins': {
         c.fillStyle = '#2a231f';
         c.fillRect(0, a.y - 34, VIEW_W, 34);
-        for (let x = 0; x < VIEW_W; x += 48) c.fillRect(x, a.y - 52, 28, 18);
-        // floodwater lapping at the bottom edge
-        c.globalAlpha = 0.35;
-        c.fillStyle = '#2d4a5a';
-        c.fillRect(0, a.y + a.h + 6, VIEW_W, VIEW_H - (a.y + a.h + 6));
-        c.strokeStyle = '#5a8aa0';
-        c.lineWidth = 1.5;
+        for (let x = -48; x < VIEW_W + 48; x += 48) c.fillRect(wrap(x - drift), a.y - 52, 28, 18);
+        for (let i = 0; i < 5; i++) {
+          const x = wrap(a.x + 40 + i * 190 - drift);
+          c.fillStyle = '#3a322c';
+          c.fillRect(x - 8, a.y - 80 + (i % 2) * 20, 16, 50 - (i % 2) * 20);
+        }
+        break;
+      }
+      case 'Desert': {
+        c.globalAlpha = 0.5;
+        c.fillStyle = look.accent;
+        c.beginPath(); c.arc(780, 44, 26, 0, Math.PI * 2); c.fill();
+        c.globalAlpha = 1;
+        c.fillStyle = '#3a2e1c';
         c.beginPath();
-        for (let x = 0; x <= VIEW_W; x += 8) {
-          const y = a.y + a.h + 14 + Math.sin(x * 0.05 + t * 1.6) * 2.5;
-          if (x === 0) c.moveTo(x, y); else c.lineTo(x, y);
-        }
-        c.stroke();
+        c.moveTo(0, a.y);
+        for (let x = 0; x <= VIEW_W; x += 20) c.lineTo(x, a.y - 16 - Math.sin((x + drift) * 0.012) * 14);
+        c.lineTo(VIEW_W, a.y);
+        c.closePath(); c.fill();
         break;
       }
-      case 'spire': {
-        // tall pillars with hovering glyphs
-        for (let i = 0; i < 6; i++) {
-          const x = a.x + 30 + i * (a.w - 60) / 5;
-          c.fillStyle = '#1c2247';
-          c.fillRect(x - 9, 0, 18, a.y);
-          c.globalAlpha = 0.5 + Math.sin(t * 2.2 + i) * 0.3;
-          c.strokeStyle = look.accent;
-          c.lineWidth = 1.5;
-          const gy = a.y - 30 + Math.sin(t * 1.4 + i * 1.7) * 6;
-          c.beginPath(); c.arc(x, gy, 7, 0, Math.PI * 2); c.stroke();
-          c.beginPath(); c.moveTo(x - 4, gy); c.lineTo(x + 4, gy); c.moveTo(x, gy - 4); c.lineTo(x, gy + 4); c.stroke();
-          c.globalAlpha = 1;
-        }
-        break;
-      }
-      case 'wastes': {
-        // a jagged dune ridge and embers drifting upwards
+      case 'Volcano': {
         c.fillStyle = '#2e1a10';
         c.beginPath();
         c.moveTo(0, a.y);
-        for (let x = 0; x <= VIEW_W; x += 40) c.lineTo(x, a.y - 22 - ((x * 37) % 29));
+        for (let x = 0; x <= VIEW_W; x += 40) c.lineTo(x, a.y - 22 - (((x + Math.floor(drift / 40) * 40) * 37) % 29));
         c.lineTo(VIEW_W, a.y);
         c.closePath();
         c.fill();
         for (let i = 0; i < 26; i++) {
-          const x = (i * 131 + Math.sin(t + i) * 14) % VIEW_W;
+          const x = wrap(i * 131 + Math.sin(t + i) * 14 - drift);
           const y = VIEW_H - ((t * (18 + (i % 5) * 7) + i * 53) % VIEW_H);
           c.globalAlpha = 0.25 + (i % 4) * 0.1;
           c.fillStyle = i % 3 ? look.accent : look.motif;
@@ -211,10 +245,40 @@ class Renderer {
         }
         break;
       }
-      case 'rift': {
-        // star specks and slow-pulsing tears in the dark
+      case 'Tundra': {
+        c.fillStyle = '#243240';
+        c.beginPath();
+        c.moveTo(0, a.y);
+        for (let i = 0; i <= 12; i++) c.lineTo(i * 80, a.y - (i % 2 ? 50 : 18));
+        c.lineTo(VIEW_W, a.y);
+        c.closePath(); c.fill();
+        for (let i = 0; i < 50; i++) {
+          c.globalAlpha = 0.45;
+          c.fillStyle = '#ffffff';
+          const x = wrap(i * 53 + Math.sin(t * 0.8 + i) * 12 - drift);
+          const y = (t * (20 + (i % 4) * 8) + i * 47) % VIEW_H;
+          c.fillRect(x, y, 2, 2);
+        }
+        break;
+      }
+      case 'Sky': {
+        for (let i = 0; i < 7; i++) {
+          const x = wrap(i * 150 + t * (6 + i) - drift);
+          c.globalAlpha = 0.18;
+          c.fillStyle = '#ffffff';
+          c.beginPath(); c.ellipse(x, 24 + (i * 23) % 50, 50, 12, 0, 0, Math.PI * 2); c.fill();
+        }
+        if (Math.sin(t * 0.9) > 0.985) {
+          c.globalAlpha = 0.6;
+          c.strokeStyle = look.accent;
+          c.lineWidth = 2;
+          c.beginPath(); c.moveTo(600, 0); c.lineTo(620, 30); c.lineTo(606, 44); c.lineTo(630, a.y); c.stroke();
+        }
+        break;
+      }
+      case 'Rift': {
         for (let i = 0; i < 40; i++) {
-          const x = (i * 97) % VIEW_W;
+          const x = wrap(i * 97 - drift * 0.5);
           const y = (i * 61) % VIEW_H;
           c.globalAlpha = 0.2 + 0.25 * Math.abs(Math.sin(t * 0.8 + i));
           c.fillStyle = i % 5 ? '#c9b8ff' : look.motif;
@@ -236,31 +300,46 @@ class Renderer {
   }
 
   /** Marks on the arena plate itself; drawn under every character. */
-  private drawFloorDeco(c: CanvasRenderingContext2D, g: Game) {
-    const look = g.location.look;
+  private drawFloorDeco(c: CanvasRenderingContext2D, g: Game, scene: WorldLocation) {
+    const look = scene.look;
     const a = g.arena;
+    const off = g.screen === 'travel' ? g.scroll : 0;
+    const wx = (x: number) => a.x + ((((x - off) - a.x) % a.w) + a.w) % a.w;
     c.save();
-    if (look.deco === 'bastion') {
-      // cracked flagstones
+    c.beginPath(); c.rect(a.x, a.y, a.w, a.h); c.clip();
+    if (scene.theme === 'Ruins') {
       c.strokeStyle = '#3d332c';
       c.lineWidth = 2;
       for (let i = 0; i < 7; i++) {
-        const x = a.x + 70 + (i * 173) % (a.w - 140);
+        const x = wx(a.x + 70 + (i * 173) % (a.w - 140));
         const y = a.y + 40 + (i * 97) % (a.h - 80);
         c.beginPath(); c.moveTo(x, y); c.lineTo(x + 14, y + 9); c.lineTo(x + 8, y + 22); c.stroke();
       }
-    } else if (look.deco === 'wastes') {
-      // cooling lava seams
+    } else if (scene.theme === 'Volcano') {
       c.globalAlpha = 0.28 + Math.sin(g.time * 1.8) * 0.08;
       c.strokeStyle = look.motif;
       c.lineWidth = 2.5;
       for (let i = 0; i < 5; i++) {
-        const x = a.x + 60 + (i * 211) % (a.w - 120);
+        const x = wx(a.x + 60 + (i * 211) % (a.w - 120));
         const y = a.y + 30 + (i * 83) % (a.h - 60);
         c.beginPath(); c.moveTo(x, y); c.lineTo(x + 30, y + 12); c.lineTo(x + 52, y + 6); c.stroke();
       }
-    } else if (look.deco === 'rift') {
-      // the floor edge crumbles into the void
+    } else if (scene.theme === 'Forest') {
+      c.fillStyle = '#1e3a24';
+      for (let i = 0; i < 12; i++) {
+        const x = wx(a.x + 30 + (i * 157) % (a.w - 60));
+        const y = a.y + 20 + (i * 71) % (a.h - 40);
+        c.beginPath(); c.ellipse(x, y, 10, 4, 0, 0, Math.PI * 2); c.fill();
+      }
+    } else if (scene.theme === 'Tundra') {
+      c.globalAlpha = 0.25;
+      c.fillStyle = '#ffffff';
+      for (let i = 0; i < 8; i++) {
+        const x = wx(a.x + 50 + (i * 191) % (a.w - 100));
+        const y = a.y + 30 + (i * 67) % (a.h - 60);
+        c.beginPath(); c.ellipse(x, y, 34, 9, 0, 0, Math.PI * 2); c.fill();
+      }
+    } else if (scene.theme === 'Rift') {
       c.globalAlpha = 0.5;
       c.fillStyle = '#05030a';
       for (let x = a.x; x < a.x + a.w; x += 34) {
@@ -269,6 +348,37 @@ class Renderer {
         c.fill();
       }
     }
+    c.restore();
+  }
+
+  /** The crafting station: an anvil and a fire, coloured by the place. */
+  private drawStation(c: CanvasRenderingContext2D, g: Game, scene: WorldLocation) {
+    const x = g.arena.x + g.arena.w - 110, y = g.arena.y + 70;
+    const accent = scene.look.accent;
+    c.save();
+    // fire
+    const flick = Math.sin(g.time * 14) * 3;
+    const fg = c.createRadialGradient(x + 44, y - 6, 2, x + 44, y - 6, 34);
+    fg.addColorStop(0, accent);
+    fg.addColorStop(1, 'rgba(0,0,0,0)');
+    c.globalAlpha = 0.55 + Math.sin(g.time * 6) * 0.1;
+    c.fillStyle = fg;
+    c.beginPath(); c.arc(x + 44, y - 6, 34, 0, Math.PI * 2); c.fill();
+    c.globalAlpha = 1;
+    c.fillStyle = accent;
+    c.beginPath(); c.moveTo(x + 36, y + 4); c.quadraticCurveTo(x + 44, y - 22 - flick, x + 52, y + 4); c.fill();
+    // anvil
+    c.fillStyle = '#2a2e3e';
+    c.fillRect(x - 22, y - 4, 44, 10);
+    c.fillRect(x - 8, y + 6, 16, 12);
+    c.fillRect(x - 16, y + 18, 32, 6);
+    c.strokeStyle = accent;
+    c.lineWidth = 1.5;
+    c.strokeRect(x - 22, y - 4, 44, 10);
+    c.font = '700 10px ui-monospace, Menlo, Consolas, monospace';
+    c.textAlign = 'center';
+    c.fillStyle = accent;
+    c.fillText((scene.stationName || 'Forge').toUpperCase(), x + 10, y + 40);
     c.restore();
   }
 
@@ -858,18 +968,41 @@ class Renderer {
     c.fillText(p.level >= MAX_LEVEL ? 'MAX' : `EXP ${p.exp}/${need}`, x + 52 + barW * 0.8 + 8, y + 35.5);
     c.restore();
 
-    // ---- top-right: wave + record
+    // ---- top-right: where you are and what is happening
     c.save();
     c.textAlign = 'right';
-    c.font = '800 20px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = PAL.text;
-    c.fillText(`WAVE ${g.wave}`, VIEW_W - 18, 32);
-    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = PAL.dim;
-    c.fillText(`best ${g.bests[g.location.id] || 1}   enemies ${g.enemies.filter((e) => e.alive).length}`, VIEW_W - 18, 50);
-    c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = g.location.look.accent;
-    c.fillText(g.location.name.toUpperCase(), VIEW_W - 18, 66);
+    const scene = g.scene();
+    if (g.screen === 'battle' && g.battle) {
+      const b = g.battle;
+      c.font = '800 20px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = PAL.text;
+      c.fillText(b.kind === 'boss' ? `BOSS  ${Math.min(g.wave, b.totalWaves)}/${b.totalWaves}` : `WAVE ${g.wave}`, VIEW_W - 18, 32);
+      c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = PAL.dim;
+      c.fillText(b.kind === 'boss'
+        ? `${b.superboss ? 'ASCENDANT ' : ''}${b.boss!.name}   enemies ${g.enemies.filter((e) => e.alive).length}`
+        : `trial tier ${b.tier}   best ${g.world.trialBest[b.tier] || 1}   enemies ${g.enemies.filter((e) => e.alive).length}`,
+        VIEW_W - 18, 50);
+    } else if (g.screen === 'travel' && g.travel) {
+      c.font = '800 16px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = PAL.text;
+      c.fillText('ON THE ROAD', VIEW_W - 18, 30);
+      c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = PAL.dim;
+      c.fillText(`tier ${scene.tier}   enemies ${g.enemies.filter((e) => e.alive).length}`, VIEW_W - 18, 48);
+    } else {
+      c.font = '800 18px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = scene.look.accent;
+      c.fillText(scene.name.toUpperCase(), VIEW_W - 18, 30);
+      c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = PAL.dim;
+      c.fillText(scene.tier ? `tier ${scene.tier}  ·  recommended Lv ${recommendedLevel(scene)}` : 'safe ground', VIEW_W - 18, 48);
+    }
+    if (g.screen !== 'location') {
+      c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = scene.look.accent;
+      c.fillText(scene.name.toUpperCase(), VIEW_W - 18, 66);
+    }
     c.restore();
 
     // equipped gear, small, under the bars
@@ -884,7 +1017,10 @@ class Renderer {
     }
     c.restore();
 
-    if (!IS_TOUCH) this.drawCommandMenu(c, g);
+    if (!IS_TOUCH && g.inCombat()) this.drawCommandMenu(c, g);
+    if (g.screen === 'location' && !g.menuOpen) this.drawPlacePanel(c, g);
+    if (g.screen === 'travel' && g.travel) this.drawTravelBar(c, g);
+    if (g.inCombat() && p.alive) this.drawBackButton(c, g);
 
     // ---- combo counter
     if (g.comboCount > 1 && g.comboDisplay > 0) {
@@ -932,11 +1068,109 @@ class Renderer {
       c.restore();
     }
 
-    if (g.waveIntro > 0 && p.alive && g.screen === 'play') this.drawGrace(c, g);
-    if (IS_TOUCH && g.screen === 'play' && !g.menuOpen && p.alive) this.drawTouch(c, g);
+    if (g.waveIntro > 0 && p.alive && g.inCombat()) this.drawGrace(c, g);
+    if (IS_TOUCH && g.inCombat() && !g.menuOpen && p.alive) this.drawTouch(c, g);
     if (!p.alive) this.drawGameOver(c, g);
     if (g.paused) this.drawPause(c);
     if (g.menuOpen) this.drawBigMenu(c, g);
+  }
+
+  /** The list of things to do while standing in a location. */
+  private drawPlacePanel(c: CanvasRenderingContext2D, g: Game) {
+    const rows = g.placeRows();
+    const l = g.place;
+    const P = PLACE_PANEL;
+    const h = 52 + rows.length * P.rowH + 34;
+    c.save();
+    c.fillStyle = 'rgba(10,14,28,0.88)';
+    this.roundRect(c, P.x, P.y, P.w, h, 10); c.fill();
+    c.strokeStyle = l.look.accent;
+    c.globalAlpha = 0.6;
+    c.lineWidth = 1.5;
+    this.roundRect(c, P.x, P.y, P.w, h, 10); c.stroke();
+    c.globalAlpha = 1;
+
+    c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = l.look.accent;
+    c.textAlign = 'left';
+    c.fillText(`You are in ${l.name}`, P.x + 14, P.y + 22);
+    c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.dim;
+    c.fillText(this.clip(c, l.description, P.w - 28), P.x + 14, P.y + 40);
+
+    c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const y = P.y + 52 + i * P.rowH;
+      const on = i === g.placeIndex;
+      if (on) this.rowHighlight(c, P.x + 6, y, P.w - 12, P.rowH - 2);
+      c.fillStyle = !r.enabled ? '#5d6480' : on ? '#ffffff' : (r.color || PAL.text);
+      c.fillText(r.label, P.x + 18, y + 17);
+      if (r.right) {
+        c.textAlign = 'right';
+        c.fillStyle = r.enabled ? (on ? PAL.mpCharge : PAL.dim) : '#4a5068';
+        c.fillText(r.right, P.x + P.w - 14, y + 17);
+        c.textAlign = 'left';
+      }
+    }
+    // quest hint
+    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.mpCharge;
+    c.fillText(this.clip(c, nextObjective(g.world), P.w - 28), P.x + 14, P.y + h - 14);
+    c.restore();
+
+    c.save();
+    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.dim;
+    c.textAlign = 'center';
+    c.fillText(IS_TOUCH ? 'tap a row to select, tap again to do it'
+      : '\u2191\u2193 choose  ·  ENTER do it  ·  WASD walk  ·  TAB menu', VIEW_W / 2 + 150, VIEW_H - 22);
+    c.restore();
+  }
+
+  /** "Traveling to X" and how far along the road you are. */
+  private drawTravelBar(c: CanvasRenderingContext2D, g: Game) {
+    const t = g.travel!;
+    const to = locById(t.to), from = locById(t.from);
+    const w = 360, x = (VIEW_W - w) / 2, y = 18;
+    c.save();
+    c.textAlign = 'center';
+    c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.text;
+    c.fillText(`Traveling to ${to.name}...`, VIEW_W / 2, y + 10);
+    this.bar(c, x, y + 18, w, 8, t.progress, to.look.accent, 'rgba(0,0,0,0.55)');
+    c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.dim;
+    c.textAlign = 'left';
+    c.fillText(from.name, x, y + 40);
+    c.textAlign = 'right';
+    c.fillText(`${Math.ceil(secondsLeft(t))}s`, x + w, y + 40);
+    c.restore();
+  }
+
+  /** B on the keyboard, or this button: turn back on a road, retreat from a battle. */
+  private drawBackButton(c: CanvasRenderingContext2D, g: Game) {
+    if (g.screen === 'battle' && g.battleOver > 0) return;
+    const B = BACK_BTN;
+    const y = B.y;
+    c.save();
+    c.fillStyle = 'rgba(20,24,44,0.8)';
+    this.roundRect(c, B.x, y, B.w, B.h, 6); c.fill();
+    c.strokeStyle = 'rgba(160,190,255,0.45)';
+    c.lineWidth = 1.2;
+    this.roundRect(c, B.x, y, B.w, B.h, 6); c.stroke();
+    c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+    c.textAlign = 'center';
+    c.fillStyle = '#cfe0ff';
+    c.fillText(`${IS_TOUCH ? '' : 'B  '}${g.screen === 'travel' ? 'TURN BACK' : 'RETREAT'}`, B.x + B.w / 2, y + 17);
+    c.restore();
+  }
+
+  /** Trim a string with an ellipsis so it fits `w` pixels in the current font. */
+  private clip(c: CanvasRenderingContext2D, s: string, w: number): string {
+    if (c.measureText(s).width <= w) return s;
+    while (s.length > 1 && c.measureText(s + '\u2026').width > w) s = s.slice(0, -1);
+    return s + '\u2026';
   }
 
   /** KH2's bottom-left command list: Attack / Magic / Items. */
@@ -993,10 +1227,11 @@ class Renderer {
       c.fillText('DEFEATED', VIEW_W / 2, VIEW_H / 2 - 20);
       c.font = '700 15px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = PAL.text;
-      c.fillText(`Reached wave ${g.wave} in ${g.location.name}  ·  Level ${g.player.level}`, VIEW_W / 2, VIEW_H / 2 + 14);
+      const safe = g.screen === 'travel' && g.travel ? g.travel.from : g.world.currentLocation;
+      c.fillText(`Level ${g.player.level}  ·  you will wake in ${locById(safe).name}`, VIEW_W / 2, VIEW_H / 2 + 14);
       c.fillStyle = PAL.dim;
-      c.fillText(IS_TOUCH ? 'Tap to retry — you keep your level.'
-                          : 'Press R to retry — you keep your level.', VIEW_W / 2, VIEW_H / 2 + 40);
+      c.fillText(IS_TOUCH ? 'Tap to continue — you keep everything.'
+                          : 'Press R to continue — you keep everything.', VIEW_W / 2, VIEW_H / 2 + 40);
     }
     c.restore();
   }
@@ -1123,6 +1358,7 @@ class Renderer {
     else if (g.menuTab === 2) this.drawTalentTab(c, g, top);
     else if (g.menuTab === 3) this.drawStatusTab(c, g, top);
     else this.drawMapTab(c, g, top);
+    void g.forgeOpen;
 
     c.fillStyle = PAL.dim;
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
@@ -1215,33 +1451,41 @@ class Renderer {
   private drawSynthTab(c: CanvasRenderingContext2D, g: Game, top: number) {
     const p = g.player;
     const entries = g.synthEntries();
-    const lw = MENU_LIST.w, rowH = MENU_LIST.rowH;
+    const lw = MENU_LIST.w, rowH = SYNTH_ROW_H;
+    const station = g.atStation();
+    const accent = station ? g.place.look.accent : 'rgba(120,150,220,0.28)';
     this.listBox(c, 26, top, lw, VIEW_H - top - 46);
+    if (station) {
+      c.strokeStyle = accent; c.lineWidth = 2;
+      this.roundRect(c, 26, top, lw, VIEW_H - top - 46, 8); c.stroke();
+    }
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
-    const stateColor: Record<string, string> = {
-      owned: '#69e29a', ready: '#ffd54a', lack: '#949dbd', locked: '#5d6480',
-    };
-    const stateLabel: Record<string, string> = {
-      owned: 'FORGED', ready: 'READY', lack: 'MATS', locked: 'LOCKED',
-    };
+    const stateColor: Record<string, string> = { owned: '#69e29a', ready: '#ffd54a', lack: '#949dbd' };
+    const stateLabel: Record<string, string> = { owned: 'FORGED', ready: 'READY', lack: 'MATS' };
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i];
       const y = top + MENU_LIST.pad + i * rowH;
-      if (i === g.synthIndex) this.rowHighlight(c, 32, y - 3, lw - 12, rowH - 2);
-      c.fillStyle = e.state === 'locked' ? '#5d6480' : PAL.text;
-      c.fillText(`${e.kind === 'w' ? 'WPN' : 'ARM'}  ${e.name}`, 42, y + 12);
+      if (i === g.synthIndex) this.rowHighlight(c, 32, y - 3, lw - 12, rowH - 1);
+      c.fillStyle = PAL.text;
+      c.fillText(`${e.kind === 'w' ? 'WPN' : 'ARM'}  ${e.name}`, 42, y + 11);
       c.textAlign = 'right';
       c.fillStyle = stateColor[e.state];
-      c.fillText(stateLabel[e.state], 26 + lw - 12, y + 12);
+      c.fillText(stateLabel[e.state], 26 + lw - 12, y + 11);
       c.textAlign = 'left';
     }
 
     const dx = 26 + lw + 14;
     const dw = VIEW_W - dx - 26;
     this.listBox(c, dx, top, dw, VIEW_H - top - 46);
+    let y = top + 24;
+    // the station banner: where you are forging, or that you are not at one
+    c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = station ? accent : '#ff9d9d';
+    c.fillText(station ? `\u2692 ${(g.place.stationName || 'Forge').toUpperCase()}  ·  ${g.place.name}`
+      : 'NO FORGE HERE — recipes are read-only', dx + 16, y);
+    y += 28;
     const sel = entries[g.synthIndex];
     if (!sel) return;
-    let y = top + 26;
     c.font = '800 18px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.text;
     c.fillText(sel.name, dx + 16, y);
@@ -1249,7 +1493,7 @@ class Renderer {
     c.font = '500 12px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
     const def = sel.kind === 'w' ? weaponById(sel.id) : armorById(sel.id);
-    c.fillText((def as WeaponDef | ArmorDef).desc, dx + 16, y);
+    c.fillText(this.clip(c, (def as WeaponDef | ArmorDef).desc, dw - 32), dx + 16, y);
     y += 26;
 
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
@@ -1263,22 +1507,18 @@ class Renderer {
       c.fillStyle = MATS[k].color;
       c.fillRect(dx + 16, y - 8, 8, 8);
       c.fillStyle = PAL.text;
-      c.fillText(MATS[k].name, dx + 32, y);
+      c.fillText(MATS[k].name + (BOSS_MATS.includes(k) ? (k === 'star' ? '  (superboss)' : '  (boss)') : ''), dx + 32, y);
       c.textAlign = 'right';
       c.fillStyle = has >= need ? '#69e29a' : '#ff6b6b';
       c.fillText(`${has} / ${need}`, dx + dw - 16, y);
       c.textAlign = 'left';
       y += 20;
     }
-    if (sel.recipe.requires) {
-      const req = sel.kind === 'w' ? weaponById(sel.recipe.requires) : armorById(sel.recipe.requires);
-      c.fillStyle = sel.state === 'locked' ? '#ff6b6b' : PAL.dim;
-      c.font = '500 12px ui-monospace, Menlo, Consolas, monospace';
-      c.fillText(`Requires: ${(req as WeaponDef | ArmorDef).name}`, dx + 16, y + 8);
-    }
-    c.fillStyle = sel.state === 'ready' ? PAL.mpCharge : PAL.dim;
+    c.fillStyle = sel.state === 'ready' && station ? PAL.mpCharge : PAL.dim;
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
-    c.fillText(sel.state === 'ready' ? 'ENTER to forge and equip' : 'Keep farming', dx + 16, VIEW_H - 62);
+    c.fillText(!station ? 'Forge at the Haven or any station on the map'
+      : sel.state === 'ready' ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to forge and equip`
+      : sel.state === 'owned' ? 'Already yours — equip it from GEAR' : 'Keep hunting materials', dx + 16, VIEW_H - 62);
   }
 
   private drawTalentTab(c: CanvasRenderingContext2D, g: Game, top: number) {
@@ -1374,107 +1614,154 @@ class Renderer {
     c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.text;
     c.fillText('Materials', mx + 16, my);
-    my += 24;
-    c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
+    my += 20;
+    c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
     for (const k of MAT_ORDER) {
       const n = have(p.inv, k);
       c.fillStyle = MATS[k].color;
       c.fillRect(mx + 16, my - 8, 9, 9);
       c.fillStyle = n > 0 ? PAL.text : '#5d6480';
-      c.fillText(MATS[k].name, mx + 32, my);
+      c.fillText(MATS[k].name + (BOSS_MATS.includes(k) ? '  *' : ''), mx + 32, my);
       c.textAlign = 'right';
       c.fillText(String(n), mx + halfW - 16, my);
       c.textAlign = 'left';
-      my += 21;
+      my += 20;
     }
-    my += 10;
     c.fillStyle = PAL.dim;
     c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
-    c.fillText('Shades drop shards · Bulwarks drop plate', mx + 16, my);
-    c.fillText('Chanters drop sigils · Wisps drop embers', mx + 16, my + 16);
-    c.fillText('Void Cores only appear from wave 10 on', mx + 16, my + 32);
-    c.fillText('(deeper areas count as later waves)', mx + 16, my + 48);
+    c.fillText('* boss drops only', mx + 16, my + 4);
   }
 
   private drawMapTab(c: CanvasRenderingContext2D, g: Game, top: number) {
-    const lw = MENU_LIST.w, rowH = MENU_LIST.rowH;
-    this.listBox(c, 26, top, lw, VIEW_H - top - 46);
-    c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
+    const w = g.world;
+    const M = MAP_BOX;
+    this.listBox(c, M.x, M.y, M.w, M.h);
+    void top;
 
-    for (let i = 0; i < LOCATIONS.length; i++) {
-      const l = LOCATIONS[i];
-      const y = top + MENU_LIST.pad + i * rowH;
-      const open = g.isUnlocked(l);
-      const here = l === g.location;
-      if (i === g.mapIndex) this.rowHighlight(c, 32, y - 4, lw - 12, rowH - 2);
+    const here = g.world.currentLocation;
+    const known = (id: string) => w.discoveredLocations.has(id) || w.unlockedAreas.has(id);
+
+    // roads
+    c.save();
+    c.lineWidth = 2;
+    for (const [a, b] of ROADS) {
+      const pa = mapPoint(locById(a)), pb = mapPoint(locById(b));
+      const open = w.unlockedAreas.has(a) && w.unlockedAreas.has(b);
+      const nearHere = (a === here || b === here) && open && g.screen === 'location';
+      c.strokeStyle = nearHere ? 'rgba(255,213,74,0.75)' : open ? 'rgba(143,180,255,0.4)' : 'rgba(90,100,140,0.18)';
+      c.setLineDash(open ? [] : [4, 6]);
+      c.beginPath(); c.moveTo(pa.x, pa.y); c.lineTo(pb.x, pb.y); c.stroke();
+    }
+    c.setLineDash([]);
+    c.restore();
+
+    // places
+    for (let i = 0; i < LOCATION_LIST.length; i++) {
+      const l = LOCATION_LIST[i];
+      const pt = mapPoint(l);
+      const open = w.unlockedAreas.has(l.id);
+      const sel = i === g.mapIndex;
+      const beaten = l.bosses.filter((b) => bossDefeated(w, b.id)).length;
+      c.save();
+      if (sel) {
+        c.strokeStyle = '#ffffff'; c.lineWidth = 2;
+        c.beginPath(); c.arc(pt.x, pt.y, 17, 0, Math.PI * 2); c.stroke();
+      }
       c.fillStyle = open ? l.look.accent : '#3a4058';
-      c.fillRect(42, y + 3, 9, 9);
-      c.fillStyle = here ? PAL.mpCharge : open ? PAL.text : '#5d6480';
-      c.fillText(open ? l.name : '? ? ?', 60, y + 13);
-      c.textAlign = 'right';
-      c.fillStyle = here ? PAL.mpCharge : PAL.dim;
-      c.fillText(here ? 'HERE' : open ? `best ${g.bests[l.id] || 0}` : 'LOCKED', 26 + lw - 12, y + 13);
-      c.textAlign = 'left';
+      c.globalAlpha = open ? 1 : 0.8;
+      c.beginPath();
+      if (l.tier === 0) { c.rect(pt.x - 9, pt.y - 9, 18, 18); } else { c.arc(pt.x, pt.y, 10, 0, Math.PI * 2); }
+      c.fill();
+      if (l.id === here) {
+        c.strokeStyle = PAL.mpCharge; c.lineWidth = 3;
+        c.beginPath(); c.arc(pt.x, pt.y, 13 + Math.sin(g.time * 4) * 1.5, 0, Math.PI * 2); c.stroke();
+      }
+      if (l.hasCraftingStation && open) {
+        c.fillStyle = '#ffffff';
+        c.font = '700 10px ui-monospace, Menlo, Consolas, monospace';
+        c.textAlign = 'center';
+        c.fillText('\u2692', pt.x, pt.y + 4);
+      }
+      c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+      c.textAlign = 'center';
+      c.fillStyle = open ? PAL.text : '#5d6480';
+      c.fillText(known(l.id) ? l.name : '? ? ?', pt.x, pt.y + 26);
+      if (open && l.bosses.length) {
+        c.fillStyle = beaten === l.bosses.length ? '#69e29a' : PAL.dim;
+        c.fillText(`${beaten}/${l.bosses.length}`, pt.x, pt.y - 15);
+      }
+      c.restore();
     }
 
-    const dx = 26 + lw + 14;
+    // detail panel
+    const dx = M.x + M.w + 14;
     const dw = VIEW_W - dx - 26;
-    this.listBox(c, dx, top, dw, VIEW_H - top - 46);
-    const l = LOCATIONS[g.mapIndex];
+    this.listBox(c, dx, M.y, dw, M.h);
+    const l = LOCATION_LIST[g.mapIndex];
     if (!l) return;
-    const open = g.isUnlocked(l);
-
-    // a swatch of the place, drawn from its own palette
-    const sw = { x: dx + 16, y: top + 14, w: dw - 32, h: 54 };
-    const sg = c.createLinearGradient(0, sw.y, 0, sw.y + sw.h);
-    sg.addColorStop(0, l.look.sky); sg.addColorStop(1, l.look.floorAlt);
-    c.fillStyle = sg;
-    this.roundRect(c, sw.x, sw.y, sw.w, sw.h, 6); c.fill();
-    c.strokeStyle = open ? l.look.accent : 'rgba(120,150,220,0.22)';
-    c.lineWidth = 1.5;
-    this.roundRect(c, sw.x, sw.y, sw.w, sw.h, 6); c.stroke();
-    c.font = '800 20px ui-monospace, Menlo, Consolas, monospace';
+    const open = w.unlockedAreas.has(l.id);
+    let y = M.y + 26;
+    c.font = '800 16px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = open ? l.look.accent : '#5d6480';
-    c.fillText(open ? l.name.toUpperCase() : 'UNKNOWN AREA', sw.x + 14, sw.y + 26);
-    c.font = '500 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillText(this.clip(c, known(l.id) ? l.name : 'Unknown area', dw - 32), dx + 16, y);
+    y += 18;
+    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText(open ? l.sub : unlockText(l), sw.x + 14, sw.y + 44);
-
-    let y = sw.y + sw.h + 26;
+    c.fillText(l.tier ? `${l.theme}  ·  tier ${l.tier}  ·  Lv ${l.enemyLevelRange[0]}-${l.enemyLevelRange[1]}` : 'Haven  ·  safe', dx + 16, y);
+    y += 22;
+    c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.text;
-    c.fillText(open ? l.desc : 'Push further to find out what is out there.', dx + 16, y);
-    y += 28;
-
-    const foes = Object.keys(l.weights)
-      .filter((id) => l.weights[id] > 0)
-      .sort((a, b) => l.weights[b] - l.weights[a])
-      .slice(0, 2)
-      .map((id) => ENEMIES[id].name + 's');
-    const rich = (Object.keys(l.matBias) as MatId[])
-      .filter((m) => (l.matBias[m] || 1) > 1)
-      .map((m) => MATS[m].name);
-    const rows: [string, string][] = [
-      ['Threat', l.depth ? `wave +${l.depth}` : 'none'],
-      ['Common foes', open ? foes.join(', ') : '???'],
-      ['Rich in', open ? (rich.join(', ') || 'nothing special') : '???'],
-      ['Best wave', open ? String(g.bests[l.id] || 0) : '-'],
-      ['Cleared to', open ? String(g.cleared[l.id] || 0) : '-'],
-      ['Unlock', unlockText(l)],
-    ];
-    c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
+    for (const line of this.wrap(c, open ? l.description : lockedAreaText(l.id), dw - 32).slice(0, 4)) {
+      c.fillText(line, dx + 16, y); y += 15;
+    }
+    y += 8;
+    const rows: [string, string][] = [];
+    if (l.tier) rows.push(['Recommended', `Lv ${recommendedLevel(l)}`]);
+    rows.push(['Forge', l.hasCraftingStation ? (l.stationName || 'yes') : '-']);
+    if (l.tier) rows.push(['Foes', l.enemyTypes.map((id) => ENEMIES[id].name).join(', ')]);
+    const t = roadTime(here, l.id);
+    rows.push(['From here', l.id === here ? 'you are here' : t ? `${t}s by road` : 'no direct road']);
+    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     for (const [k, v] of rows) {
       c.fillStyle = PAL.dim; c.fillText(k, dx + 16, y);
       c.fillStyle = PAL.text; c.textAlign = 'right';
-      c.fillText(v, dx + dw - 16, y);
+      c.fillText(this.clip(c, v, dw - 120), dx + dw - 16, y);
       c.textAlign = 'left';
-      y += 20;
+      y += 17;
+    }
+    if (open && l.bosses.length) {
+      y += 6;
+      c.fillStyle = PAL.dim;
+      c.fillText('BOSSES', dx + 16, y); y += 16;
+      for (const b of l.bosses) {
+        const done = bossDefeated(w, b.id);
+        const sup = superDefeated(w, b.id);
+        c.fillStyle = done ? '#69e29a' : PAL.text;
+        c.fillText(`${done ? '\u2713' : '\u00B7'} ${b.name}${sup ? ' \u2605' : ''}`, dx + 16, y);
+        y += 15;
+      }
     }
 
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = l === g.location ? PAL.dim : open ? PAL.mpCharge : '#ff9d9d';
-    c.fillText(l === g.location ? 'You are here'
-      : open ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to travel — starts at wave 1`
-      : 'Locked', dx + 16, VIEW_H - 62);
+    const canGo = g.screen === 'location' && open && l.id !== here && t > 0;
+    c.fillStyle = canGo ? PAL.mpCharge : PAL.dim;
+    c.fillText(g.screen !== 'location' ? 'Travel from a location, not mid-fight'
+      : l.id === here ? 'You are here'
+      : !open ? 'Locked'
+      : t ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to set out`
+      : 'Go through a neighbouring area', dx + 16, M.y + M.h - 14);
+  }
+
+  /** Greedy word wrap to `w` pixels in the current font. */
+  private wrap(c: CanvasRenderingContext2D, text: string, w: number): string[] {
+    const out: string[] = [];
+    let line = '';
+    for (const word of text.split(' ')) {
+      const test = line ? line + ' ' + word : word;
+      if (c.measureText(test).width > w && line) { out.push(line); line = word; } else line = test;
+    }
+    if (line) out.push(line);
+    return out;
   }
 
   /** A shrinking ring while the wave is still frozen. */
@@ -1602,7 +1889,7 @@ class Renderer {
     c.textAlign = 'center';
     c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText('action-hybrid JRPG combat  ·  synthesis  ·  talents  ·  endless waves', VIEW_W / 2, 198);
+    c.fillText('an open world of bosses  ·  roads full of enemies  ·  forges  ·  Lv 1-100', VIEW_W / 2, 198);
 
     // a thin gold rule under the wordmark
     c.strokeStyle = 'rgba(255,213,74,0.45)';
@@ -1647,7 +1934,7 @@ class Renderer {
     if (g.titleMode === 'options') {
       c.fillText(IS_TOUCH ? 'tap either side of a bar to adjust' : '\u2190 \u2192 to adjust  ·  ESC to go back', VIEW_W / 2, VIEW_H - 46);
     } else if (g.hasSave()) {
-      c.fillText(`Level ${g.player.level}  ·  ${g.location.name}  ·  best wave ${g.bestWave}  ·  ${g.player.weapon.name} / ${g.player.armor.name}`, VIEW_W / 2, VIEW_H - 62);
+      c.fillText(`Level ${g.player.level}  ·  ${g.place.name}  ·  ${g.world.completedBosses.size}/${ALL_BOSSES.length} bosses  ·  ${g.player.weapon.name} / ${g.player.armor.name}`, VIEW_W / 2, VIEW_H - 62);
       c.fillStyle = '#ff9d9d';
       c.fillText('New Game wipes that progress.', VIEW_W / 2, VIEW_H - 44);
     } else {
@@ -1671,28 +1958,29 @@ class Renderer {
         ['DSH', 'dash with i-frames (learn it in the talent tree first)'],
         ['MAG', 'cast the highlighted spell; tap a chip to change it'],
         ['Lock-on', 'automatic on touch — it picks the nearest enemy'],
-        ['Menu', 'the icon on the right: gear, synthesis, talents'],
+        ['Menu', 'the icon on the right: gear, forge, talents, map'],
+        ['Turn back', 'the button under the road bar; it also retreats'],
       ]
       : [
         ['Move', 'W A S D'],
         ['Attack / Jump', 'J  ·  K or Space'],
         ['Dash / Lock-on', 'Shift  ·  L'],
         ['Magic', '1 Fire  2 Blizzard  3 Thunder  4 Cure'],
-        ['Menu', 'Tab for gear, synthesis and talents'],
+        ['Menu', 'Tab for gear, forge, talents, status and the world map'],
+        ['Turn back', 'B on a road; B also retreats from a battle'],
         ['Potion / Pause', 'Q  ·  P'],
         ['Tuning panel', '` opens every combat constant as a live slider'],
       ];
 
     const rules: string[] = [
-      'Enemies drop crafting materials, potions and ethers. Each type drops',
-      'something different, so farm the wave that has what you need.',
-      'Weapons add power and reach. Armour subtracts damage. Every tier is',
-      'gated on owning the one below it.',
-      'Bulwarks block anything from the front — go around, or break the guard',
-      'with a finisher. Cure spends your whole MP bar and locks it recharging.',
-      'Levels, gear and talents persist. Dying costs the wave, not the grind.',
-      'Clearing waves opens new areas on the MAP tab. Deeper areas hit',
-      'harder, pay more EXP and favour different materials.',
+      'You start in the Haven. Pick TRAVEL to open the map and take a road to a',
+      'neighbouring area. Roads are full of enemies; press B to turn back.',
+      'Every area has 2-3 bosses. Beating them opens new areas and new Wave',
+      'Trial tiers, and drops boss-only materials. Superbosses are optional.',
+      'Forge gear at the Haven or any station on the map. No recipe is locked:',
+      'if you hold the materials, you can make it.',
+      'Dying loses nothing — you wake at the last safe place. The game saves',
+      'on every change, and the location panel has a Save row too.',
     ];
 
     c.textAlign = 'left';

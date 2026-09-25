@@ -616,19 +616,41 @@ class Enemy {
   deathT = 0;
   wobble = Math.random() * Math.PI * 2;
 
-  constructor(def: EnemyDef, x: number, y: number, waveScale: number) {
+  level: number;
+  tier: number;
+
+  /**
+   * `level` comes from the location's level band, `tier` from the location
+   * (or the Wave Trial tier). `extra` is any further multiplier on top — a
+   * wave's own escalation, or a superboss.
+   */
+  constructor(def: EnemyDef, x: number, y: number, level: number, tier: number, extra = 1) {
     this.def = def;
     this.x = x; this.y = y; this.z = def.hover;
     this.radius = def.radius;
-    this.maxHp = Math.round(def.hp * waveScale * TUNING.enemyHpMult);
+    this.level = level;
+    this.tier = tier;
+    this.maxHp = Math.round(def.hp * LEVEL_SCALING.hp(level) * extra * TUNING.enemyHpMult);
     this.hp = this.maxHp;
-    this.str = def.str * (1 + (waveScale - 1) * 0.55);
-    this.edef = def.def * (1 + (waveScale - 1) * 0.45);
-    this.mres = def.mres * (1 + (waveScale - 1) * 0.45);
-    this.exp = Math.round(def.exp * (1 + (waveScale - 1) * 0.8) * TUNING.expMult);
+    this.str = def.str * LEVEL_SCALING.attack(level) * (1 + (extra - 1) * 0.55);
+    this.edef = def.def * (1 + (extra - 1) * 0.45);
+    this.mres = def.mres * (1 + (extra - 1) * 0.45);
+    this.exp = Math.round(def.exp * LEVEL_SCALING.xp(level) * extra * TUNING.expMult);
     this.speed = def.speed;
     this.maxPoise = def.poise;
     this.poise = def.poise;
+    this.scale(tier);
+  }
+
+  /** Location tier on top of level: see TIER_SCALING in config.ts. */
+  scale(tier: number) {
+    const t = Math.max(1, tier);
+    this.maxHp = Math.round(this.maxHp * TIER_SCALING.hpMultiplier(t));
+    this.hp = this.maxHp;
+    this.str *= TIER_SCALING.attackMultiplier(t);
+    this.edef *= TIER_SCALING.defenseMultiplier(t);
+    this.mres *= TIER_SCALING.defenseMultiplier(t);
+    this.exp = Math.round(this.exp * TIER_SCALING.xpMultiplier(t));
   }
 
   get alive() { return this.state !== 'dead'; }

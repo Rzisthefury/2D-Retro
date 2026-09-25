@@ -53,7 +53,7 @@ const TUNING = {
   enemyHpMult: 1.0,
   enemySpeedMult: 1.0,
   enemyAggression: 1.0,
-  waveScaling: 0.17,
+  waveScaling: 0.05,
 
   // dash
   dashSpeed: 760,
@@ -70,6 +70,7 @@ const TUNING = {
   musicVolume: 0.3,
   sfxVolume: 0.7,
   waveIntro: 1.6,
+  travelSpawnMult: 1.0,
 };
 
 type TuningKey = keyof typeof TUNING;
@@ -115,6 +116,7 @@ const TUNABLES: Tunable[] = [
   { key: 'dropRate', label: 'Drop rate', min: 0.1, max: 8, step: 0.1, group: 'Progression' },
 
   { key: 'waveIntro', label: 'Wave grace (s)', min: 0, max: 6, step: 0.1, group: 'Progression' },
+  { key: 'travelSpawnMult', label: 'Road spawn rate', min: 0, max: 4, step: 0.1, group: 'Progression' },
 
   { key: 'musicVolume', label: 'Music volume', min: 0, max: 1, step: 0.02, group: 'Audio' },
   { key: 'sfxVolume', label: 'SFX volume', min: 0, max: 1, step: 0.02, group: 'Audio' },
@@ -314,7 +316,27 @@ function expToNext(level: number): number {
   return Math.floor(14 * Math.pow(level, 1.72) + 10 * level);
 }
 
-const MAX_LEVEL = 60;
+const MAX_LEVEL = 100;
+
+/* ------------------------------------------------------ tier scaling */
+
+// Every location has a tier (1-10). Its enemies' stats are multiplied by
+// these, then nudged by their individual level. Superbosses multiply on top.
+const TIER_SCALING = {
+  hpMultiplier: (tier: number) => 1 + (tier - 1) * 0.8,
+  attackMultiplier: (tier: number) => 1 + (tier - 1) * 0.9,
+  defenseMultiplier: (tier: number) => 1 + (tier - 1) * 0.7,
+  xpMultiplier: (tier: number) => 1 + (tier - 1) * 1.2,
+};
+
+// Within a tier, an enemy's level adds a little more on top. Attack grows
+// slowly because it counts twice in the damage formula (as a power ratio and
+// as the strength term).
+const LEVEL_SCALING = {
+  hp: (level: number) => 1 + (level - 1) * 0.03,
+  attack: (level: number) => 1 + (level - 1) * 0.005,
+  xp: (level: number) => 1 + (level - 1) * 0.06,
+};
 
 /* --------------------------------------------------- touch control layout */
 
@@ -337,6 +359,10 @@ const TOUCH_CHIPS = { x: 920, y: 186, dy: 38, r: 16 };
 // layer hit-tests against it — one source of truth or taps land in the wrong row.
 const MENU_TAB = { x: 26, y: 18, w: 116, h: 28, gap: 8 };
 const MENU_TABS = 5;  // gear · synth · talents · status · map
+const SYNTH_ROW_H = 20;  // the recipe list is long now, so its rows are tighter
+const MAP_BOX = { x: 26, y: 62, w: 590, h: 432 };      // world map area in the MAP tab
+const PLACE_PANEL = { x: 18, y: 104, w: 300, rowH: 26 }; // the location action list
+const BACK_BTN = { x: 405, y: 70, w: 150, h: 26 };      // turn back / retreat
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };

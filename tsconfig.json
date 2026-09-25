@@ -20,9 +20,11 @@
     "src/core.ts",
     "src/items.ts",
     "src/talents.ts",
-    "src/locations.ts",
+    "src/world.ts",
+    "src/location.ts",
     "src/music.ts",
     "src/entities.ts",
+    "src/travel.ts",
     "src/render.ts",
     "src/main.ts"
   ]
