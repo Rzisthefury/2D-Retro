@@ -212,104 +212,94 @@ against 960x540, so that is a deliberate later job.
 
 ---
 
-# rev 5 - open world
+# rev 6 - open world, dungeons
 
-The wave arena is now one part of an open world: a hub, twelve areas on a
-road graph, 30 bosses, 30 optional Ascendant superbosses, and forges
-scattered across the map. Levels run 1-100.
+The game is an open world you walk around, Zelda-style: a smooth-scrolling
+camera over one connected map, enemies scattered through every region, and
+a dungeon in each region holding its bosses. Levels run 1-100.
 
-## New files
+## Files
 
 | file | what lives there |
 |---|---|
-| `src/world.ts` | `WorldLocation`, `BossDefinition`, `WorldState`; save (de)serialisation, road lookups, unlock rules, the quest hint |
-| `src/location.ts` | the hub and 12 areas, 30 bosses, `ROADS`, tier level bands, station flavour — all data |
-| `src/superboss.ts` | Ascendant variants: availability, stat scaling, Star Fragment spoils |
-| `src/travel.ts` | `TravelState`: the road clock, roadside spawns, ambushes, turning back |
+| `src/world.ts` | `WorldLocation`, `BossDefinition`, `WorldState` (incl. your position and checkpoint); save (de)serialisation, unlock rules, the quest hint |
+| `src/location.ts` | the Haven and 12 regions, 30 bosses, tier level bands, forge flavour - all data |
+| `src/overworld.ts` | the tile map: region grid, cliffs, passages and barriers, clutter, roads, buildings, enemy spawn points; tile collision; spawning; camera |
+| `src/dungeon.ts` | a dungeon's rooms (hall, wave rooms, boss rooms), waystones and altars |
+| `src/superboss.ts` | Ascendant variants: stat scaling, Star Fragment spoils |
 
 Build order: config, core, items, talents, world, location, superboss,
-music, entities, travel, render, main.
+overworld, dungeon, music, entities, render, main.
 
-## The loop
+## The world
 
-`Game.screen` is `'title' | 'location' | 'travel' | 'battle'`.
+`REGION_GRID` in overworld.ts lays the 12 regions and the Haven out on a
+5x3 grid (two cells are mountains). Each region is 32x20 tiles of 40px,
+ringed by cliffs; neighbours are joined by a 4-tile passage, and roads
+join every passage and building to the region's middle. The whole map is
+generated from fixed seeds, so it is the same every load; a flood fill
+drops any enemy spawn point that ended up walled in.
 
-- **location** - safe. The panel lists the area's bosses (and their
-  Ascendants once beaten), the Wave Trial, the forge if there is one,
-  Travel (opens the MAP tab), the road home, gear, and Save. A "Next:" line
-  points at the cheapest boss that opens something.
-- **travel** - pick a neighbour on the map. Roads take `roadTime` seconds,
-  and every area also has a direct road home (`hubDistance`) so you can
-  never get stuck. Roads use the harder end's look and enemies. Enemies
-  arrive at `spawnRate` per minute forever until you arrive; 0-3 ambushes
-  of 1-5 enemies stop the clock until cleared. B (or the button) turns you
-  around from where you are. Arriving pays EXP for the distance.
-- **battle** - a boss fight is two waves of the area's enemies then the
-  boss; a Wave Trial is the old endless mode at any unlocked tier. B
-  retreats at any time and you keep what you picked up.
+A passage into a region you have not opened is a glowing **barrier**.
+Bump it and it tells you which dungeon opens it.
 
-Dying loses nothing: you wake at the last safe place (where the road began,
-or the area the battle was in).
+**Enemies** live on spawn points (9 per region, none in the Haven). A
+spawner fills when you are 560-1500px away (so never on-screen), its enemy
+idles near home until you come within 300px, chases, and gives up if you
+drag it 760px from home. Killed enemies respawn after 28s; idle ones far
+away are put back. Only enemies within ~1150px of you are simulated.
+
+## Buildings
+
+- **Dungeon** (one per region): stand at the door, press ENTER.
+- **Forge** (the Haven and six towns): stand at it to rest (HP/MP, items
+  restocked, once per visit); ENTER opens the forge. Forging only works
+  here; every recipe is available at every forge.
+- **Colosseum** (the Haven): Wave Trials, endless, at any unlocked tier
+  (left/right to pick).
+
+Towns and dungeon doors are **checkpoints**. Dying loses nothing: you wake
+at the last one. Your spot in the world is saved every few seconds and on
+every event, so you can quit anywhere.
+
+## Dungeons
+
+`dungeonRooms`: an entrance hall, then for each of the region's bosses two
+wave rooms and the boss's room. A room's east door is barred until the
+room is clear; walk into it to go on. The last boss opens the next region
+(its barrier drops); another boss opens a Wave Trial tier. B leaves at any
+time - rooms refill, beaten bosses stay beaten.
+
+The hall has a **waystone** for every section you have reached, so a
+beaten boss is a checkpoint. A beaten boss's room has two **altars**:
+rematch it, or face its **Ascendant** (x1.5 stats, x2 spoils, Star
+Fragments). Ascendants unlock nothing.
+
+## Combat change
+
+You can turn mid-swing: holding a direction rotates you toward it during
+any attack (`TUNING.swingTurnRate`, 11 - a full about-face takes ~0.2s),
+and the hitbox and lunge turn with you. The Whirl still spins on its own.
 
 ## Tiers and scaling
 
 `TIER_SCALING` (config.ts) multiplies HP/attack/defence/EXP by tier;
-`LEVEL_SCALING` adds a little per enemy level inside the tier's band
-(`TIER_LEVELS`: tier 1 is Lv 1-8, tier 10 is Lv 87-100). Enemy attack
-grows slowly on purpose - strength counts twice in `physDamage`.
+`LEVEL_SCALING` adds a little per enemy level inside the tier band
+(`TIER_LEVELS`: tier 1 is Lv 1-8, tier 10 is Lv 87-100). Boss attack is fed
+in gently and HP scaled (`BOSS_HP_SCALE`, `SHOCK_MULT`) so a slam runs ~16%
+of your HP at tier 1 to ~50% at tier 10. 1.45M EXP to level 100.
 
-The spec's prose says "5x stats per tier" but its formulas give 1.8x hp
-per tier step (tier 3 = 2.6x tier 1). The formulas are implemented as
-written; tune them in config.ts.
-
-Measured with on-level gear: ordinary enemies take ~4 hits to kill and ~8
-to kill you at every tier. Boss slams go from ~16% of your HP at tier 1 to
-~50% at tier 10 (always telegraphed; jump or dash out). 1.45M EXP to reach
-level 100, about 20 on-tier kills per level at the top.
-
-## Bosses
-
-Four patterns, each a base AI plus signature moves (`runMove` in
-entities.ts): **slam** (ground ring - be airborne), **fan** (bolt spread),
-**rush** (a string of lunges), **dive** (rises, tracks, lands on a marked
-spot). Enrage under 50% HP; no stagger mid-move. `bossEnemyDef` turns a
-`BossDefinition` into a fightable enemy (`BOSS_HP_SCALE`, `SHOCK_MULT`).
-
-Each area's bosses unlock the next area and one Wave Trial tier, and drop
-that region's boss-only material (Heartwood, Tidepearl, Relic Gear,
-Sunglass, Magma Heart, Rimeshard, Stormfeather, Crownshard).
-
-**Ascendants** appear once the boss is beaten: x1.5 stats, x2 spoils and
-EXP, plus Star Fragments - the only way to forge Starforged / Starwoven.
-They are tracked separately and unlock nothing.
-
-## Forges
-
-The Haven and six areas have a station. Forging only works there (the tab
-reads FORGE; elsewhere it is a read-only RECIPES list). Every recipe is
-available at every station and none is gated on level or on owning the
-previous tier. Arriving at a station restores HP/MP and restocks items.
+Bosses: four patterns, each a base AI plus signature moves - **slam**
+(ground ring, be airborne), **fan** (bolt spread), **rush** (a string of
+lunges), **dive** (lands on a marked spot). Enrage under 50% HP.
 
 ## Save
 
-`aerial-finisher-save-v2` gains `world` (current location, discovered,
-completedBosses, completedSuperbosses, unlockedAreas, unlockedWaveTiers,
-trialBest). `worldFromSave` re-derives unlocks from defeated bosses, so a
-save can never hold a kill without the door it opened. Saves from before
-the open world keep level, gear and materials and start at the Haven.
+`aerial-finisher-save-v2` holds level, gear, materials, talents and a
+`world` block: current region, discovered regions, beaten bosses and
+Ascendants, unlocked regions and tiers, trial bests, your position and your
+checkpoint. Unlocks are re-derived from beaten bosses on load; a position
+that is no longer standable falls back to the checkpoint.
 
-## Decisions taken on the spec's open questions
-
-1. Music: the existing score, with intensity driven by the world state
-   (calm in locations, peak during a boss). No per-area themes yet.
-2. Onboarding: rewritten How to Play, plus the "Next:" hint.
-3. Fast travel: none, but every area has a direct road home.
-4. Recommended level: shown on the HUD, the panel and the map.
-5. Quest markers: the "Next:" hint line.
-
-Not done from the spec: area music themes (stretch), and bosses as random
-road encounters (the `TravelEncounter.boss` case) - bosses live at their
-areas.
-
-Debug panel: **Unlock all areas + tiers**; "Skip to wave +5" only works in
-a Wave Trial.
+Debug panel (`): **Unlock all areas + tiers**, god mode, levels,
+materials; "Skip to wave +5" only works in a Wave Trial.

@@ -44,14 +44,11 @@ interface WorldLocation {
 
   bosses: BossDefinition[];
 
-  connectedLocations: string[];  // road graph (kept symmetric by buildWorld)
-  hubDistance: number;           // seconds of travel on the direct road home
-  roadTime: Record<string, number>;  // seconds to each connected location
+  connectedLocations: string[];  // bordering regions on the world grid
 
   hasCraftingStation: boolean;
   stationName?: string;
 
-  map: { x: number; y: number }; // 0-1 position on the world map
   look: LocationLook;
 }
 
@@ -63,6 +60,8 @@ interface WorldState {
   unlockedAreas: Set<string>;
   unlockedWaveTiers: Set<number>;
   trialBest: Record<number, number>;   // best wave reached per wave tier
+  pos: { x: number; y: number };       // where you stand in the overworld
+  checkpoint: { x: number; y: number }; // where you wake after a defeat
 }
 
 /** What goes into localStorage — Sets and Maps flattened to JSON. */
@@ -74,6 +73,8 @@ interface WorldSave {
   unlockedAreas: string[];
   unlockedWaveTiers: number[];
   trialBest: Record<string, number>;
+  pos: { x: number; y: number };
+  checkpoint: { x: number; y: number };
 }
 
 const HUB_ID = 'hub';
@@ -88,6 +89,8 @@ function freshWorld(): WorldState {
     unlockedAreas: new Set(START_AREAS),
     unlockedWaveTiers: new Set([1]),
     trialBest: {},
+    pos: havenStart(),
+    checkpoint: havenStart(),
   };
 }
 
@@ -107,6 +110,8 @@ function worldToSave(w: WorldState): WorldSave {
     unlockedAreas: [...w.unlockedAreas],
     unlockedWaveTiers: [...w.unlockedWaveTiers].sort((a, b) => a - b),
     trialBest: tb,
+    pos: { x: Math.round(w.pos.x), y: Math.round(w.pos.y) },
+    checkpoint: { x: Math.round(w.checkpoint.x), y: Math.round(w.checkpoint.y) },
   };
 }
 
@@ -127,7 +132,10 @@ function worldFromSave(j: any): WorldState {
   // Re-derive unlocks from defeated bosses, so a save can never hold a boss
   // kill without the door it opened.
   w.completedBosses.forEach((_, id) => applyBossUnlocks(w, BOSS_MAP[id]));
-  if (isLoc(j.currentLocation) && w.unlockedAreas.has(j.currentLocation)) w.currentLocation = j.currentLocation;
+  const okPt = (p: any) => p && typeof p.x === 'number' && typeof p.y === 'number' && standable(w, p.x, p.y);
+  if (okPt(j.checkpoint)) w.checkpoint = { x: j.checkpoint.x, y: j.checkpoint.y };
+  w.pos = okPt(j.pos) ? { x: j.pos.x, y: j.pos.y } : { ...w.checkpoint };
+  w.currentLocation = regionAtPx(w.pos.x, w.pos.y) || HUB_ID;
   w.discoveredLocations.add(w.currentLocation);
   return w;
 }
@@ -140,16 +148,6 @@ function isAreaUnlocked(w: WorldState, id: string): boolean { return w.unlockedA
 
 function bossDefeated(w: WorldState, id: string): boolean { return !!w.completedBosses.get(id); }
 function superDefeated(w: WorldState, id: string): boolean { return !!w.completedSuperbosses.get(id); }
-
-/** Seconds on the road from `a` to `b`, or 0 if there is no road. */
-function roadTime(a: string, b: string): number {
-  if (a === b) return 0;
-  const la = locById(a);
-  if (la.roadTime[b]) return la.roadTime[b];
-  if (b === HUB_ID) return la.hubDistance;   // every place has a road home
-  if (a === HUB_ID) return locById(b).hubDistance;
-  return 0;
-}
 
 /** The boss whose defeat opens `areaId`, for "defeat X to unlock" messages. */
 function unlockerOf(areaId: string): BossDefinition | null {
@@ -164,7 +162,7 @@ function waveTierUnlocker(tier: number): BossDefinition | null {
 
 function lockedAreaText(areaId: string): string {
   const b = unlockerOf(areaId);
-  return b ? `Defeat ${b.name} in ${locById(bossHome(b.id)).name} to unlock` : 'This area is locked';
+  return b ? `Sealed. Beat the ${locById(bossHome(b.id)).name} dungeon to open it` : 'This area is sealed';
 }
 
 function lockedTierText(tier: number): string {
@@ -211,7 +209,7 @@ function nextObjective(w: WorldState): string {
     if (!w.unlockedAreas.has(bossHome(b.id))) continue;
     if (!best || b.tier < best.tier) best = b;
   }
-  if (best) return `Next: defeat ${best.name} in ${locById(bossHome(best.id)).name}`;
+  if (best) return `Next: clear the ${locById(bossHome(best.id)).name} dungeon (${best.name})`;
   const left = ALL_BOSSES.filter((b) => !bossDefeated(w, b.id));
   if (left.length) return `Next: ${left.length} boss${left.length > 1 ? 'es' : ''} still stand — try ${left[0].name}`;
   const sLeft = ALL_BOSSES.filter((b) => !superDefeated(w, b.id)).length;

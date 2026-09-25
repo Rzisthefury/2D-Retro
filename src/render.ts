@@ -44,24 +44,36 @@ class Renderer {
     const sh = g.shakeAmount;
     if (sh > 0.1) c.translate(rnd(-sh, sh), rnd(-sh, sh));
 
-    this.drawArena(g);
+    // The open world scrolls under a camera; rooms are drawn as they are.
+    const outside = g.screen === 'world' || g.screen === 'title';
+    let cam = { x: 0, y: 0 };
+    if (outside) {
+      cam = g.screen === 'title' ? cameraFor(g.player.x, g.player.y) : { x: g.camX, y: g.camY };
+      c.translate(-Math.round(cam.x), -Math.round(cam.y));
+      this.drawWorld(c, g, cam);
+    } else {
+      this.drawRoom(c, g);
+    }
+    const onScreen = (x: number, y: number) => !outside
+      || (x > cam.x - 80 && x < cam.x + VIEW_W + 80 && y > cam.y - 80 && y < cam.y + VIEW_H + 160);
 
     // Ground-level markers sit under everything.
-    for (const e of g.enemies) if (e.alive) this.drawTelegraph(c, e);
+    for (const e of g.enemies) if (e.alive && onScreen(e.x, e.y)) this.drawTelegraph(c, e);
     this.drawLockRing(c, g);
 
     // Y-sorted so nearer things overlap farther ones.
     const drawables: { y: number; fn: () => void }[] = [];
-    for (const e of g.enemies) drawables.push({ y: e.y, fn: () => this.drawEnemy(c, e, g) });
-    if (g.player.alive || g.deathT < 2) drawables.push({ y: g.player.y, fn: () => this.drawPlayer(c, g.player, g) });
+    for (const e of g.enemies) if (onScreen(e.x, e.y)) drawables.push({ y: e.y, fn: () => this.drawEnemy(c, e, g) });
+    const showPlayer = g.screen !== 'title' && (g.player.alive || g.deathT < 2);
+    if (showPlayer) drawables.push({ y: g.player.y, fn: () => this.drawPlayer(c, g.player, g) });
     for (const p of g.projectiles) drawables.push({ y: p.y, fn: () => this.drawProjectile(c, p) });
     drawables.sort((a, b) => a.y - b.y);
 
     for (const e of g.enemies) {
-      if (!e.alive && e.deathT > 0.25) continue;
+      if ((!e.alive && e.deathT > 0.25) || !onScreen(e.x, e.y)) continue;
       this.drawShadow(c, e.x, e.y, e.radius, e.z);
     }
-    if (g.player.alive || g.deathT < 2) this.drawShadow(c, g.player.x, g.player.y, g.player.radius, g.player.z);
+    if (showPlayer) this.drawShadow(c, g.player.x, g.player.y, g.player.radius, g.player.z);
 
     for (const d of drawables) d.fn();
 
@@ -77,308 +89,330 @@ class Renderer {
     this.drawHud(c, g);
   }
 
-  /* ------------------------------------------------------------- arena */
+  /* ------------------------------------------------------- open world */
 
-  private drawArena(g: Game) {
-    const c = this.ctx;
-    const scene = g.scene();
-    const look = scene.look;
-    const grad = c.createLinearGradient(0, 0, 0, VIEW_H);
-    grad.addColorStop(0, look.sky);
-    grad.addColorStop(1, look.floor);
-    c.fillStyle = grad;
-    c.fillRect(0, 0, VIEW_W, VIEW_H);
-
-    const a = g.arena;
-    this.drawBackdrop(c, g, scene);
-
-    // floor plate
-    c.fillStyle = look.floorAlt;
-    c.fillRect(a.x, a.y, a.w, a.h);
-
-    // grid — on the road it scrolls, so the ground moves under you
-    const off = g.screen === 'travel' ? -(g.scroll % 60) : 0;
-    c.save();
-    c.beginPath(); c.rect(a.x, a.y, a.w, a.h); c.clip();
-    c.strokeStyle = look.grid;
-    c.lineWidth = 1;
-    c.beginPath();
-    for (let x = a.x + off; x <= a.x + a.w + 0.5; x += 60) { c.moveTo(x, a.y); c.lineTo(x, a.y + a.h); }
-    for (let y = a.y; y <= a.y + a.h + 0.5; y += 60) { c.moveTo(a.x, y); c.lineTo(a.x + a.w, y); }
-    c.stroke();
-    if (g.screen === 'travel') {
-      // a worn path down the middle of the road
-      c.globalAlpha = 0.18;
-      c.fillStyle = look.motif;
-      for (let x = a.x + (off * 2 % 80) - 80; x < a.x + a.w; x += 80) c.fillRect(x, a.y + a.h / 2 - 3, 44, 6);
+  /** Tiles in view, then the buildings standing on them. */
+  private drawWorld(c: CanvasRenderingContext2D, g: Game, cam: { x: number; y: number }) {
+    const tx0 = Math.max(0, Math.floor(cam.x / TILE) - 1), tx1 = Math.min(WORLD_TW - 1, Math.ceil((cam.x + VIEW_W) / TILE) + 1);
+    const ty0 = Math.max(0, Math.floor(cam.y / TILE) - 1), ty1 = Math.min(WORLD_TH - 1, Math.ceil((cam.y + VIEW_H) / TILE) + 1);
+    c.fillStyle = '#0a0b10';
+    c.fillRect(cam.x - 10, cam.y - 10, VIEW_W + 20, VIEW_H + 20);
+    for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) this.drawTile(c, g, tx, ty);
+    for (const b of WORLD_MAP.buildings) {
+      const bx = b.tx * TILE, by = b.ty * TILE;
+      if (bx > cam.x + VIEW_W + 100 || bx + b.tw * TILE < cam.x - 100 || by > cam.y + VIEW_H + 100 || by + b.th * TILE < cam.y - 140) continue;
+      this.drawBuilding(c, g, b);
     }
-    c.restore();
-
-    if (g.screen !== 'travel') {
-      // centre motif
-      c.save();
-      c.globalAlpha = 0.20;
-      c.strokeStyle = look.motif;
-      c.lineWidth = 3;
-      c.beginPath();
-      c.arc(a.x + a.w / 2, a.y + a.h / 2, 110, 0, Math.PI * 2);
-      c.stroke();
-      c.beginPath();
-      c.arc(a.x + a.w / 2, a.y + a.h / 2, 76, 0, Math.PI * 2);
-      c.stroke();
-      c.restore();
-    }
-
-    this.drawFloorDeco(c, g, scene);
-    if (g.screen === 'location' && scene.hasCraftingStation) this.drawStation(c, g, scene);
-
-    // rest-point glow
-    if (g.restPoint) {
-      const pulse = 0.35 + Math.sin(g.time * 3) * 0.15;
-      c.save();
-      c.globalAlpha = pulse;
-      const rg = c.createRadialGradient(a.x + a.w / 2, a.y + a.h / 2, 10, a.x + a.w / 2, a.y + a.h / 2, 150);
-      rg.addColorStop(0, '#7fe8ff');
-      rg.addColorStop(1, 'rgba(127,232,255,0)');
-      c.fillStyle = rg;
-      c.beginPath();
-      c.arc(a.x + a.w / 2, a.y + a.h / 2, 150, 0, Math.PI * 2);
-      c.fill();
-      c.restore();
-    }
-
-    // walls
-    c.strokeStyle = look.wall;
-    c.lineWidth = 4;
-    c.strokeRect(a.x, a.y, a.w, a.h);
   }
 
-  /** Scenery behind the arena plate, one style per theme. */
-  private drawBackdrop(c: CanvasRenderingContext2D, g: Game, scene: WorldLocation) {
-    const look = scene.look;
-    const a = g.arena;
+  private drawTile(c: CanvasRenderingContext2D, g: Game, tx: number, ty: number) {
+    const i = ty * WORLD_TW + tx;
+    const t = WORLD_MAP.tiles[i];
+    const ri = WORLD_MAP.region[i];
+    const x = tx * TILE, y = ty * TILE;
+    const v = WORLD_MAP.variant[i];
+    if (ri < 0) {
+      // mountains between regions
+      c.fillStyle = v % 3 ? '#15171f' : '#181a23';
+      c.fillRect(x, y, TILE, TILE);
+      if (v % 5 === 0) { c.fillStyle = '#20232e'; c.beginPath(); c.moveTo(x + 6, y + 34); c.lineTo(x + 20, y + 10); c.lineTo(x + 34, y + 34); c.fill(); }
+      return;
+    }
+    const loc = locById(REGION_IDS[ri]);
+    const look = loc.look;
+    const theme = loc.theme;
+
+    // ground
+    c.fillStyle = look.floorAlt;
+    c.fillRect(x, y, TILE, TILE);
+    if ((tx + ty) % 2 === 0) { c.fillStyle = 'rgba(255,255,255,0.018)'; c.fillRect(x, y, TILE, TILE); }
+    if (t === T_GROUND && v % 6 === 0) {
+      c.fillStyle = look.grid;
+      c.fillRect(x + (v % 29), y + (v % 23) + 6, 3, 3);
+      c.fillRect(x + ((v * 7) % 31), y + ((v * 3) % 27) + 4, 2, 2);
+    }
+    if (t === T_PATH) {
+      c.fillStyle = this.alpha(look.motif, 0.13);
+      c.fillRect(x, y, TILE, TILE);
+    }
+
+    if (t === T_WALL) {
+      // the cliff ring around a region
+      c.fillStyle = '#0d0f16';
+      c.fillRect(x, y, TILE, TILE);
+      c.fillStyle = this.alpha(look.accent, 0.08);
+      c.fillRect(x, y, TILE, 5);
+      if (v % 4 === 0) { c.fillStyle = '#161923'; c.fillRect(x + 8, y + 12, 14, 10); }
+    } else if (t === T_LIQUID) {
+      this.drawLiquid(c, g, theme, x, y, v);
+    } else if (t === T_SOLID) {
+      this.drawObstacle(c, theme, look, x, y, v);
+    }
+
+    // a sealed passage
+    if (WORLD_MAP.passageOf[i] >= 0 && barrierUp(g.world, tx, ty)) {
+      const pulse = 0.35 + Math.sin(g.time * 3 + tx + ty) * 0.15;
+      c.fillStyle = `rgba(190,120,255,${pulse})`;
+      c.fillRect(x, y, TILE, TILE);
+      c.strokeStyle = 'rgba(240,210,255,0.7)';
+      c.lineWidth = 1.5;
+      c.beginPath();
+      for (let k = 6; k < TILE; k += 12) { c.moveTo(x + k, y); c.lineTo(x + k, y + TILE); }
+      c.stroke();
+    }
+  }
+
+  private drawLiquid(c: CanvasRenderingContext2D, g: Game, theme: Theme, x: number, y: number, v: number) {
     const t = g.time;
-    const drift = g.screen === 'travel' ? g.scroll * 0.4 : 0;   // parallax on the road
-    const wrap = (x: number) => ((x % VIEW_W) + VIEW_W) % VIEW_W;
-    c.save();
-    switch (scene.theme) {
-      case 'Haven': {
-        for (let x = a.x + 40; x < a.x + a.w; x += 120) {
-          c.fillStyle = '#20263a';
-          c.fillRect(x - 2, a.y - 46, 4, 46);
-          c.globalAlpha = 0.55 + Math.sin(t * 2 + x) * 0.1;
-          c.fillStyle = look.accent;
-          c.beginPath(); c.arc(x, a.y - 50, 4, 0, Math.PI * 2); c.fill();
-          c.globalAlpha = 1;
-        }
-        break;
-      }
-      case 'Forest': {
-        // a ragged treeline
-        for (let i = 0; i < 18; i++) {
-          const x = wrap(i * 61 - drift);
-          const h = 40 + ((i * 37) % 30);
-          c.fillStyle = i % 2 ? '#0c1a10' : '#10221a';
-          c.beginPath(); c.moveTo(x - 26, a.y); c.lineTo(x, a.y - h); c.lineTo(x + 26, a.y); c.fill();
-        }
-        for (let i = 0; i < 14; i++) {
-          c.globalAlpha = 0.25 + 0.25 * Math.abs(Math.sin(t * 1.5 + i));
-          c.fillStyle = look.accent;
-          c.fillRect(wrap(i * 71 + Math.sin(t + i) * 10 - drift), 20 + (i * 29) % 60, 2, 2);
-        }
-        break;
-      }
-      case 'Coast': {
-        c.fillStyle = '#16303e';
-        c.fillRect(0, 0, VIEW_W, a.y);
-        c.strokeStyle = look.accent;
-        c.globalAlpha = 0.35;
-        c.lineWidth = 1.5;
-        for (let row = 0; row < 3; row++) {
-          c.beginPath();
-          for (let x = 0; x <= VIEW_W; x += 8) {
-            const y = 30 + row * 20 + Math.sin(x * 0.04 + t * 1.4 + row - drift * 0.02) * 3;
-            if (x === 0) c.moveTo(x, y); else c.lineTo(x, y);
-          }
-          c.stroke();
-        }
+    if (theme === 'Volcano') {
+      c.fillStyle = '#7a220c'; c.fillRect(x, y, TILE, TILE);
+      c.fillStyle = `rgba(255,140,40,${0.35 + Math.sin(t * 2 + v) * 0.15})`;
+      c.fillRect(x + 4, y + 4, TILE - 8, TILE - 8);
+    } else if (theme === 'Sky' || theme === 'Rift') {
+      c.fillStyle = '#04050a'; c.fillRect(x, y, TILE, TILE);
+      if (v % 3 === 0) { c.fillStyle = theme === 'Rift' ? '#c070ff' : '#cfe0ff'; c.globalAlpha = 0.4 + Math.sin(t + v) * 0.3; c.fillRect(x + (v % 30), y + (v % 26), 2, 2); c.globalAlpha = 1; }
+    } else if (theme === 'Tundra') {
+      c.fillStyle = '#7c9ab4'; c.fillRect(x, y, TILE, TILE);
+      c.strokeStyle = 'rgba(230,245,255,0.5)'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(x + 4, y + 10 + (v % 12)); c.lineTo(x + 30, y + 16 + (v % 12)); c.stroke();
+    } else {
+      c.fillStyle = '#1b4260'; c.fillRect(x, y, TILE, TILE);
+      c.strokeStyle = 'rgba(160,220,255,0.35)'; c.lineWidth = 1.2;
+      const o = Math.sin(t * 1.5 + v) * 3;
+      c.beginPath(); c.moveTo(x + 6 + o, y + 14); c.lineTo(x + 18 + o, y + 14); c.moveTo(x + 18 - o, y + 28); c.lineTo(x + 32 - o, y + 28); c.stroke();
+    }
+  }
+
+  /** Trees, rocks, pillars: whatever a region is cluttered with. */
+  private drawObstacle(c: CanvasRenderingContext2D, theme: Theme, look: LocationLook, x: number, y: number, v: number) {
+    const cx = x + TILE / 2, cy = y + TILE / 2;
+    c.fillStyle = 'rgba(0,0,0,0.3)';
+    c.beginPath(); c.ellipse(cx, cy + 12, 16, 6, 0, 0, Math.PI * 2); c.fill();
+    switch (theme) {
+      case 'Forest': case 'Haven': {
+        c.fillStyle = '#3a2a1e'; c.fillRect(cx - 3, cy, 6, 12);
+        c.fillStyle = theme === 'Haven' ? '#24402e' : (v % 2 ? '#1c4a2a' : '#235a30');
+        c.beginPath(); c.arc(cx, cy - 4, 17, 0, Math.PI * 2); c.fill();
+        c.fillStyle = 'rgba(180,255,190,0.12)';
+        c.beginPath(); c.arc(cx - 5, cy - 9, 8, 0, Math.PI * 2); c.fill();
         break;
       }
       case 'Ruins': {
-        c.fillStyle = '#2a231f';
-        c.fillRect(0, a.y - 34, VIEW_W, 34);
-        for (let x = -48; x < VIEW_W + 48; x += 48) c.fillRect(wrap(x - drift), a.y - 52, 28, 18);
-        for (let i = 0; i < 5; i++) {
-          const x = wrap(a.x + 40 + i * 190 - drift);
-          c.fillStyle = '#3a322c';
-          c.fillRect(x - 8, a.y - 80 + (i % 2) * 20, 16, 50 - (i % 2) * 20);
-        }
+        c.fillStyle = '#4a4250'; c.fillRect(cx - 12, cy - 16, 24, 30);
+        c.fillStyle = '#5e5566'; c.fillRect(cx - 14, cy - 20, 28, 7);
+        c.fillStyle = this.alpha(look.accent, 0.25); c.fillRect(cx - 12, cy - 4, 24, 2);
         break;
       }
       case 'Desert': {
-        c.globalAlpha = 0.5;
-        c.fillStyle = look.accent;
-        c.beginPath(); c.arc(780, 44, 26, 0, Math.PI * 2); c.fill();
-        c.globalAlpha = 1;
-        c.fillStyle = '#3a2e1c';
-        c.beginPath();
-        c.moveTo(0, a.y);
-        for (let x = 0; x <= VIEW_W; x += 20) c.lineTo(x, a.y - 16 - Math.sin((x + drift) * 0.012) * 14);
-        c.lineTo(VIEW_W, a.y);
-        c.closePath(); c.fill();
+        if (v % 2) {
+          c.fillStyle = '#4a7a3a'; c.fillRect(cx - 4, cy - 16, 8, 28);
+          c.fillRect(cx - 12, cy - 6, 8, 4); c.fillRect(cx - 12, cy - 14, 4, 10);
+          c.fillRect(cx + 4, cy - 2, 8, 4); c.fillRect(cx + 8, cy - 10, 4, 10);
+        } else {
+          c.fillStyle = '#7a6040'; c.beginPath(); c.ellipse(cx, cy, 16, 12, 0, 0, Math.PI * 2); c.fill();
+          c.fillStyle = '#9a7a52'; c.beginPath(); c.ellipse(cx - 4, cy - 4, 8, 5, 0, 0, Math.PI * 2); c.fill();
+        }
         break;
       }
       case 'Volcano': {
-        c.fillStyle = '#2e1a10';
-        c.beginPath();
-        c.moveTo(0, a.y);
-        for (let x = 0; x <= VIEW_W; x += 40) c.lineTo(x, a.y - 22 - (((x + Math.floor(drift / 40) * 40) * 37) % 29));
-        c.lineTo(VIEW_W, a.y);
-        c.closePath();
-        c.fill();
-        for (let i = 0; i < 26; i++) {
-          const x = wrap(i * 131 + Math.sin(t + i) * 14 - drift);
-          const y = VIEW_H - ((t * (18 + (i % 5) * 7) + i * 53) % VIEW_H);
-          c.globalAlpha = 0.25 + (i % 4) * 0.1;
-          c.fillStyle = i % 3 ? look.accent : look.motif;
-          c.fillRect(x, y, 2.5, 2.5);
-        }
+        c.fillStyle = '#2a1a16'; c.beginPath(); c.moveTo(cx - 16, cy + 10); c.lineTo(cx - 6, cy - 16); c.lineTo(cx + 10, cy - 12); c.lineTo(cx + 16, cy + 10); c.fill();
+        c.strokeStyle = '#ff6a2a'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(cx - 4, cy - 8); c.lineTo(cx + 2, cy + 2); c.lineTo(cx - 2, cy + 8); c.stroke();
         break;
       }
       case 'Tundra': {
-        c.fillStyle = '#243240';
-        c.beginPath();
-        c.moveTo(0, a.y);
-        for (let i = 0; i <= 12; i++) c.lineTo(i * 80, a.y - (i % 2 ? 50 : 18));
-        c.lineTo(VIEW_W, a.y);
-        c.closePath(); c.fill();
-        for (let i = 0; i < 50; i++) {
-          c.globalAlpha = 0.45;
-          c.fillStyle = '#ffffff';
-          const x = wrap(i * 53 + Math.sin(t * 0.8 + i) * 12 - drift);
-          const y = (t * (20 + (i % 4) * 8) + i * 47) % VIEW_H;
-          c.fillRect(x, y, 2, 2);
-        }
+        c.fillStyle = '#c8dcec'; c.beginPath(); c.ellipse(cx, cy, 17, 13, 0, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#ffffff'; c.beginPath(); c.ellipse(cx - 4, cy - 5, 9, 5, 0, 0, Math.PI * 2); c.fill();
         break;
       }
       case 'Sky': {
-        for (let i = 0; i < 7; i++) {
-          const x = wrap(i * 150 + t * (6 + i) - drift);
-          c.globalAlpha = 0.18;
-          c.fillStyle = '#ffffff';
-          c.beginPath(); c.ellipse(x, 24 + (i * 23) % 50, 50, 12, 0, 0, Math.PI * 2); c.fill();
-        }
-        if (Math.sin(t * 0.9) > 0.985) {
-          c.globalAlpha = 0.6;
-          c.strokeStyle = look.accent;
-          c.lineWidth = 2;
-          c.beginPath(); c.moveTo(600, 0); c.lineTo(620, 30); c.lineTo(606, 44); c.lineTo(630, a.y); c.stroke();
-        }
+        c.fillStyle = '#d8e0f4'; c.globalAlpha = 0.9;
+        c.beginPath(); c.arc(cx - 8, cy, 11, 0, Math.PI * 2); c.arc(cx + 7, cy - 2, 13, 0, Math.PI * 2); c.arc(cx, cy - 10, 10, 0, Math.PI * 2); c.fill();
+        c.globalAlpha = 1;
         break;
       }
       case 'Rift': {
-        for (let i = 0; i < 40; i++) {
-          const x = wrap(i * 97 - drift * 0.5);
-          const y = (i * 61) % VIEW_H;
-          c.globalAlpha = 0.2 + 0.25 * Math.abs(Math.sin(t * 0.8 + i));
-          c.fillStyle = i % 5 ? '#c9b8ff' : look.motif;
-          c.fillRect(x, y, 1.8, 1.8);
-        }
-        c.globalAlpha = 0.35 + Math.sin(t * 1.3) * 0.15;
-        c.strokeStyle = look.motif;
-        c.lineWidth = 2;
-        for (const [x0, y0] of [[120, 40], [520, 30], [820, 60]]) {
-          c.beginPath();
-          c.moveTo(x0, y0);
-          c.lineTo(x0 + 18, y0 + 14); c.lineTo(x0 + 8, y0 + 26); c.lineTo(x0 + 26, y0 + 42);
-          c.stroke();
-        }
+        c.fillStyle = v % 2 ? '#6a2a9a' : '#9a3ac0';
+        c.beginPath(); c.moveTo(cx, cy - 20); c.lineTo(cx + 9, cy + 8); c.lineTo(cx, cy + 12); c.lineTo(cx - 9, cy + 8); c.closePath(); c.fill();
+        c.fillStyle = 'rgba(255,200,255,0.35)'; c.beginPath(); c.moveTo(cx, cy - 20); c.lineTo(cx + 3, cy); c.lineTo(cx, cy + 12); c.fill();
         break;
       }
+      default: {  // Coast: a sea-worn boulder
+        c.fillStyle = '#4a5a66'; c.beginPath(); c.ellipse(cx, cy, 16, 13, 0, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#62747f'; c.beginPath(); c.ellipse(cx - 4, cy - 5, 8, 5, 0, 0, Math.PI * 2); c.fill();
+      }
+    }
+  }
+
+  /** Dungeon entrances, forges and the colosseum. */
+  private drawBuilding(c: CanvasRenderingContext2D, g: Game, b: Building) {
+    const loc = locById(b.region);
+    const accent = loc.look.accent;
+    const x = b.tx * TILE, y = b.ty * TILE, w = b.tw * TILE, h = b.th * TILE;
+    c.save();
+    c.fillStyle = 'rgba(0,0,0,0.35)';
+    c.fillRect(x + 6, y + h - 4, w, 10);
+    if (b.kind === 'dungeon') {
+      const cleared = loc.bosses.every((x) => bossDefeated(g.world, x.id));
+      c.fillStyle = '#22242e'; c.fillRect(x, y + 16, w, h - 16);
+      c.fillStyle = '#2c2f3c';
+      for (let k = 0; k < b.tw; k++) c.fillRect(x + k * TILE + 4, y + 4, TILE - 8, 16);     // battlements
+      c.fillStyle = '#1a1c24';
+      for (let r = 0; r < 3; r++) c.fillRect(x, y + 36 + r * 30, w, 2);                    // courses of stone
+      // the doorway
+      const dx = x + w / 2;
+      c.fillStyle = '#05060a';
+      c.beginPath(); c.moveTo(dx - 22, y + h); c.lineTo(dx - 22, y + h - 40); c.arc(dx, y + h - 40, 22, Math.PI, 0); c.lineTo(dx + 22, y + h); c.fill();
+      c.strokeStyle = accent; c.lineWidth = 2;
+      c.globalAlpha = 0.6 + Math.sin(g.time * 2.5) * 0.25;
+      c.beginPath(); c.moveTo(dx - 22, y + h); c.lineTo(dx - 22, y + h - 40); c.arc(dx, y + h - 40, 22, Math.PI, 0); c.lineTo(dx + 22, y + h); c.stroke();
+      c.globalAlpha = 1;
+      this.worldLabel(c, `${loc.name} dungeon${cleared ? '  ✓' : ''}`, dx, y - 8, accent);
+    } else if (b.kind === 'forge') {
+      c.fillStyle = '#3a2e28'; c.fillRect(x, y + 20, w, h - 20);
+      c.fillStyle = this.mix(accent, '#2a2030', 0.55);
+      c.beginPath(); c.moveTo(x - 8, y + 24); c.lineTo(x + w / 2, y - 12); c.lineTo(x + w + 8, y + 24); c.fill();   // roof
+      c.fillStyle = '#2a2020'; c.fillRect(x + w - 34, y - 14, 12, 26);                                               // chimney
+      for (let k = 0; k < 3; k++) {
+        c.globalAlpha = 0.25; c.fillStyle = '#cfcfcf';
+        const ph = (g.time * 0.6 + k / 3) % 1;
+        c.beginPath(); c.arc(x + w - 28 + Math.sin(ph * 6) * 4, y - 18 - ph * 40, 5 + ph * 6, 0, Math.PI * 2); c.fill();
+      }
+      c.globalAlpha = 1;
+      // the forge's glow through the door (door faces up, onto the road)
+      const fg = c.createRadialGradient(x + w / 2, y + 26, 2, x + w / 2, y + 26, 30);
+      fg.addColorStop(0, accent); fg.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = fg; c.globalAlpha = 0.6 + Math.sin(g.time * 7) * 0.15;
+      c.fillRect(x + w / 2 - 30, y, 60, 50);
+      c.globalAlpha = 1;
+      c.fillStyle = '#120c0a'; c.fillRect(x + w / 2 - 14, y + 22, 28, 30);
+      this.worldLabel(c, `⚒ ${loc.stationName || 'Forge'}`, x + w / 2, y - 22, accent);
+    } else {
+      // the colosseum: a ring of arches
+      c.fillStyle = '#4a3e2c'; c.beginPath(); c.ellipse(x + w / 2, y + h / 2, w / 2 + 6, h / 2 + 4, 0, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#5e4e38'; c.beginPath(); c.ellipse(x + w / 2, y + h / 2 - 6, w / 2, h / 2 - 6, 0, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#2a2218';
+      for (let k = 0; k < 7; k++) {
+        const ax = x + 14 + k * ((w - 28) / 6);
+        c.fillRect(ax - 5, y + h / 2 + 2, 10, 20);
+      }
+      c.fillStyle = '#05060a'; c.fillRect(x + w / 2 - 18, y + h - 36, 36, 36);
+      this.worldLabel(c, 'Colosseum  ·  Wave Trials', x + w / 2, y - 8, PAL.mpCharge);
     }
     c.restore();
   }
 
-  /** Marks on the arena plate itself; drawn under every character. */
-  private drawFloorDeco(c: CanvasRenderingContext2D, g: Game, scene: WorldLocation) {
-    const look = scene.look;
+  private worldLabel(c: CanvasRenderingContext2D, text: string, x: number, y: number, color: string) {
+    c.save();
+    c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+    c.textAlign = 'center';
+    const w = c.measureText(text).width + 14;
+    c.fillStyle = 'rgba(6,8,14,0.75)';
+    this.roundRect(c, x - w / 2, y - 13, w, 18, 5); c.fill();
+    c.fillStyle = color;
+    c.fillText(text, x, y);
+    c.restore();
+  }
+
+  /* ----------------------------------------------------------- rooms */
+
+  /** A dungeon room or the colosseum: the fixed arena with its walls, door and props. */
+  private drawRoom(c: CanvasRenderingContext2D, g: Game) {
     const a = g.arena;
-    const off = g.screen === 'travel' ? g.scroll : 0;
-    const wx = (x: number) => a.x + ((((x - off) - a.x) % a.w) + a.w) % a.w;
-    c.save();
-    c.beginPath(); c.rect(a.x, a.y, a.w, a.h); c.clip();
-    if (scene.theme === 'Ruins') {
-      c.strokeStyle = '#3d332c';
-      c.lineWidth = 2;
-      for (let i = 0; i < 7; i++) {
-        const x = wx(a.x + 70 + (i * 173) % (a.w - 140));
-        const y = a.y + 40 + (i * 97) % (a.h - 80);
-        c.beginPath(); c.moveTo(x, y); c.lineTo(x + 14, y + 9); c.lineTo(x + 8, y + 22); c.stroke();
-      }
-    } else if (scene.theme === 'Volcano') {
-      c.globalAlpha = 0.28 + Math.sin(g.time * 1.8) * 0.08;
-      c.strokeStyle = look.motif;
-      c.lineWidth = 2.5;
-      for (let i = 0; i < 5; i++) {
-        const x = wx(a.x + 60 + (i * 211) % (a.w - 120));
-        const y = a.y + 30 + (i * 83) % (a.h - 60);
-        c.beginPath(); c.moveTo(x, y); c.lineTo(x + 30, y + 12); c.lineTo(x + 52, y + 6); c.stroke();
-      }
-    } else if (scene.theme === 'Forest') {
-      c.fillStyle = '#1e3a24';
-      for (let i = 0; i < 12; i++) {
-        const x = wx(a.x + 30 + (i * 157) % (a.w - 60));
-        const y = a.y + 20 + (i * 71) % (a.h - 40);
-        c.beginPath(); c.ellipse(x, y, 10, 4, 0, 0, Math.PI * 2); c.fill();
-      }
-    } else if (scene.theme === 'Tundra') {
-      c.globalAlpha = 0.25;
-      c.fillStyle = '#ffffff';
-      for (let i = 0; i < 8; i++) {
-        const x = wx(a.x + 50 + (i * 191) % (a.w - 100));
-        const y = a.y + 30 + (i * 67) % (a.h - 60);
-        c.beginPath(); c.ellipse(x, y, 34, 9, 0, 0, Math.PI * 2); c.fill();
-      }
-    } else if (scene.theme === 'Rift') {
-      c.globalAlpha = 0.5;
-      c.fillStyle = '#05030a';
-      for (let x = a.x; x < a.x + a.w; x += 34) {
-        c.beginPath();
-        c.moveTo(x, a.y + a.h); c.lineTo(x + 17, a.y + a.h - 10 - (x % 7)); c.lineTo(x + 34, a.y + a.h);
-        c.fill();
+    const trial = g.screen === 'trial';
+    const look = trial ? locById(HUB_ID).look : g.place.look;
+    c.fillStyle = trial ? '#1a150e' : '#07080d';
+    c.fillRect(0, 0, VIEW_W, VIEW_H);
+    if (trial) {
+      // the stands, full of a restless crowd
+      for (let r = 0; r < 4; r++) for (let k = 0; k < 60; k++) {
+        c.fillStyle = (k + r) % 3 ? '#3a2e20' : '#4a3a28';
+        const bob = Math.sin(g.time * 6 + k * 1.7 + r) * (g.enemies.length ? 1.5 : 0.4);
+        c.fillRect(k * 16 + (r % 2) * 8, 12 + r * 16 + bob, 10, 10);
       }
     }
-    c.restore();
+    // floor
+    c.fillStyle = trial ? '#3a3020' : this.mix(look.floorAlt, '#000000', 0.25);
+    c.fillRect(a.x, a.y, a.w, a.h);
+    c.strokeStyle = trial ? '#46392a' : look.grid;
+    c.lineWidth = 1;
+    c.beginPath();
+    for (let x = a.x; x <= a.x + a.w + 0.5; x += 60) { c.moveTo(x, a.y); c.lineTo(x, a.y + a.h); }
+    for (let y = a.y; y <= a.y + a.h + 0.5; y += 60) { c.moveTo(a.x, y); c.lineTo(a.x + a.w, y); }
+    c.stroke();
+
+    // walls
+    const wall = trial ? '#2a2016' : '#171922';
+    c.fillStyle = wall;
+    c.fillRect(a.x - 24, a.y - 24, a.w + 48, 24);
+    c.fillRect(a.x - 24, a.y + a.h, a.w + 48, 24);
+    c.fillRect(a.x - 24, a.y, 24, a.h);
+    c.fillRect(a.x + a.w, a.y, 24, a.h);
+    c.strokeStyle = this.alpha(look.accent, 0.35);
+    c.lineWidth = 2;
+    c.strokeRect(a.x, a.y, a.w, a.h);
+
+    if (!trial && g.dungeon) {
+      // torches along the top wall
+      for (let k = 0; k < 6; k++) {
+        const tx = a.x + 70 + k * ((a.w - 140) / 5);
+        const fl = Math.sin(g.time * 12 + k * 2) * 2;
+        const tg = c.createRadialGradient(tx, a.y - 8, 1, tx, a.y - 8, 26);
+        tg.addColorStop(0, look.accent); tg.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = tg; c.globalAlpha = 0.5; c.fillRect(tx - 26, a.y - 34, 52, 52); c.globalAlpha = 1;
+        c.fillStyle = look.accent; c.beginPath(); c.arc(tx, a.y - 12 + fl * 0.3, 4, 0, Math.PI * 2); c.fill();
+      }
+      this.drawRoomDoor(c, g);
+      for (const pr of g.props) this.drawProp(c, g, pr);
+    }
   }
 
-  /** The crafting station: an anvil and a fire, coloured by the place. */
-  private drawStation(c: CanvasRenderingContext2D, g: Game, scene: WorldLocation) {
-    const x = g.arena.x + g.arena.w - 110, y = g.arena.y + 70;
-    const accent = scene.look.accent;
+  /** The east door: barred while the room is live, open once it is clear. */
+  private drawRoomDoor(c: CanvasRenderingContext2D, g: Game) {
+    const run = g.dungeon!;
+    const a = g.arena;
+    const dy = a.y + a.h / 2 - ROOM_DOOR.h / 2;
+    const dx = a.x + a.w;
+    c.fillStyle = '#020306';
+    c.fillRect(dx, dy, 24, ROOM_DOOR.h);
+    if (!run.doorOpen) {
+      c.fillStyle = '#6a6e7e';
+      for (let k = 0; k < 5; k++) c.fillRect(dx + 2, dy + 6 + k * 19, 20, 5);
+    } else {
+      const exit = g.nextRoom() < 0;
+      c.fillStyle = this.alpha(g.place.look.accent, 0.35 + Math.sin(g.time * 4) * 0.15);
+      c.fillRect(dx, dy, 24, ROOM_DOOR.h);
+      c.save();
+      c.font = '800 11px ui-monospace, Menlo, Consolas, monospace';
+      c.textAlign = 'right';
+      c.fillStyle = g.place.look.accent;
+      c.fillText(exit ? 'EXIT →' : '→', dx - 8, dy + ROOM_DOOR.h / 2 + 4);
+      c.restore();
+    }
+  }
+
+  /** Waystones in the hall; altars in a beaten boss's room. */
+  private drawProp(c: CanvasRenderingContext2D, g: Game, pr: RoomProp) {
     c.save();
-    // fire
-    const flick = Math.sin(g.time * 14) * 3;
-    const fg = c.createRadialGradient(x + 44, y - 6, 2, x + 44, y - 6, 34);
-    fg.addColorStop(0, accent);
-    fg.addColorStop(1, 'rgba(0,0,0,0)');
-    c.globalAlpha = 0.55 + Math.sin(g.time * 6) * 0.1;
-    c.fillStyle = fg;
-    c.beginPath(); c.arc(x + 44, y - 6, 34, 0, Math.PI * 2); c.fill();
+    const near = dist(g.player.x, g.player.y, pr.x, pr.y) < 60;
+    c.fillStyle = 'rgba(0,0,0,0.35)';
+    c.beginPath(); c.ellipse(pr.x, pr.y + 4, 22, 8, 0, 0, Math.PI * 2); c.fill();
+    if (pr.kind === 'waystone') {
+      c.fillStyle = '#3a3e4e';
+      c.beginPath(); c.moveTo(pr.x - 12, pr.y); c.lineTo(pr.x - 8, pr.y - 50); c.lineTo(pr.x, pr.y - 58); c.lineTo(pr.x + 8, pr.y - 50); c.lineTo(pr.x + 12, pr.y); c.fill();
+      c.fillStyle = pr.color; c.globalAlpha = 0.6 + Math.sin(g.time * 3 + pr.x) * 0.3;
+      c.beginPath(); c.arc(pr.x, pr.y - 32, 5, 0, Math.PI * 2); c.fill();
+    } else {
+      c.fillStyle = '#34303c'; c.fillRect(pr.x - 18, pr.y - 22, 36, 22);
+      c.fillStyle = '#48424f'; c.fillRect(pr.x - 22, pr.y - 28, 44, 8);
+      const fl = Math.sin(g.time * 10 + pr.x) * 2;
+      c.fillStyle = pr.color; c.globalAlpha = 0.85;
+      c.beginPath(); c.moveTo(pr.x - 8, pr.y - 28); c.quadraticCurveTo(pr.x, pr.y - 52 - fl, pr.x + 8, pr.y - 28); c.fill();
+    }
     c.globalAlpha = 1;
-    c.fillStyle = accent;
-    c.beginPath(); c.moveTo(x + 36, y + 4); c.quadraticCurveTo(x + 44, y - 22 - flick, x + 52, y + 4); c.fill();
-    // anvil
-    c.fillStyle = '#2a2e3e';
-    c.fillRect(x - 22, y - 4, 44, 10);
-    c.fillRect(x - 8, y + 6, 16, 12);
-    c.fillRect(x - 16, y + 18, 32, 6);
-    c.strokeStyle = accent;
-    c.lineWidth = 1.5;
-    c.strokeRect(x - 22, y - 4, 44, 10);
     c.font = '700 10px ui-monospace, Menlo, Consolas, monospace';
     c.textAlign = 'center';
-    c.fillStyle = accent;
-    c.fillText((scene.stationName || 'Forge').toUpperCase(), x + 10, y + 40);
+    c.fillStyle = near ? '#ffffff' : pr.color;
+    c.fillText(pr.label, pr.x, pr.y + 20);
     c.restore();
   }
 
@@ -1069,24 +1103,27 @@ class Renderer {
     c.save();
     c.textAlign = 'right';
     const scene = g.scene();
-    if (g.screen === 'battle' && g.battle) {
-      const b = g.battle;
+    if (g.screen === 'trial' && g.battle) {
       c.font = '800 20px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = PAL.text;
-      c.fillText(b.kind === 'boss' ? `BOSS  ${Math.min(g.wave, b.totalWaves)}/${b.totalWaves}` : `WAVE ${g.wave}`, VIEW_W - 18, 32);
+      c.fillText(`WAVE ${g.wave}`, VIEW_W - 18, 32);
       c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = PAL.dim;
-      c.fillText(b.kind === 'boss'
-        ? `${b.superboss ? 'ASCENDANT ' : ''}${b.boss!.name}   enemies ${g.enemies.filter((e) => e.alive).length}`
-        : `trial tier ${b.tier}   best ${g.world.trialBest[b.tier] || 1}   enemies ${g.enemies.filter((e) => e.alive).length}`,
-        VIEW_W - 18, 50);
-    } else if (g.screen === 'travel' && g.travel) {
+      c.fillText(`trial tier ${g.battle.tier}   best ${g.world.trialBest[g.battle.tier] || 1}   enemies ${g.enemies.filter((e) => e.alive).length}`, VIEW_W - 18, 50);
+      c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = PAL.mpCharge;
+      c.fillText('THE COLOSSEUM', VIEW_W - 18, 66);
+    } else if (g.screen === 'dungeon' && g.dungeon) {
+      const run = g.dungeon;
+      const room = run.rooms[run.index];
       c.font = '800 16px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = PAL.text;
-      c.fillText('ON THE ROAD', VIEW_W - 18, 30);
+      c.fillStyle = scene.look.accent;
+      c.fillText(`${scene.name.toUpperCase()} DUNGEON`, VIEW_W - 18, 30);
       c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = PAL.dim;
-      c.fillText(`tier ${scene.tier}   enemies ${g.enemies.filter((e) => e.alive).length}   felled ${g.travel.kills}`, VIEW_W - 18, 48);
+      const bossesLeft = scene.bosses.filter((b) => !bossDefeated(g.world, b.id)).length;
+      c.fillText(room.kind === 'hall' ? `entrance hall  ·  ${bossesLeft} boss${bossesLeft === 1 ? '' : 'es'} remain`
+        : `room ${run.index}/${run.rooms.length - 1}  ·  ${room.kind === 'boss' ? 'boss' : `toward ${scene.bosses[room.section].name}`}`, VIEW_W - 18, 48);
     } else {
       c.font = '800 18px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = scene.look.accent;
@@ -1094,11 +1131,7 @@ class Renderer {
       c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = PAL.dim;
       c.fillText(scene.tier ? `tier ${scene.tier}  ·  recommended Lv ${recommendedLevel(scene)}` : 'safe ground', VIEW_W - 18, 48);
-    }
-    if (g.screen !== 'location') {
-      c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = scene.look.accent;
-      c.fillText(scene.name.toUpperCase(), VIEW_W - 18, 66);
+      this.drawMinimap(c, g, VIEW_W - 18 - 110, 58, 110);
     }
     c.restore();
 
@@ -1115,10 +1148,16 @@ class Renderer {
     c.restore();
 
     if (!IS_TOUCH && g.inCombat()) this.drawCommandMenu(c, g);
-    if (g.screen === 'location' && !g.menuOpen) this.drawPlacePanel(c, g);
-    if (g.screen === 'travel' && g.travel) this.drawTravelBar(c, g);
-    if (g.inCombat() && p.alive) this.drawBackButton(c, g);
-    if (g.screen === 'battle') this.drawBossBar(c, g);
+    if (g.inRoom() && p.alive) this.drawBackButton(c, g);
+    if (g.screen === 'dungeon') this.drawBossBar(c, g);
+    if (g.prompt && p.alive && !g.menuOpen) this.drawPrompt(c, g);
+    if (g.screen === 'world' && p.alive && !g.menuOpen) {
+      c.save();
+      c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = PAL.mpCharge;
+      c.fillText(this.clip(c, nextObjective(g.world), 300), 18, 110);
+      c.restore();
+    }
 
     // ---- combo counter
     if (g.comboCount > 1 && g.comboDisplay > 0) {
@@ -1173,97 +1212,61 @@ class Renderer {
     if (g.menuOpen) this.drawBigMenu(c, g);
   }
 
-  /** The list of things to do while standing in a location. */
-  private drawPlacePanel(c: CanvasRenderingContext2D, g: Game) {
-    const rows = g.placeRows();
-    const l = g.place;
-    const P = PLACE_PANEL;
-    const h = 52 + rows.length * P.rowH + 34;
+  /** The minimap: the region grid, what you have found, and where you are. */
+  private drawMinimap(c: CanvasRenderingContext2D, g: Game, x: number, y: number, w: number) {
+    const cw = w / GRID_W, ch = cw * (REG_H / REG_W);
     c.save();
-    c.fillStyle = 'rgba(10,14,28,0.88)';
-    this.roundRect(c, P.x, P.y, P.w, h, 10); c.fill();
-    c.strokeStyle = l.look.accent;
-    c.globalAlpha = 0.6;
-    c.lineWidth = 1.5;
-    this.roundRect(c, P.x, P.y, P.w, h, 10); c.stroke();
-    c.globalAlpha = 1;
-
-    c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = l.look.accent;
-    c.textAlign = 'left';
-    c.fillText(`You are in ${l.name}`, P.x + 14, P.y + 22);
-    c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = PAL.dim;
-    c.fillText(this.clip(c, l.description, P.w - 28), P.x + 14, P.y + 40);
-
-    c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      const y = P.y + 52 + i * P.rowH;
-      const on = i === g.placeIndex;
-      if (on) this.rowHighlight(c, P.x + 6, y, P.w - 12, P.rowH - 2);
-      c.fillStyle = !r.enabled ? '#5d6480' : on ? '#ffffff' : (r.color || PAL.text);
-      c.fillText(r.label, P.x + 18, y + 17);
-      if (r.right) {
-        c.textAlign = 'right';
-        c.fillStyle = r.enabled ? (on ? PAL.mpCharge : PAL.dim) : '#4a5068';
-        c.fillText(r.right, P.x + P.w - 14, y + 17);
-        c.textAlign = 'left';
-      }
+    c.fillStyle = 'rgba(6,8,14,0.7)';
+    this.roundRect(c, x - 4, y - 4, w + 8, ch * GRID_H + 8, 5); c.fill();
+    for (let ry = 0; ry < GRID_H; ry++) for (let rx = 0; rx < GRID_W; rx++) {
+      const id = REGION_GRID[ry][rx];
+      if (!id) continue;
+      const known = g.world.discoveredLocations.has(id);
+      const open = g.world.unlockedAreas.has(id);
+      c.fillStyle = !open ? '#262a38' : known ? this.alpha(locById(id).look.accent, 0.55) : 'rgba(120,130,160,0.25)';
+      c.fillRect(x + rx * cw + 1, y + ry * ch + 1, cw - 2, ch - 2);
     }
-    // quest hint
-    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = PAL.mpCharge;
-    c.fillText(this.clip(c, nextObjective(g.world), P.w - 28), P.x + 14, P.y + h - 14);
-    c.restore();
-
-    c.save();
-    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = PAL.dim;
-    c.textAlign = 'center';
-    c.fillText(IS_TOUCH ? 'tap a row to select, tap again to do it'
-      : '\u2191\u2193 choose  ·  ENTER do it  ·  WASD walk  ·  TAB menu', VIEW_W / 2 + 150, VIEW_H - 22);
+    c.fillStyle = '#ffffff';
+    const px = x + (g.player.x / WORLD_PW) * w, py = y + (g.player.y / WORLD_PH) * ch * GRID_H;
+    c.beginPath(); c.arc(px, py, 2.5 + Math.sin(g.time * 6) * 0.6, 0, Math.PI * 2); c.fill();
     c.restore();
   }
 
-  /** "Traveling to X" and how far along the road you are. */
-  private drawTravelBar(c: CanvasRenderingContext2D, g: Game) {
-    const t = g.travel!;
-    const to = locById(t.to), from = locById(t.from);
-    const w = 360, x = (VIEW_W - w) / 2, y = 18;
+  /** "ENTER: go in" — the thing you are standing at. Tappable on a phone. */
+  private drawPrompt(c: CanvasRenderingContext2D, g: Game) {
+    const pr = g.prompt!;
+    const B = PROMPT_BTN;
     c.save();
+    c.fillStyle = 'rgba(10,14,28,0.9)';
+    this.roundRect(c, B.x, B.y, B.w, B.h, 8); c.fill();
+    c.strokeStyle = pr.color; c.lineWidth = 1.5;
+    this.roundRect(c, B.x, B.y, B.w, B.h, 8); c.stroke();
     c.textAlign = 'center';
-    c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = PAL.text;
-    c.fillText(inAmbush(t) ? 'AMBUSH — clear the road' : `Traveling to ${to.name}...`, VIEW_W / 2, y + 10);
-    this.bar(c, x, y + 18, w, 8, t.progress, to.look.accent, 'rgba(0,0,0,0.55)');
-    c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = PAL.dim;
-    c.textAlign = 'left';
-    c.fillText(from.name, x, y + 40);
-    c.textAlign = 'right';
-    c.fillText(`${Math.ceil(secondsLeft(t))}s`, x + w, y + 40);
-    // ambush markers still ahead on the road
-    c.fillStyle = '#ff9d5c';
-    for (const a of t.ambushes) c.fillRect(x + w * a - 1.5, y + 15, 3, 14);
+    c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = pr.color;
+    c.fillText(this.clip(c, `${IS_TOUCH ? '' : 'ENTER  '}${pr.label}`, B.w - 20), B.x + B.w / 2, B.y + (pr.sub ? 17 : 25));
+    if (pr.sub) {
+      c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = PAL.dim;
+      c.fillText(this.clip(c, pr.sub, B.w - 20), B.x + B.w / 2, B.y + 32);
+    }
     c.restore();
   }
 
-  /** B on the keyboard, or this button: turn back on a road, retreat from a battle. */
+  /** B on the keyboard, or this button: leave a dungeon or the colosseum. */
   private drawBackButton(c: CanvasRenderingContext2D, g: Game) {
-    if (g.screen === 'battle' && g.battleOver > 0) return;
+    if (g.battleOver > 0) return;
     const B = BACK_BTN;
-    const y = B.y;
     c.save();
     c.fillStyle = 'rgba(20,24,44,0.8)';
-    this.roundRect(c, B.x, y, B.w, B.h, 6); c.fill();
+    this.roundRect(c, B.x, B.y, B.w, B.h, 6); c.fill();
     c.strokeStyle = 'rgba(160,190,255,0.45)';
     c.lineWidth = 1.2;
-    this.roundRect(c, B.x, y, B.w, B.h, 6); c.stroke();
+    this.roundRect(c, B.x, B.y, B.w, B.h, 6); c.stroke();
     c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
     c.textAlign = 'center';
     c.fillStyle = '#cfe0ff';
-    c.fillText(`${IS_TOUCH ? '' : 'B  '}${g.screen === 'travel' ? 'TURN BACK' : 'RETREAT'}`, B.x + B.w / 2, y + 17);
+    c.fillText(`${IS_TOUCH ? '' : 'B  '}LEAVE`, B.x + B.w / 2, B.y + 17);
     c.restore();
   }
 
@@ -1328,8 +1331,8 @@ class Renderer {
       c.fillText('DEFEATED', VIEW_W / 2, VIEW_H / 2 - 20);
       c.font = '700 15px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = PAL.text;
-      const safe = g.screen === 'travel' && g.travel ? g.travel.from : g.world.currentLocation;
-      c.fillText(`Level ${g.player.level}  ·  you will wake in ${locById(safe).name}`, VIEW_W / 2, VIEW_H / 2 + 14);
+      const cp = g.world.checkpoint;
+      c.fillText(`Level ${g.player.level}  ·  you will wake at your checkpoint in ${locById(regionAtPx(cp.x, cp.y) || HUB_ID).name}`, VIEW_W / 2, VIEW_H / 2 + 14);
       c.fillStyle = PAL.dim;
       c.fillText(IS_TOUCH ? 'Tap to continue — you keep everything.'
                           : 'Press R to continue — you keep everything.', VIEW_W / 2, VIEW_H / 2 + 40);
@@ -1465,7 +1468,7 @@ class Renderer {
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillText(IS_TOUCH
       ? 'tap a tab  ·  tap a row to select, tap again to confirm  ·  \u2715 to close'
-      : g.menuTab === 4 ? '1-5 tabs  ·  arrows move between places  ·  ENTER travel there  ·  TAB or ESC close'
+      : g.menuTab === 4 ? '1-5 tabs  ·  arrows move between regions  ·  TAB or ESC close'
       : '1-5 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close',
       26, VIEW_H - 18);
     void p;
@@ -1744,72 +1747,51 @@ class Renderer {
     this.listBox(c, M.x, M.y, M.w, M.h);
     void top;
 
-    const here = g.world.currentLocation;
-    const known = (id: string) => w.discoveredLocations.has(id) || w.unlockedAreas.has(id);
-
-    // roads
-    c.save();
-    c.lineWidth = 2;
-    for (const [a, b] of ROADS) {
-      const pa = mapPoint(locById(a)), pb = mapPoint(locById(b));
-      const open = w.unlockedAreas.has(a) && w.unlockedAreas.has(b);
-      const nearHere = (a === here || b === here) && open && g.screen === 'location';
-      c.strokeStyle = nearHere ? 'rgba(255,213,74,0.75)' : open ? 'rgba(143,180,255,0.4)' : 'rgba(90,100,140,0.18)';
-      c.setLineDash(open ? [] : [4, 6]);
-      c.beginPath(); c.moveTo(pa.x, pa.y); c.lineTo(pb.x, pb.y); c.stroke();
-    }
-    c.setLineDash([]);
-    c.restore();
-
-    // places
-    for (let i = 0; i < LOCATION_LIST.length; i++) {
-      const l = LOCATION_LIST[i];
-      const pt = mapPoint(l);
-      const open = w.unlockedAreas.has(l.id);
-      const sel = i === g.mapIndex;
+    for (let i = 0; i < REGION_IDS.length; i++) {
+      const id = REGION_IDS[i];
+      const l = locById(id);
+      const r = mapRect(id);
+      const open = w.unlockedAreas.has(id);
+      const known = w.discoveredLocations.has(id);
       const beaten = l.bosses.filter((b) => bossDefeated(w, b.id)).length;
       c.save();
-      if (sel) {
-        c.strokeStyle = '#ffffff'; c.lineWidth = 2;
-        c.beginPath(); c.arc(pt.x, pt.y, 17, 0, Math.PI * 2); c.stroke();
-      }
-      c.fillStyle = open ? l.look.accent : '#3a4058';
-      c.globalAlpha = open ? 1 : 0.8;
-      c.beginPath();
-      if (l.tier === 0) { c.rect(pt.x - 9, pt.y - 9, 18, 18); } else { c.arc(pt.x, pt.y, 10, 0, Math.PI * 2); }
-      c.fill();
-      if (l.id === here) {
-        c.strokeStyle = PAL.mpCharge; c.lineWidth = 3;
-        c.beginPath(); c.arc(pt.x, pt.y, 13 + Math.sin(g.time * 4) * 1.5, 0, Math.PI * 2); c.stroke();
-      }
-      if (l.hasCraftingStation && open) {
-        c.fillStyle = '#ffffff';
-        c.font = '700 10px ui-monospace, Menlo, Consolas, monospace';
-        c.textAlign = 'center';
-        c.fillText('\u2692', pt.x, pt.y + 4);
-      }
-      c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = !open ? '#1c1f2c' : this.alpha(l.look.accent, known ? 0.28 : 0.1);
+      this.roundRect(c, r.x, r.y, r.w, r.h, 6); c.fill();
+      c.strokeStyle = i === g.mapIndex ? '#ffffff' : open ? this.alpha(l.look.accent, 0.6) : 'rgba(90,100,140,0.3)';
+      c.lineWidth = i === g.mapIndex ? 2.5 : 1.2;
+      if (!open) c.setLineDash([4, 5]);
+      this.roundRect(c, r.x, r.y, r.w, r.h, 6); c.stroke();
+      c.setLineDash([]);
       c.textAlign = 'center';
+      c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = open ? PAL.text : '#5d6480';
-      c.fillText(known(l.id) ? l.name : '? ? ?', pt.x, pt.y + 26);
-      if (open && l.bosses.length) {
-        c.fillStyle = beaten === l.bosses.length ? '#69e29a' : PAL.dim;
-        c.fillText(`${beaten}/${l.bosses.length}`, pt.x, pt.y - 15);
-      }
+      c.fillText(this.clip(c, known || open ? l.name : '? ? ?', r.w - 10), r.x + r.w / 2, r.y + r.h / 2 - 6);
+      c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = PAL.dim;
+      const tags = [l.tier ? `T${l.tier}` : 'Haven'];
+      if (l.bosses.length && open) tags.push(`${beaten}/${l.bosses.length}`);
+      if (l.hasCraftingStation) tags.push('⚒');
+      if (!open) tags.push('sealed');
+      c.fillText(tags.join('  '), r.x + r.w / 2, r.y + r.h / 2 + 10);
       c.restore();
     }
+    // you are here
+    const gx = M.x + 12, gy = M.y + 12, gw = M.w - 24, gh = M.h - 24;
+    const px = gx + (g.player.x / WORLD_PW) * gw, py = gy + (g.player.y / WORLD_PH) * gh;
+    c.fillStyle = PAL.mpCharge;
+    c.beginPath(); c.arc(px, py, 5 + Math.sin(g.time * 5), 0, Math.PI * 2); c.fill();
 
     // detail panel
     const dx = M.x + M.w + 14;
     const dw = VIEW_W - dx - 26;
     this.listBox(c, dx, M.y, dw, M.h);
-    const l = LOCATION_LIST[g.mapIndex];
-    if (!l) return;
+    const l = locById(REGION_IDS[g.mapIndex]);
     const open = w.unlockedAreas.has(l.id);
+    const known = w.discoveredLocations.has(l.id);
     let y = M.y + 26;
     c.font = '800 16px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = open ? l.look.accent : '#5d6480';
-    c.fillText(this.clip(c, known(l.id) ? l.name : 'Unknown area', dw - 32), dx + 16, y);
+    c.fillText(this.clip(c, known || open ? l.name : 'Unknown region', dw - 32), dx + 16, y);
     y += 18;
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
@@ -1825,8 +1807,7 @@ class Renderer {
     if (l.tier) rows.push(['Recommended', `Lv ${recommendedLevel(l)}`]);
     rows.push(['Forge', l.hasCraftingStation ? (l.stationName || 'yes') : '-']);
     if (l.tier) rows.push(['Foes', l.enemyTypes.map((id) => ENEMIES[id].name).join(', ')]);
-    const t = roadTime(here, l.id);
-    rows.push(['From here', l.id === here ? 'you are here' : t ? `${t}s by road` : 'no direct road']);
+    if (l.tier === 0) rows.push(['Colosseum', 'Wave Trials']);
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     for (const [k, v] of rows) {
       c.fillStyle = PAL.dim; c.fillText(k, dx + 16, y);
@@ -1838,24 +1819,18 @@ class Renderer {
     if (open && l.bosses.length) {
       y += 6;
       c.fillStyle = PAL.dim;
-      c.fillText('BOSSES', dx + 16, y); y += 16;
+      c.fillText('DUNGEON BOSSES, IN ORDER', dx + 16, y); y += 16;
       for (const b of l.bosses) {
         const done = bossDefeated(w, b.id);
         const sup = superDefeated(w, b.id);
         c.fillStyle = done ? '#69e29a' : PAL.text;
-        c.fillText(`${done ? '\u2713' : '\u00B7'} ${b.name}${sup ? ' \u2605' : ''}`, dx + 16, y);
+        c.fillText(`${done ? '✓' : '·'} ${b.name}${sup ? ' ★' : ''}`, dx + 16, y);
         y += 15;
       }
     }
-
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
-    const canGo = g.screen === 'location' && open && l.id !== here && t > 0;
-    c.fillStyle = canGo ? PAL.mpCharge : PAL.dim;
-    c.fillText(g.screen !== 'location' ? 'Travel from a location, not mid-fight'
-      : l.id === here ? 'You are here'
-      : !open ? 'Locked'
-      : t ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to set out`
-      : 'Go through a neighbouring area', dx + 16, M.y + M.h - 14);
+    c.fillStyle = PAL.dim;
+    c.fillText(l.id === w.currentLocation ? 'You are here' : !open ? 'Sealed by a barrier' : 'Walk there', dx + 16, M.y + M.h - 14);
   }
 
   /** Greedy word wrap to `w` pixels in the current font. */
@@ -1995,7 +1970,7 @@ class Renderer {
     c.textAlign = 'center';
     c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText('an open world of bosses  ·  roads full of enemies  ·  forges  ·  Lv 1-100', VIEW_W / 2, 198);
+    c.fillText('an open world  ·  12 dungeons  ·  30 bosses  ·  forges  ·  Lv 1-100', VIEW_W / 2, 198);
 
     // a thin gold rule under the wordmark
     c.strokeStyle = 'rgba(255,213,74,0.45)';
@@ -2065,7 +2040,7 @@ class Renderer {
         ['MAG', 'cast the highlighted spell; tap a chip to change it'],
         ['Lock-on', 'automatic on touch — it picks the nearest enemy'],
         ['Menu', 'the icon on the right: gear, forge, talents, map'],
-        ['Turn back', 'the button under the road bar; it also retreats'],
+        ['Use / Leave', 'tap the prompt at a door  ·  LEAVE button inside'],
       ]
       : [
         ['Move', 'W A S D'],
@@ -2073,20 +2048,19 @@ class Renderer {
         ['Dash / Lock-on', 'Shift  ·  L'],
         ['Magic', '1 Fire  2 Blizzard  3 Thunder  4 Cure'],
         ['Menu', 'Tab for gear, forge, talents, status and the world map'],
-        ['Turn back', 'B on a road; B also retreats from a battle'],
+        ['Use / Leave', 'ENTER at a door or forge  ·  B leaves a dungeon'],
         ['Potion / Pause', 'Q  ·  P'],
         ['Tuning panel', '` opens every combat constant as a live slider'],
       ];
 
     const rules: string[] = [
-      'You start in the Haven. Pick TRAVEL to open the map and take a road to a',
-      'neighbouring area. Roads are full of enemies; press B to turn back.',
-      'Every area has 2-3 bosses. Beating them opens new areas and new Wave',
-      'Trial tiers, and drops boss-only materials. Superbosses are optional.',
-      'Forge gear at the Haven or any station on the map. No recipe is locked:',
-      'if you hold the materials, you can make it.',
-      'Dying loses nothing — you wake at the last safe place. The game saves',
-      'on every change, and the location panel has a Save row too.',
+      'Walk the open world. Enemies roam each region and chase you when you',
+      'get close. Glowing barriers seal regions you have not opened yet.',
+      'Each region has a dungeon: rooms lock until you clear them, and its',
+      'bosses wait in order. Its last boss breaks the barrier to the next region.',
+      'Towns have forges (heal, restock, craft any recipe). Towns and dungeon',
+      'doors are checkpoints. The Haven colosseum runs endless Wave Trials.',
+      'Dying loses nothing. Stand at a door and press ENTER to go in; B leaves.',
     ];
 
     c.textAlign = 'left';

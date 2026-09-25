@@ -26,6 +26,7 @@ const TUNING = {
   gravity: 1250,
   jumpVel: 400,
   turnRate: 16,
+  swingTurnRate: 11,
 
   // combat feel
   hitstopScale: 1.0,
@@ -81,6 +82,7 @@ const TUNABLES: Tunable[] = [
   { key: 'gravity', label: 'Gravity', min: 400, max: 2600, step: 25, group: 'Movement' },
   { key: 'jumpVel', label: 'Jump velocity', min: 150, max: 700, step: 10, group: 'Movement' },
   { key: 'turnRate', label: 'Turn rate', min: 2, max: 40, step: 0.5, group: 'Movement' },
+  { key: 'swingTurnRate', label: 'Turn mid-swing', min: 0, max: 40, step: 0.5, group: 'Movement' },
 
   { key: 'hitstopScale', label: 'Hitstop', min: 0, max: 3, step: 0.05, group: 'Game feel' },
   { key: 'shakeScale', label: 'Screen shake', min: 0, max: 3, step: 0.05, group: 'Game feel' },
@@ -361,8 +363,8 @@ const MENU_TAB = { x: 26, y: 18, w: 116, h: 28, gap: 8 };
 const MENU_TABS = 5;  // gear · synth · talents · status · map
 const SYNTH_ROW_H = 20;  // the recipe list is long now, so its rows are tighter
 const MAP_BOX = { x: 26, y: 62, w: 590, h: 432 };      // world map area in the MAP tab
-const PLACE_PANEL = { x: 18, y: 104, w: 300, rowH: 26 }; // the location action list
-const BACK_BTN = { x: 405, y: 70, w: 150, h: 26 };      // turn back / retreat
+const BACK_BTN = { x: 405, y: 70, w: 150, h: 26 };      // leave a dungeon / the colosseum
+const PROMPT_BTN = { x: 330, y: 470, w: 300, h: 40 };    // "ENTER: go in" for touch
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };

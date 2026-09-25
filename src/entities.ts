@@ -406,11 +406,21 @@ class Player {
     if (g.input.consume('jump')) this.queuedJump = g.input.frame;
     const fresh = (f: number) => f >= 0 && g.input.frame - f <= TUNING.queueFrames;
 
+    // Steer the swing: holding a direction turns you toward it mid-attack,
+    // fast but not instantly, and the hitbox turns with you.
+    const mv = g.input.moveVector();
+    if (!def.radial && (mv.x || mv.y)) {
+      const want = Math.atan2(mv.y, mv.x);
+      this.facing = angleLerp(this.facing, want, clamp(TUNING.swingTurnRate * dt, 0, 1));
+    }
+
     if (this.attackFrame <= def.startup) {
       this.attackPhase = 'startup';
       const t = this.attackFrame / def.startup;
-      this.vx = this.lungeVX * (1 - t * 0.5);
-      this.vy = this.lungeVY * (1 - t * 0.5);
+      // the lunge follows wherever you are now facing
+      const lunge = Math.hypot(this.lungeVX, this.lungeVY);
+      this.vx = Math.cos(this.facing) * lunge * (1 - t * 0.5);
+      this.vy = Math.sin(this.facing) * lunge * (1 - t * 0.5);
     } else if (this.attackFrame <= def.startup + def.active) {
       this.attackPhase = 'active';
       this.vx *= 0.82; this.vy *= 0.82;
@@ -619,6 +629,13 @@ class Enemy {
   level: number;
   tier: number;
 
+  // overworld: enemies idle near home until you come close, and give up
+  // the chase if you drag them too far from it
+  aggro = true;
+  homeX = 0; homeY = 0;
+  wanderX = 0; wanderY = 0;
+  wanderT = 0;
+
   // bosses only: the signature-move state machine layered on the base AI
   boss: BossDefinition | null = null;
   superboss = false;
@@ -683,6 +700,14 @@ class Enemy {
     }
 
     if (this.cooldown > 0) this.cooldown--;
+
+    if (!this.aggro) { this.idle(g, dt); this.physics(g, dt); return; }
+    if (g.screen === 'world' && this.state !== 'stagger' && this.state !== 'special'
+      && dist(this.x, this.y, this.homeX, this.homeY) > LEASH
+      && dist(this.x, this.y, g.player.x, g.player.y) > AGGRO_RANGE) {
+      this.aggro = false;              // lost you: head home
+      this.wanderX = this.homeX; this.wanderY = this.homeY; this.wanderT = 4;
+    }
 
     if (this.boss && this.updateBoss(g, dt)) { this.physics(g, dt); return; }
 
@@ -941,6 +966,32 @@ class Enemy {
     else if (this.cooldown <= 0 && p.alive) this.beginTelegraph(g);
   }
 
+  /* --------------------------------------------------- overworld idling */
+
+  /** Amble around home; notice the player when they come close. */
+  private idle(g: Game, dt: number) {
+    const p = g.player;
+    if (p.alive && dist(this.x, this.y, p.x, p.y) < AGGRO_RANGE && Math.abs(p.z - this.z) < 200) {
+      this.aggro = true;
+      this.state = 'chase';
+      this.cooldown = Math.max(this.cooldown, 20);
+      g.floatText(this.x, this.y, this.z + this.def.height + 16, '!', this.def.accent, 20);
+      return;
+    }
+    this.wanderT -= dt;
+    if (this.wanderT <= 0) {
+      this.wanderT = rnd(1.8, 4);
+      const a = rnd(0, Math.PI * 2), r = rnd(0, 110);
+      this.wanderX = this.homeX + Math.cos(a) * r;
+      this.wanderY = this.homeY + Math.sin(a) * r;
+    }
+    if (dist(this.x, this.y, this.wanderX, this.wanderY) > 10) {
+      this.moveToward(this.wanderX, this.wanderY, dt, 0.35);
+      this.facing = angleLerp(this.facing, Math.atan2(this.vy, this.vx), clamp(4 * dt, 0, 1));
+    } else { this.vx *= 0.8; this.vy *= 0.8; }
+    if (this.def.hover) this.z = lerp(this.z, this.def.hover + Math.sin(this.wobble) * 10, clamp(3 * dt, 0, 1));
+  }
+
   /* ------------------------------------------------------------- bosses */
 
   /** Frames between signature moves; faster once enraged or Ascendant. */
@@ -1066,6 +1117,7 @@ class Enemy {
 
   applyDamage(g: Game, dmg: number, poiseDmg: number, angle: number, knockback: number, launch: number) {
     this.hp -= dmg;
+    this.aggro = true;
     this.flash = 6;
     this.poiseRegen = 0;
 
@@ -1152,7 +1204,9 @@ class Projectile {
         life: 0.3, maxLife: 0.3, size: this.radius * 0.6, color: this.color, gravity: 0,
       });
     }
-    if (this.life <= 0 || this.x < -60 || this.x > VIEW_W + 60 || this.y < -60 || this.y > VIEW_H + 60) {
+    const b = g.bounds();
+    if (this.life <= 0 || this.x < b.x - 60 || this.x > b.x + b.w + 60 || this.y < b.y - 60 || this.y > b.y + b.h + 60
+      || g.blocksShot(this.x, this.y)) {
       this.dead = true;
       return;
     }
@@ -1219,6 +1273,8 @@ class Pickup {
 
 /* ----------------------------------------------------------- boss bodies */
 
+const AGGRO_RANGE = 300;     // overworld: how close before an enemy notices you
+const LEASH = 760;           // ...and how far it will follow you from home
 const SLAM_RADIUS = 150;
 const SHOCK_MULT = 1.5;       // slam / dive damage relative to a normal swing
 const BOSS_HP_SCALE = 0.75;   // boss data HP -> fight HP, tuned so fights last ~40-90 hits
