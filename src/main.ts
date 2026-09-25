@@ -582,6 +582,15 @@ class Game {
         enabled: true, color: done ? '#69e29a' : b.accent,
         act: () => this.startBoss(b, false),
       });
+      // The Ascendant: optional, harder, double spoils plus Star Fragments.
+      if (ascendantAvailable(w, b)) {
+        const sdone = superDefeated(w, b.id);
+        rows.push({
+          label: `   \u2605 Ascendant`, right: sdone ? '\u2713 again' : 'x2 loot',
+          enabled: true, color: '#ffd54a',
+          act: () => this.startBoss(b, true),
+        });
+      }
     }
     if (l.tier > 0) {
       const t = this.trialTier;
@@ -689,7 +698,9 @@ class Game {
     if (bossHome(b.id) !== this.world.currentLocation) { this.toast('THAT BOSS IS ELSEWHERE'); return; }
     this.battle = { kind: 'boss', boss: b, superboss, tier: b.tier, totalWaves: 3, bossEnemy: null };
     this.beginBattle();
-    this.banner(b.name.toUpperCase(), `${b.title}  ·  2 waves, then the boss`, b.accent);
+    this.banner(superboss ? ascendantName(b).toUpperCase() : b.name.toUpperCase(),
+      superboss ? 'hard mode  ·  x1.5 stats  ·  x2 spoils' : `${b.title}  ·  2 waves, then the boss`,
+      superboss ? '#ffd54a' : b.accent);
   }
 
   private spawnBoss() {
