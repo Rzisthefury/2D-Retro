@@ -68,7 +68,7 @@ const TUNING = {
   dropRate: 1.0,
 
   // audio
-  musicVolume: 0.3,
+  musicVolume: 0.2,
   sfxVolume: 0.7,
   waveIntro: 1.6,
   travelSpawnMult: 1.0,

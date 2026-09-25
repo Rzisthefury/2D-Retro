@@ -374,7 +374,7 @@ class Game {
       this.time += dt;
       if (this.bannerT > 0) this.bannerT -= dt;
       this.updateVfx(dt);
-      this.music.target = 0;
+      this.syncMusic();
       this.handleTitle();
       this.input.endTick();
       return;
@@ -494,20 +494,27 @@ class Game {
   }
 
   /** Intensity for the score, resolved from what is actually happening. */
+  /** Pick the theme for where you are, and whether the combat layer is up. */
   private syncMusic() {
-    let want: number;
-    const alive = this.enemies.filter((e) => e.alive && e.aggro).length;
-    if (this.menuOpen || this.restPoint || this.battleOver > 0) want = 0;
-    else if (!this.player.alive) want = 1;
-    else if (this.screen === 'world' && alive === 0) want = 0;
-    else {
-      if (alive <= 2) want = 1;
-      else want = 2;
-      if (alive >= 6 || this.comboCount >= 12) want = 3;
-      const bossUp = !!this.battle?.bossEnemy?.alive;
-      if (bossUp || this.player.hp < this.player.stats.maxHp * 0.25) want = 4;
+    const [id, transpose, tempo] = this.musicFor();
+    this.music.setTrack(id, transpose, tempo);
+    this.music.duck(this.menuOpen || this.paused);
+    const p = this.player;
+    const fighting = p.alive && this.enemies.some((e) => e.alive && e.aggro
+      && (this.screen !== 'world' || dist(e.x, e.y, p.x, p.y) < 700));
+    this.music.target = fighting && !this.restPoint && this.battleOver <= 0 ? 3 : 0;
+  }
+
+  /** [theme, transpose, tempo] for the current screen and place. */
+  musicFor(): [string, number, number] {
+    if (this.screen === 'title') return ['title', 0, 1];
+    if (this.screen === 'trial') return ['boss', -2, 0.95];
+    if (this.screen === 'dungeon' && this.dungeon) {
+      const shift = (REGION_IDS.indexOf(this.dungeon.region) % 5) - 2;
+      if (this.battle?.kind === 'boss' && this.battle.bossEnemy?.alive) return ['boss', shift, 1];
+      return ['dungeon', shift, 1];
     }
-    this.music.target = want;
+    return ZONE_MUSIC[this.world.currentLocation] || ZONE_MUSIC.hub;
   }
 
   private updateVfx(dt: number) {
