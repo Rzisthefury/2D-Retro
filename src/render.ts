@@ -672,11 +672,38 @@ class Renderer {
     const telegraphing = e.state === 'telegraph';
     const body = flash ? '#ffffff' : (telegraphing ? this.mix(d.color, d.accent, 0.45 + Math.sin(g.time * 26) * 0.25) : d.color);
 
+    if (e.boss && !dying) {
+      // a slow-pulsing aura so a boss reads at a glance in a crowd
+      const ag = c.createRadialGradient(0, -d.height * 0.5, 4, 0, -d.height * 0.5, d.radius * 2.2);
+      ag.addColorStop(0, e.superboss ? 'rgba(255,213,74,0.45)' : this.alpha(d.accent, 0.35));
+      ag.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = ag;
+      c.globalAlpha = fade * (0.7 + Math.sin(g.time * 3) * 0.2);
+      c.beginPath(); c.arc(0, -d.height * 0.5, d.radius * 2.2, 0, Math.PI * 2); c.fill();
+      c.globalAlpha = fade;
+    }
+
     switch (d.ai) {
       case 'grunt': this.drawGrunt(c, e, body, flash ? '#fff' : d.accent, g); break;
       case 'bruiser': this.drawBruiser(c, e, body, flash ? '#fff' : d.accent); break;
       case 'caster': this.drawCaster(c, e, body, flash ? '#fff' : d.accent, g); break;
       case 'flyer': this.drawFlyer(c, e, body, flash ? '#fff' : d.accent, g); break;
+    }
+
+    if (e.boss && !dying) {
+      // the crown: three points, gold on an Ascendant
+      const h = d.height + (d.ai === 'grunt' ? 20 : 8);
+      c.fillStyle = e.superboss ? '#ffd54a' : d.accent;
+      c.beginPath();
+      c.moveTo(-12, -h); c.lineTo(-12, -h - 10); c.lineTo(-6, -h - 5); c.lineTo(0, -h - 14);
+      c.lineTo(6, -h - 5); c.lineTo(12, -h - 10); c.lineTo(12, -h);
+      c.closePath(); c.fill();
+      if (e.enraged) {
+        c.strokeStyle = '#ff5f56'; c.lineWidth = 2;
+        c.globalAlpha = fade * (0.5 + Math.sin(g.time * 12) * 0.3);
+        c.beginPath(); c.arc(0, -d.height * 0.5, d.radius + 10, 0, Math.PI * 2); c.stroke();
+        c.globalAlpha = fade;
+      }
     }
 
     if (e.guardFlash > 0) {
@@ -691,7 +718,7 @@ class Renderer {
     }
     c.restore();
 
-    if (!dying) this.drawEnemyBar(c, e, ex, ey);
+    if (!dying && !e.boss) this.drawEnemyBar(c, e, ex, ey);
   }
 
   private drawGrunt(c: CanvasRenderingContext2D, e: Enemy, body: string, accent: string, g: Game) {
@@ -811,6 +838,7 @@ class Renderer {
 
   /** Ground arc showing exactly where an incoming attack will land. */
   private drawTelegraph(c: CanvasRenderingContext2D, e: Enemy) {
+    if (e.state === 'special') { this.drawBossTell(c, e); return; }
     if (e.state !== 'telegraph') return;
     const t = clamp(e.stateFrame / e.def.telegraph, 0, 1);
     const reach = e.def.ai === 'caster' ? 0 : e.def.reach + e.radius;
@@ -826,6 +854,75 @@ class Renderer {
     c.closePath();
     c.fill();
     c.restore();
+  }
+
+  /** Ground markings for a boss's signature move: where it will land, and when. */
+  private drawBossTell(c: CanvasRenderingContext2D, e: Enemy) {
+    const f = e.moveFrame;
+    const accent = e.def.accent;
+    c.save();
+    if (e.move === 'slam') {
+      const t = clamp(f / e.tell(52), 0, 1);
+      if (t < 1) {
+        c.globalAlpha = 0.12 + t * 0.25;
+        c.fillStyle = accent;
+        c.beginPath(); c.ellipse(e.moveX, e.moveY, SLAM_RADIUS * t, SLAM_RADIUS * 0.55 * t, 0, 0, Math.PI * 2); c.fill();
+        c.globalAlpha = 0.7;
+        c.strokeStyle = accent; c.lineWidth = 2;
+        c.beginPath(); c.ellipse(e.moveX, e.moveY, SLAM_RADIUS, SLAM_RADIUS * 0.55, 0, 0, Math.PI * 2); c.stroke();
+      }
+    } else if (e.move === 'dive') {
+      const track = e.tell(46);
+      if (f > 30 && f <= 30 + track + 12) {
+        const t = clamp((f - 30) / track, 0, 1);
+        c.globalAlpha = 0.25 + t * 0.4;
+        c.strokeStyle = accent; c.lineWidth = 2.5;
+        c.beginPath(); c.ellipse(e.moveX, e.moveY, DIVE_RADIUS, DIVE_RADIUS * 0.55, 0, 0, Math.PI * 2); c.stroke();
+        c.beginPath();
+        c.moveTo(e.moveX - 10, e.moveY); c.lineTo(e.moveX + 10, e.moveY);
+        c.moveTo(e.moveX, e.moveY - 6); c.lineTo(e.moveX, e.moveY + 6);
+        c.stroke();
+      }
+    } else if (e.move === 'rush') {
+      c.globalAlpha = 0.35;
+      c.strokeStyle = accent; c.lineWidth = 3;
+      c.setLineDash([8, 8]);
+      c.beginPath(); c.moveTo(e.x, e.y); c.lineTo(e.x + Math.cos(e.facing) * 170, e.y + Math.sin(e.facing) * 170); c.stroke();
+    } else if (e.move === 'fan') {
+      const t = clamp(f / e.tell(34), 0, 1);
+      if (t < 1) {
+        c.globalAlpha = 0.18 + t * 0.3;
+        c.fillStyle = accent;
+        c.beginPath(); c.moveTo(e.x, e.y);
+        c.arc(e.x, e.y, 200 * t, e.facing - 0.7, e.facing + 0.7);
+        c.closePath(); c.fill();
+      }
+    }
+    c.restore();
+  }
+
+  /** The big bar along the bottom while a boss is up. */
+  private drawBossBar(c: CanvasRenderingContext2D, g: Game) {
+    const e = g.battle?.bossEnemy;
+    if (!e || !e.alive) return;
+    const b = e.boss!;
+    const w = 460, x = (VIEW_W - w) / 2, y = VIEW_H - 40;
+    c.save();
+    c.textAlign = 'center';
+    c.font = '800 14px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = e.superboss ? '#ffd54a' : b.accent;
+    c.fillText((e.superboss ? ascendantName(b) : b.name).toUpperCase() + (e.enraged ? '  —  ENRAGED' : ''), VIEW_W / 2, y - 8);
+    this.bar(c, x, y, w, 12, e.hp / e.maxHp, e.enraged ? '#ff5f56' : b.accent, 'rgba(0,0,0,0.6)');
+    c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.dim;
+    c.fillText(`Lv ${e.level}  ·  ${Math.ceil(e.hp)} / ${e.maxHp}`, VIEW_W / 2, y + 26);
+    c.restore();
+  }
+
+  /** '#rrggbb' at an alpha. */
+  private alpha(hex: string, a: number): string {
+    const [r, gg, bb] = this.hex(hex);
+    return `rgba(${r},${gg},${bb},${a})`;
   }
 
   private drawLockRing(c: CanvasRenderingContext2D, g: Game) {
@@ -1021,6 +1118,7 @@ class Renderer {
     if (g.screen === 'location' && !g.menuOpen) this.drawPlacePanel(c, g);
     if (g.screen === 'travel' && g.travel) this.drawTravelBar(c, g);
     if (g.inCombat() && p.alive) this.drawBackButton(c, g);
+    if (g.screen === 'battle') this.drawBossBar(c, g);
 
     // ---- combo counter
     if (g.comboCount > 1 && g.comboDisplay > 0) {

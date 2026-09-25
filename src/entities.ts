@@ -585,7 +585,7 @@ class Player {
 
 /* ---------------------------------------------------------------- enemy */
 
-type EState = 'spawn' | 'idle' | 'chase' | 'reposition' | 'telegraph' | 'attack' | 'recover' | 'stagger' | 'dead';
+type EState = 'spawn' | 'idle' | 'chase' | 'reposition' | 'telegraph' | 'attack' | 'recover' | 'stagger' | 'dead' | 'special';
 
 class Enemy {
   def: EnemyDef;
@@ -618,6 +618,16 @@ class Enemy {
 
   level: number;
   tier: number;
+
+  // bosses only: the signature-move state machine layered on the base AI
+  boss: BossDefinition | null = null;
+  superboss = false;
+  move: BossMove | null = null;
+  moveFrame = 0;
+  moveStep = 0;
+  moveX = 0; moveY = 0;       // where the move lands
+  specialCd = 150;
+  enraged = false;
 
   /**
    * `level` comes from the location's level band, `tier` from the location
@@ -674,6 +684,8 @@ class Enemy {
 
     if (this.cooldown > 0) this.cooldown--;
 
+    if (this.boss && this.updateBoss(g, dt)) { this.physics(g, dt); return; }
+
     switch (this.def.ai) {
       case 'grunt': this.aiGrunt(g, dt); break;
       case 'bruiser': this.aiBruiser(g, dt); break;
@@ -709,7 +721,7 @@ class Enemy {
     g.separate(this);
   }
 
-  private faceTarget(p: Player, dt: number, rate = 9) {
+  faceTarget(p: Player, dt: number, rate = 9) {
     const want = Math.atan2(p.y - this.y, p.x - this.x);
     this.facing = angleLerp(this.facing, want, clamp(rate * dt, 0, 1));
   }
@@ -929,6 +941,127 @@ class Enemy {
     else if (this.cooldown <= 0 && p.alive) this.beginTelegraph(g);
   }
 
+  /* ------------------------------------------------------------- bosses */
+
+  /** Frames between signature moves; faster once enraged or Ascendant. */
+  private moveCooldown(): number {
+    return Math.round(230 * (this.enraged ? 0.7 : 1) * (this.superboss ? 0.8 : 1) / TUNING.enemyAggression);
+  }
+
+  /**
+   * Runs the boss's signature moves. Returns true while a move owns the
+   * boss this frame; otherwise the base AI (bruiser/caster/grunt/flyer) runs.
+   */
+  private updateBoss(g: Game, dt: number): boolean {
+    const b = this.boss!;
+    const p = g.player;
+    if (!this.enraged && this.hp < this.maxHp * 0.5) {
+      this.enraged = true;
+      g.banner('ENRAGED', b.name, b.accent);
+      g.shake(8);
+      g.ring(this.x, this.y, this.z, 10, 140, b.accent);
+    }
+    if (this.state === 'special') { this.runMove(g, dt); return true; }
+    if (this.state === 'stagger' || this.state === 'spawn') return false;
+    if (this.specialCd > 0) { this.specialCd--; return false; }
+    if (this.state !== 'chase' || !p.alive) return false;
+
+    this.move = pick(b.moves);
+    this.state = 'special';
+    this.moveFrame = 0;
+    this.moveStep = 0;
+    this.hasHitThisSwing = false;
+    this.moveX = this.x; this.moveY = this.y;
+    return true;
+  }
+
+  private endMove() {
+    this.state = 'chase';
+    this.move = null;
+    this.specialCd = this.moveCooldown();
+    this.cooldown = Math.max(this.cooldown, 30);
+  }
+
+  /** Telegraph length for the current move: shorter when enraged. */
+  tell(base: number): number { return Math.round(base * (this.enraged ? 0.75 : 1)); }
+
+  private runMove(g: Game, dt: number) {
+    const p = g.player;
+    const f = ++this.moveFrame;
+    this.vx *= 0.85; this.vy *= 0.85;
+    switch (this.move) {
+      case 'slam': {
+        // Winds up, then shocks the ground in a ring. Jump or dash out.
+        const t = this.tell(52);
+        this.moveX = this.x; this.moveY = this.y;
+        if (f === t) {
+          g.bossShock(this, this.x, this.y, SLAM_RADIUS, 1.5);
+          g.shake(12);
+          g.ring(this.x, this.y, 0, 20, SLAM_RADIUS, this.def.accent);
+          g.burst(this.x, this.y, 0, 24, this.def.accent);
+        }
+        if (f >= t + 34) this.endMove();
+        break;
+      }
+      case 'fan': {
+        // A spread of bolts. Gaps between them are the way through.
+        const t = this.tell(34);
+        this.faceTarget(p, dt, 6);
+        if (f === t) {
+          const n = this.enraged || this.superboss ? 7 : 5;
+          for (let i = 0; i < n; i++) g.spawnEnemyBolt(this, (i - (n - 1) / 2) * 0.22);
+        }
+        if (f >= t + 26) this.endMove();
+        break;
+      }
+      case 'rush': {
+        // A string of lunges, each with its own short tell.
+        const lunges = this.enraged ? 4 : 3;
+        const wind = this.tell(18), go = 11;
+        const local = f - this.moveStep * (wind + go);
+        if (local <= wind) {
+          this.faceTarget(p, dt, 10);
+          if (local === 1) this.hasHitThisSwing = false;
+        } else if (local <= wind + go) {
+          this.vx = Math.cos(this.facing) * 560;
+          this.vy = Math.sin(this.facing) * 560;
+          if (!this.hasHitThisSwing) g.enemyStrike(this, this.def.reach + this.radius, 1.1);
+        } else {
+          this.moveStep++;
+          if (this.moveStep >= lunges) this.endMove();
+        }
+        break;
+      }
+      case 'dive': {
+        // Rises out of reach, tracks you, then drops onto the marked spot.
+        const rise = 30, track = this.tell(46), fall = 12;
+        if (f <= rise) {
+          this.z = lerp(this.z, DIVE_HEIGHT, clamp(6 * dt, 0, 1));
+        } else if (f <= rise + track) {
+          this.z = DIVE_HEIGHT;
+          this.moveX = lerp(this.moveX, p.x, clamp(5 * dt, 0, 1));
+          this.moveY = lerp(this.moveY, p.y, clamp(5 * dt, 0, 1));
+          this.x = lerp(this.x, this.moveX, clamp(4 * dt, 0, 1));
+          this.y = lerp(this.y, this.moveY, clamp(4 * dt, 0, 1));
+        } else if (f <= rise + track + fall) {
+          const k = (f - rise - track) / fall;
+          this.x = lerp(this.x, this.moveX, k);
+          this.y = lerp(this.y, this.moveY, k);
+          this.z = DIVE_HEIGHT * (1 - k) + this.def.hover * k;
+          if (f === rise + track + fall) {
+            this.z = this.def.hover;
+            g.bossShock(this, this.moveX, this.moveY, DIVE_RADIUS, 1.4);
+            g.shake(10);
+            g.ring(this.moveX, this.moveY, 0, 10, DIVE_RADIUS, this.def.accent);
+            g.burst(this.moveX, this.moveY, 0, 18, this.def.accent);
+          }
+        } else if (f >= rise + track + fall + 28) this.endMove();
+        break;
+      }
+      default: this.endMove();
+    }
+  }
+
   /* -------------------------------------------------------------- damage */
 
   applyDamage(g: Game, dmg: number, poiseDmg: number, angle: number, knockback: number, launch: number) {
@@ -944,8 +1077,11 @@ class Enemy {
       return;
     }
 
+    // A boss mid-move is committed: it takes the damage but not the stagger.
+    if (this.state === 'special') return;
+
     this.poise -= poiseDmg;
-    const launched = launch !== 0;
+    const launched = launch !== 0 && !this.boss;
     if (this.poise <= 0 || launched) {
       this.stagger(Math.max(18, Math.round(poiseDmg * 0.9)));
       this.vx = Math.cos(angle) * knockback;
@@ -976,6 +1112,7 @@ class Projectile {
   target: Enemy | null = null;
   hits = new Set<Enemy>();
   slowOnHit = false;
+  mag = 8;            // caster strength behind an enemy bolt
   trail = 0;
   dead = false;
 
@@ -983,7 +1120,9 @@ class Projectile {
     x: number; y: number; z: number; vx: number; vy: number;
     radius: number; life: number; color: string; owner: ProjOwner;
     power: number; pierce?: boolean; homing?: number; target?: Enemy | null; slowOnHit?: boolean;
+    mag?: number;
   }) {
+    this.mag = o.mag ?? 8;
     this.x = o.x; this.y = o.y; this.z = o.z;
     this.vx = o.vx; this.vy = o.vy;
     this.radius = o.radius; this.life = o.life; this.color = o.color;
@@ -1076,4 +1215,27 @@ class Pickup {
     this.vy *= Math.pow(0.94, dt * 60);
     g.clampToArena(this);
   }
+}
+
+/* ----------------------------------------------------------- boss bodies */
+
+const SLAM_RADIUS = 150;
+const DIVE_RADIUS = 96;
+const DIVE_HEIGHT = 190;
+
+/** Build a fightable EnemyDef from a boss: its pattern picks the base AI and body. */
+function bossEnemyDef(b: BossDefinition): EnemyDef {
+  const base: Record<BossPattern, Partial<EnemyDef>> = {
+    brute:    { ai: 'bruiser', radius: 36, height: 66, speed: 72, reach: 70, telegraph: 30, active: 7, recovery: 32, cooldown: 70, poise: 260, hover: 0 },
+    sorcerer: { ai: 'caster', radius: 24, height: 58, speed: 96, reach: 380, telegraph: 26, active: 4, recovery: 22, cooldown: 70, poise: 190, hover: 0 },
+    stalker:  { ai: 'grunt', radius: 24, height: 52, speed: 150, reach: 52, telegraph: 18, active: 6, recovery: 20, cooldown: 46, poise: 210, hover: 0 },
+    skylord:  { ai: 'flyer', radius: 28, height: 46, speed: 140, reach: 58, telegraph: 24, active: 6, recovery: 22, cooldown: 60, poise: 180, hover: 82 },
+  };
+  return {
+    id: b.id, name: b.name,
+    hp: b.stats.hp, str: b.stats.attack, def: b.stats.defense, mres: Math.round(b.stats.defense * 0.8),
+    color: b.color, accent: b.accent, exp: 420, power: Math.round(b.stats.attack * 1.25),
+    guard: false,
+    ...base[b.pattern],
+  } as EnemyDef;
 }

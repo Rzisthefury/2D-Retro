@@ -491,6 +491,9 @@ class Game {
     this.betweenWaves = 0;
     this.waveIntro = 0;
     this.paused = false;
+    // loot left on the floor is swept into your pack rather than lost
+    for (const p of this.pickups) if (!p.collected) { p.collected = true; this.collect(p); }
+    this.pickups.length = 0;
     for (const e of this.enemies) if (e.alive) this.ring(e.x, e.y, e.z, 6, 50, '#ffffff');
     this.enemies.length = 0;
     this.projectiles.length = 0;
@@ -570,6 +573,15 @@ class Game {
     const l = this.place;
     const w = this.world;
     const rows: MenuRow[] = [];
+    for (const b of l.bosses) {
+      const done = bossDefeated(w, b.id);
+      rows.push({
+        label: `${done ? '\u2713' : '\u2620'} ${b.name}`,
+        right: done ? 'again' : `Lv ${this.bossLevel(b)}`,
+        enabled: true, color: done ? '#69e29a' : b.accent,
+        act: () => this.startBoss(b, false),
+      });
+    }
     if (l.tier > 0) {
       const t = this.trialTier;
       rows.push({
@@ -668,6 +680,60 @@ class Game {
     this.banner(`WAVE TRIAL ${tier}`, `${this.place.name}  ·  endless — press B to leave`, this.place.look.accent);
   }
 
+  bossLevel(b: BossDefinition): number { return TIER_LEVELS[clamp(b.tier, 1, 10)][1]; }
+
+  /** A boss battle: two waves of the area's enemies, then the boss itself. */
+  startBoss(b: BossDefinition, superboss: boolean) {
+    if (this.screen !== 'location') return;
+    if (bossHome(b.id) !== this.world.currentLocation) { this.toast('THAT BOSS IS ELSEWHERE'); return; }
+    this.battle = { kind: 'boss', boss: b, superboss, tier: b.tier, totalWaves: 3, bossEnemy: null };
+    this.beginBattle();
+    this.banner(b.name.toUpperCase(), `${b.title}  ·  2 waves, then the boss`, b.accent);
+  }
+
+  private spawnBoss() {
+    const bt = this.battle!;
+    const b = bt.boss!;
+    const a = this.arena;
+    const e = new Enemy(bossEnemyDef(b), a.x + a.w / 2, a.y + 70, this.bossLevel(b), b.tier);
+    e.boss = b;
+    if (bt.superboss) makeAscendant(e, b);
+    this.enemies.push(e);
+    bt.bossEnemy = e;
+    this.ring(e.x, e.y, 0, 12, 140, b.accent);
+    // deeper bosses bring a guard or two
+    const guards = b.tier >= 7 ? 2 : b.tier >= 4 ? 1 : 0;
+    for (let i = 0; i < guards; i++) {
+      const pos = this.spawnPoint(i * 2 + 1, 4);
+      const id = pick(this.place.enemyTypes);
+      this.enemies.push(new Enemy(ENEMIES[id], pos.x, pos.y, this.levelFor(bt.tier), bt.tier));
+    }
+  }
+
+  /** The boss is down: record it, open what it opens, drop its spoils. */
+  private winBoss() {
+    const bt = this.battle!;
+    const b = bt.boss!;
+    const first = !bossDefeated(this.world, b.id);
+    const opened = defeatBoss(this.world, b);
+    const e = bt.bossEnemy!;
+    const mult = bt.superboss ? b.superboss.dropMultiplier : 1;
+    for (const m of b.uniqueMaterials) {
+      this.pickups.push(new Pickup(e.x, e.y, 30, 'mat', m, Math.round(rndInt(2, 4) * mult)));
+    }
+    for (const d of rollDrops(ENEMIES[pick(this.place.enemyTypes)].id, b.tier + 2, 2 * mult)) {
+      this.pickups.push(new Pickup(e.x, e.y, 30, d.kind, d.id, d.count));
+    }
+    if (b.tier >= 5) this.pickups.push(new Pickup(e.x, e.y, 30, 'mat', 'core', Math.round(rndInt(1, 2) * mult)));
+    this.pickups.push(new Pickup(e.x, e.y, 30, 'potion', null, 1));
+    if (bt.superboss) winAscendant(this, b, e);
+    this.battleOver = 4.5;
+    this.sfx.levelUp();
+    const sub = opened.length ? `Unlocked: ${opened.join('  ·  ')}` : first ? 'Its spoils are yours' : 'Farmed again';
+    this.banner(bt.superboss ? 'ASCENDANT FELLED' : 'BOSS DEFEATED', sub, b.accent);
+    this.save();
+  }
+
   private beginBattle() {
     this.screen = 'battle';
     this.restPoint = false;
@@ -720,8 +786,9 @@ class Game {
     this.enemies.length = 0;
     this.projectiles.length = 0;
     this.player.lock = null;
-    const ids = this.composition(n, this.place.enemyTypes);
-    const extra = this.waveScale();
+    if (b.kind === 'boss' && n >= b.totalWaves) { this.spawnBoss(); this.save(); return; }
+    const ids = this.composition(b.kind === 'boss' ? n + 1 : n, this.place.enemyTypes);
+    const extra = b.kind === 'boss' ? 1 : this.waveScale();
     for (let i = 0; i < ids.length; i++) {
       const pos = this.spawnPoint(i, ids.length);
       this.enemies.push(new Enemy(ENEMIES[ids[i]], pos.x, pos.y, this.levelFor(b.tier), b.tier, extra));
@@ -763,6 +830,8 @@ class Game {
     const anyAlive = this.enemies.some((e) => e.alive);
     if (anyAlive) return;
 
+    if (b.kind === 'boss' && this.wave >= b.totalWaves) { this.winBoss(); return; }
+
     if (this.betweenWaves <= 0 && !this.restPoint) {
       // wave just cleared
       this.sfx.wave();
@@ -797,7 +866,9 @@ class Game {
     this.betweenWaves -= dt;
     if (this.betweenWaves <= 0) {
       this.startWave(this.wave + 1);
-      this.banner(`WAVE ${this.wave}`, 'Get ready', '#8fb4ff');
+      if (b.kind === 'boss' && this.wave >= b.totalWaves) {
+        this.banner(b.boss!.name.toUpperCase(), b.superboss ? 'ASCENDANT' : b.boss!.title, b.boss!.accent);
+      } else this.banner(`WAVE ${this.wave}`, 'Get ready', '#8fb4ff');
     }
   }
 
@@ -883,17 +954,29 @@ class Game {
     this.burst(p.x, p.y, p.z + 20, 8, '#ff8a80');
   }
 
-  spawnEnemyBolt(e: Enemy) {
+  /** An enemy bolt, aimed at the player plus `spread` radians. Scales with the caster. */
+  spawnEnemyBolt(e: Enemy, spread = 0) {
     const p = this.player;
-    const ang = Math.atan2(p.y - e.y, p.x - e.x);
+    const ang = Math.atan2(p.y - e.y, p.x - e.x) + spread;
     const sp = 300;
     this.projectiles.push(new Projectile({
       x: e.x + Math.cos(ang) * 18, y: e.y + Math.sin(ang) * 18, z: e.z + e.def.height * 0.7,
       vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-      radius: 6, life: 2.4, color: e.def.accent, owner: 'enemy',
-      power: e.def.power * 0.9,
+      radius: e.boss ? 8 : 6, life: 2.4, color: e.def.accent, owner: 'enemy',
+      power: e.def.power * 0.9 * (e.str / e.def.str),
+      mag: e.str * 0.6,
     }));
     this.sfx.cast(260);
+  }
+
+  /** A boss's area attack landing at (x, y). Being in the air clears it. */
+  bossShock(e: Enemy, x: number, y: number, r: number, mult: number) {
+    const p = this.player;
+    if (!p.alive || p.z > 26 || dist(x, y, p.x, p.y) > r + p.radius) return;
+    if (this.god) { this.floatText(p.x, p.y, p.z + 40, 'GOD', '#7fe8ff', 14); return; }
+    const res = physDamage(e.def.power * mult * TUNING.enemyDamageMult * (e.str / e.def.str), e.str, p.stats.def);
+    p.takeHit(this, res.dmg, Math.atan2(p.y - y, p.x - x), 320, 26);
+    this.burst(p.x, p.y, p.z + 20, 10, '#ff8a80');
   }
 
   projectileCollide(proj: Projectile) {
@@ -920,7 +1003,7 @@ class Game {
       if (Math.abs(p.z + 18 - proj.z) > 56) return;
       if (dist(proj.x, proj.y, p.x, p.y) > p.radius + proj.radius + 4) return;
       proj.dead = true;
-      const r = magicDamage(proj.power * TUNING.enemyDamageMult, 8, p.stats.mres);
+      const r = magicDamage(proj.power * TUNING.enemyDamageMult, proj.mag, p.stats.mres);
       p.takeHit(this, r.dmg, Math.atan2(p.y - proj.y, p.x - proj.x), 170, 16);
       this.burst(proj.x, proj.y, proj.z, 10, proj.color);
     }

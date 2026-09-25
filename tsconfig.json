@@ -22,6 +22,7 @@
     "src/talents.ts",
     "src/world.ts",
     "src/location.ts",
+    "src/superboss.ts",
     "src/music.ts",
     "src/entities.ts",
     "src/travel.ts",
