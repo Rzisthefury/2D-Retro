@@ -23,9 +23,10 @@
     "src/world.ts",
     "src/location.ts",
     "src/superboss.ts",
+    "src/overworld.ts",
+    "src/dungeon.ts",
     "src/music.ts",
     "src/entities.ts",
-    "src/travel.ts",
     "src/render.ts",
     "src/main.ts"
   ]
