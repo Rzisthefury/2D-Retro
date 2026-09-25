@@ -1420,7 +1420,7 @@ class Renderer {
     c.fillStyle = 'rgba(6,8,14,0.975)';
     c.fillRect(0, 0, VIEW_W, VIEW_H);
 
-    const tabs = ['GEAR', 'SYNTH', 'TALENTS', 'STATUS', 'MAP'];
+    const tabs = ['GEAR', g.atStation() ? 'FORGE' : 'RECIPES', 'TALENTS', 'STATUS', 'MAP'];
     c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
     for (let i = 0; i < tabs.length; i++) {
       const on = i === g.menuTab;
@@ -1584,7 +1584,11 @@ class Renderer {
     c.fillStyle = station ? accent : '#ff9d9d';
     c.fillText(station ? `\u2692 ${(g.place.stationName || 'Forge').toUpperCase()}  ·  ${g.place.name}`
       : 'NO FORGE HERE — recipes are read-only', dx + 16, y);
-    y += 28;
+    y += 17;
+    c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.dim;
+    c.fillText(this.clip(c, station ? (STATION_FLAVOR[g.place.id] || '') : 'Stations: ' + LOCATION_LIST.filter((l) => l.hasCraftingStation).map((l) => l.name).join(', '), dw - 32), dx + 16, y);
+    y += 26;
     const sel = entries[g.synthIndex];
     if (!sel) return;
     c.font = '800 18px ui-monospace, Menlo, Consolas, monospace';

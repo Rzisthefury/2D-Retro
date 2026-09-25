@@ -501,18 +501,22 @@ class Game {
     this.player.x = VIEW_W / 2 + 90;
     this.player.y = VIEW_H / 2 + 40;
     this.player.vx = this.player.vy = 0;
-    // Havens and forges are safe ground: rest there and you are made whole.
+    // Havens and forges are safe ground: rest there and you are made whole,
+    // and the quartermaster tops your pack back up.
     if (loc.tier === 0 || loc.hasCraftingStation) {
       this.player.hp = this.player.stats.maxHp;
       this.player.mp = this.player.stats.maxMp;
       this.player.charging = false;
+      this.player.potions = Math.max(this.player.potions, 3);
+      this.player.ethers = Math.max(this.player.ethers, 2);
     }
     this.placeIndex = 0;
     this.mapIndex = LOCATION_LIST.indexOf(loc);
     this.trialTier = clamp(this.trialTier, 1, maxWaveTier(this.world));
     if (announce) {
       this.banner(loc.name.toUpperCase(),
-        loc.tier ? `Tier ${loc.tier}  ·  recommended Lv ${recommendedLevel(loc)}` : 'Safe ground  ·  HP / MP restored',
+        loc.hasCraftingStation ? `${loc.stationName}  ·  HP / MP restored, items restocked`
+          : `Tier ${loc.tier}  ·  recommended Lv ${recommendedLevel(loc)}`,
         loc.look.accent);
     }
     this.save();

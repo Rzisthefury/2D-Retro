@@ -217,6 +217,17 @@ const BOSS_MAP: Record<string, BossDefinition> = {};
 const BOSS_HOME: Record<string, string> = {};
 for (const l of LOCATION_LIST) for (const b of l.bosses) { BOSS_MAP[b.id] = b; BOSS_HOME[b.id] = l.id; }
 
+/** What each forge says about itself, shown on the forge screen. */
+const STATION_FLAVOR: Record<string, string> = {
+  'hub': 'A plain anvil and an honest fire. Everything starts here.',
+  'forest-2': 'Druids weave metal like thread. The loom hums when you work.',
+  'ruins-1': 'The Bastion\'s old smithy. Its bellows still breathe on their own.',
+  'ruins-2': 'Verses are etched into every blade forged here.',
+  'volcano-1': 'Slag runs like water. Nothing cools slowly on this ridge.',
+  'volcano-2': 'The fire kings\' anvil. It has never once gone cold.',
+  'rift-1': 'A forge with no fuel, burning anyway. Best not to ask.',
+};
+
 /** Recommended level for an area: the bottom of its enemy level band. */
 function recommendedLevel(l: WorldLocation): number { return l.enemyLevelRange[0]; }
 
