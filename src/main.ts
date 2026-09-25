@@ -541,10 +541,7 @@ class Game {
   private updateTravel(dt: number) {
     const t = this.travel;
     if (!t) return;
-    t.elapsed += dt;
-    t.progress = Math.min(1, t.progress + dt / t.duration);
-    this.scroll += dt * 90;
-    if (t.progress >= 1) this.finishTravel();
+    if (tickTravel(this, t, dt)) this.finishTravel();
   }
 
   private finishTravel() {
@@ -1282,6 +1279,7 @@ class Game {
   /* --------------------------------------------------------- progression */
 
   onEnemyDeath(e: Enemy) {
+    if (this.travel) this.travel.kills++;
     this.sfx.die();
     this.burst(e.x, e.y, e.z + e.def.height * 0.5, 22, e.def.accent);
     this.ring(e.x, e.y, e.z, 8, 70, e.def.accent);

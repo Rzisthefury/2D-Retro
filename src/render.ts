@@ -1086,7 +1086,7 @@ class Renderer {
       c.fillText('ON THE ROAD', VIEW_W - 18, 30);
       c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = PAL.dim;
-      c.fillText(`tier ${scene.tier}   enemies ${g.enemies.filter((e) => e.alive).length}`, VIEW_W - 18, 48);
+      c.fillText(`tier ${scene.tier}   enemies ${g.enemies.filter((e) => e.alive).length}   felled ${g.travel.kills}`, VIEW_W - 18, 48);
     } else {
       c.font = '800 18px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = scene.look.accent;
@@ -1235,7 +1235,7 @@ class Renderer {
     c.textAlign = 'center';
     c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.text;
-    c.fillText(`Traveling to ${to.name}...`, VIEW_W / 2, y + 10);
+    c.fillText(inAmbush(t) ? 'AMBUSH — clear the road' : `Traveling to ${to.name}...`, VIEW_W / 2, y + 10);
     this.bar(c, x, y + 18, w, 8, t.progress, to.look.accent, 'rgba(0,0,0,0.55)');
     c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
@@ -1243,6 +1243,9 @@ class Renderer {
     c.fillText(from.name, x, y + 40);
     c.textAlign = 'right';
     c.fillText(`${Math.ceil(secondsLeft(t))}s`, x + w, y + 40);
+    // ambush markers still ahead on the road
+    c.fillStyle = '#ff9d5c';
+    for (const a of t.ambushes) c.fillRect(x + w * a - 1.5, y + 15, 3, 14);
     c.restore();
   }
 
