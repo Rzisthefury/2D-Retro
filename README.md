@@ -212,6 +212,10 @@ against 960x540, so that is a deliberate later job.
 
 ---
 
+# rev 7 - a bigger world, a new score
+
+See the sections below; rev 7 changes are folded in.
+
 # rev 6 - open world, dungeons
 
 The game is an open world you walk around, Zelda-style: a smooth-scrolling
@@ -234,33 +238,40 @@ overworld, dungeon, music, entities, render, main.
 ## The world
 
 `REGION_GRID` in overworld.ts lays the 12 regions and the Haven out on a
-5x3 grid (two cells are mountains). Each region is 32x20 tiles of 40px,
-ringed by cliffs; neighbours are joined by a 4-tile passage, and roads
-join every passage and building to the region's middle. The whole map is
-generated from fixed seeds, so it is the same every load; a flood fill
-drops any enemy spawn point that ended up walled in.
+5x3 grid (two cells are mountains). Each region is **128x80 tiles** of 40px
+(16x the area of rev 6), ringed by cliffs; neighbours are joined by a
+6-tile passage. The whole map is 640x240 tiles and generated from fixed
+seeds, so it is the same every load; a flood fill keeps only spawn points
+and chests you can actually walk to. `MAP_VERSION` is saved with your
+position, so a save from an older map layout wakes you at the Haven.
+
+Every region has:
+- a **dungeon** (the Haven has the **colosseum** instead)
+- **two towns** - rest stops, checkpoints and waypoints; the first has the
+  region's forge where it has one
+- a **landmark** per biome (the Eldest Tree, the Drowned Ship, the Fallen
+  Colossus, the Mirror Oasis, the Lake of Cinders, the Still Lake, the
+  Wind Shrine, the Monolith, the Lantern Fountain)
+- **14 treasure chests** (materials for the tier, supplies, sometimes a
+  boss material); opened ones stay open
+- **~110 enemy spawn points**, one in twelve an **Elite**: x2.6 HP,
+  x1.35 attack, bigger, glowing, x3 loot and EXP, a chance at a boss
+  material, and a slower respawn
 
 A passage into a region you have not opened is a glowing **barrier**.
-Bump it and it tells you which dungeon opens it.
 
-**Enemies** live on spawn points (9 per region, none in the Haven). A
-spawner fills when you are 560-1500px away (so never on-screen), its enemy
-idles near home until you come within 300px, chases, and gives up if you
-drag it 760px from home. Killed enemies respawn after 28s; idle ones far
-away are put back. Only enemies within ~1150px of you are simulated.
+**Waypoints**: every town and dungeon door you reach is added; open the
+MAP tab, pick one with the arrows (or tap it) and press ENTER to warp -
+not while something is chasing you.
 
-## Buildings
+The HUD minimap shows the region you are in at one pixel per tile, with
+towns, the dungeon door and unopened chests marked.
 
-- **Dungeon** (one per region): stand at the door, press ENTER.
-- **Forge** (the Haven and six towns): stand at it to rest (HP/MP, items
-  restocked, once per visit); ENTER opens the forge. Forging only works
-  here; every recipe is available at every forge.
-- **Colosseum** (the Haven): Wave Trials, endless, at any unlocked tier
-  (left/right to pick).
-
-Towns and dungeon doors are **checkpoints**. Dying loses nothing: you wake
-at the last one. Your spot in the world is saved every few seconds and on
-every event, so you can quit anywhere.
+**Enemies** live on spawn points. A spawner fills when you are 560-1500px
+away (so never on-screen), its enemy idles near home until you come within
+300px, chases, and gives up if you drag it 760px from home. Killed enemies
+respawn after 28s (Elites 84s); idle ones far away are put back. Only
+enemies within ~1150px of you are simulated.
 
 ## Dungeons
 
@@ -274,6 +285,39 @@ The hall has a **waystone** for every section you have reached, so a
 beaten boss is a checkpoint. A beaten boss's room has two **altars**:
 rematch it, or face its **Ascendant** (x1.5 stats, x2 spoils, Star
 Fragments). Ascendants unlock nothing.
+
+## Music
+
+`music.ts` is an orchestral, melody-first score synthesised live: piano,
+bells, flute, strings, pads, choir, soft brass, harp, pizzicato, marimba,
+an oud-like pluck, bass, gentle drums and timpani through a generated
+hall reverb and a compressor.
+
+Twelve original themes, each two 8-bar sections written in readable
+notation (roman-numeral chords, scale-degree melodies):
+
+| theme | where | feel |
+|---|---|---|
+| Heart's Lantern | title | piano lullaby, D major |
+| Lanterns of the Haven | the Haven | celesta waltz, 3/4 |
+| Where the Old Trees Listen | forests | flute over harp |
+| Saltglass Morning | coast | marimba and flute, 6/8 |
+| Verses in Stone | ruins | dorian strings |
+| Glass and Wind | desert | oud, phrygian dominant |
+| Embers Rising | volcanoes | horn over a string ostinato |
+| Frostveil Lullaby | tundra | bells and piano |
+| Above the Storm | sky | lydian strings |
+| The Space Between Stars | the Rift | bells and choir |
+| Beneath | dungeons | low piano and cello |
+| Crown of Thorns | bosses, colosseum | everything, with timpani |
+
+Regions sharing a biome play it in a different key and tempo
+(`ZONE_MUSIC`). When enemies engage, a combat layer (drums, driving bass,
+brass stabs) fades in on the next bar and the tune moves to a brighter
+instrument; it fades out after the fight. Every third pass the melody
+rests. Themes crossfade on a fresh bar, and the menu ducks the music.
+Default volume is 20%; every theme measures ~-14 dBFS RMS at full volume.
+`Music.render(id, seconds, combat)` renders a theme offline for testing.
 
 ## Combat change
 

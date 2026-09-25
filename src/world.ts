@@ -62,6 +62,8 @@ interface WorldState {
   trialBest: Record<number, number>;   // best wave reached per wave tier
   pos: { x: number; y: number };       // where you stand in the overworld
   checkpoint: { x: number; y: number }; // where you wake after a defeat
+  waypoints: Set<number>;              // building indices you can warp to
+  openedChests: Set<string>;
 }
 
 /** What goes into localStorage — Sets and Maps flattened to JSON. */
@@ -75,6 +77,9 @@ interface WorldSave {
   trialBest: Record<string, number>;
   pos: { x: number; y: number };
   checkpoint: { x: number; y: number };
+  waypoints: number[];
+  openedChests: string[];
+  mapVersion: number;
 }
 
 const HUB_ID = 'hub';
@@ -91,6 +96,8 @@ function freshWorld(): WorldState {
     trialBest: {},
     pos: havenStart(),
     checkpoint: havenStart(),
+    waypoints: new Set([WORLD_MAP.buildings.findIndex((b) => b.kind === 'forge' && b.region === HUB_ID)]),
+    openedChests: new Set(),
   };
 }
 
@@ -112,6 +119,9 @@ function worldToSave(w: WorldState): WorldSave {
     trialBest: tb,
     pos: { x: Math.round(w.pos.x), y: Math.round(w.pos.y) },
     checkpoint: { x: Math.round(w.checkpoint.x), y: Math.round(w.checkpoint.y) },
+    waypoints: [...w.waypoints],
+    openedChests: [...w.openedChests],
+    mapVersion: MAP_VERSION,
   };
 }
 
@@ -132,7 +142,16 @@ function worldFromSave(j: any): WorldState {
   // Re-derive unlocks from defeated bosses, so a save can never hold a boss
   // kill without the door it opened.
   w.completedBosses.forEach((_, id) => applyBossUnlocks(w, BOSS_MAP[id]));
-  const okPt = (p: any) => p && typeof p.x === 'number' && typeof p.y === 'number' && standable(w, p.x, p.y);
+  // Positions, waypoints and chests only mean something on the same map layout.
+  const sameMap = j.mapVersion === MAP_VERSION;
+  if (sameMap && Array.isArray(j.waypoints)) {
+    for (const i of j.waypoints) if (WORLD_MAP.buildings[i] && isWaypoint(WORLD_MAP.buildings[i])) w.waypoints.add(i);
+  }
+  if (sameMap && Array.isArray(j.openedChests)) {
+    const ids = new Set(WORLD_MAP.chests.map((c) => c.id));
+    for (const id of j.openedChests) if (ids.has(id)) w.openedChests.add(id);
+  }
+  const okPt = (p: any) => sameMap && p && typeof p.x === 'number' && typeof p.y === 'number' && standable(w, p.x, p.y);
   if (okPt(j.checkpoint)) w.checkpoint = { x: j.checkpoint.x, y: j.checkpoint.y };
   w.pos = okPt(j.pos) ? { x: j.pos.x, y: j.pos.y } : { ...w.checkpoint };
   w.currentLocation = regionAtPx(w.pos.x, w.pos.y) || HUB_ID;

@@ -203,7 +203,7 @@ class Game {
     this.world = worldFromSave(save.world);
     this.player.x = this.world.pos.x;
     this.player.y = this.world.pos.y;
-    this.mapIndex = REGION_IDS.indexOf(this.world.currentLocation);
+    this.mapIndex = this.nearestWaypoint();
     this.trialTier = maxWaveTier(this.world);
     this.bannerT = 0;
     this.follow(true);
@@ -224,9 +224,28 @@ class Game {
 
   /** The forge you are standing at, if any. */
   nearForge(): Building | null {
+    const t = this.nearTown();
+    return t && t.kind === 'forge' ? t : null;
+  }
+
+  /** The town (with or without a forge) you are standing in, if any. */
+  nearTown(): Building | null {
     if (this.screen !== 'world') return null;
-    const f = buildingOf('forge', this.world.currentLocation);
-    return f && dist(this.player.x, this.player.y, f.doorX, f.doorY) < 150 ? f : null;
+    for (const b of WORLD_MAP.buildings) {
+      if (isTown(b) && dist(this.player.x, this.player.y, b.doorX, b.doorY) < 170) return b;
+    }
+    return null;
+  }
+
+  /** The discovered waypoint closest to you, as a building index. */
+  nearestWaypoint(): number {
+    let best = -1, bd = Infinity;
+    this.world.waypoints.forEach((i) => {
+      const b = WORLD_MAP.buildings[i];
+      const d = dist(this.world.pos.x, this.world.pos.y, b.doorX, b.doorY);
+      if (d < bd) { bd = d; best = i; }
+    });
+    return best;
   }
 
   atStation(): boolean { return !!this.nearForge(); }
@@ -557,30 +576,36 @@ class Game {
       this.save();
     }
 
-    // towns and dungeon doors are checkpoints: that is where you wake after a defeat
-    for (const b of WORLD_MAP.buildings) {
-      if (b.region !== w.currentLocation || dist(p.x, p.y, b.doorX, b.doorY) > 90) continue;
+    // towns and dungeon doors are checkpoints (where you wake after a defeat)
+    // and waypoints (where the map can warp you)
+    WORLD_MAP.buildings.forEach((b, i) => {
+      if (!isWaypoint(b) || b.region !== w.currentLocation || dist(p.x, p.y, b.doorX, b.doorY) > 110) return;
+      if (!w.waypoints.has(i)) {
+        w.waypoints.add(i);
+        this.banner('WAYPOINT', `${b.name} — warp here from the MAP`, locById(b.region).look.accent);
+      }
       if (Math.hypot(w.checkpoint.x - b.doorX, w.checkpoint.y - b.doorY) > 1) {
         w.checkpoint = { x: b.doorX, y: b.doorY };
         this.toast('CHECKPOINT');
         this.save();
       }
-    }
+    });
 
-    // a town's forge is a rest stop: whole again, pack topped up, once per visit
-    const f = this.nearForge();
-    if (f && this.rested !== f.region) {
-      this.rested = f.region;
+    // towns are rest stops: whole again, pack topped up, once per visit
+    const town = this.nearTown();
+    const townKey = town ? String(WORLD_MAP.buildings.indexOf(town)) : '';
+    if (town && this.rested !== townKey) {
+      this.rested = townKey;
       p.hp = p.stats.maxHp;
       p.mp = p.stats.maxMp;
       p.charging = false;
       p.potions = Math.max(p.potions, 3);
       p.ethers = Math.max(p.ethers, 2);
-      this.toast(`RESTED AT ${(locById(f.region).stationName || 'THE FORGE').toUpperCase()}`);
+      this.toast(`RESTED AT ${town.name.toUpperCase()}`);
       this.ring(p.x, p.y, 0, 10, 80, PAL.hp);
-    } else if (!f && this.rested) {
-      const rf = buildingOf('forge', this.rested);
-      if (!rf || dist(p.x, p.y, rf.doorX, rf.doorY) > 400) this.rested = '';
+    } else if (!town && this.rested) {
+      const rb = WORLD_MAP.buildings[+this.rested];
+      if (!rb || dist(p.x, p.y, rb.doorX, rb.doorY) > 450) this.rested = '';
     }
 
     // bumping into a sealed passage says what opens it
@@ -604,8 +629,13 @@ class Game {
   /** The door, forge or arena you are standing at, if any. */
   private worldPrompt(): Prompt | null {
     const p = this.player;
+    for (const c of WORLD_MAP.chests) {
+      if (this.world.openedChests.has(c.id) || dist(p.x, p.y, c.x, c.y) > 52) continue;
+      return { label: 'Open the chest', act: () => this.openChest(c), color: PAL.mpCharge };
+    }
     let best: Building | null = null;
     for (const b of WORLD_MAP.buildings) {
+      if (b.kind === 'town' || b.kind === 'landmark') continue;
       if (dist(p.x, p.y, b.doorX, b.doorY) > 62) continue;
       if (!best || dist(p.x, p.y, b.doorX, b.doorY) < dist(p.x, p.y, best.doorX, best.doorY)) best = b;
     }
@@ -628,6 +658,42 @@ class Game {
       sub: `best wave ${this.world.trialBest[this.trialTier] || 0}  ·  ${IS_TOUCH ? 'tap the arrows' : '← →'} to change tier`,
       act: () => this.startTrial(this.trialTier), nudge: (d) => this.nudgeTrial(d), color: PAL.mpCharge,
     };
+  }
+
+  /** Loot a chest: materials for the region's tier, supplies, sometimes a boss material. */
+  openChest(c: Chest) {
+    if (this.world.openedChests.has(c.id)) return;
+    this.world.openedChests.add(c.id);
+    const loc = locById(c.region);
+    const tier = Math.max(1, loc.tier);
+    for (let k = 0; k < 3; k++) {
+      for (const d of rollDrops(pick(loc.enemyTypes), tier + 1, 3)) this.pickups.push(new Pickup(c.x, c.y, 20, d.kind, d.id, d.count));
+    }
+    if (loc.bosses.length && Math.random() < 0.2) {
+      this.pickups.push(new Pickup(c.x, c.y, 20, 'mat', loc.bosses[0].uniqueMaterials[0], rndInt(1, 2)));
+    }
+    if (Math.random() < 0.5) this.pickups.push(new Pickup(c.x, c.y, 20, Math.random() < 0.6 ? 'potion' : 'ether', null, 1));
+    this.sfx.levelUp();
+    this.ring(c.x, c.y, 0, 8, 70, PAL.mpCharge);
+    this.burst(c.x, c.y, 16, 14, PAL.mpCharge);
+    const left = WORLD_MAP.chests.filter((x) => x.region === c.region && !this.world.openedChests.has(x.id)).length;
+    this.toast(`CHEST OPENED  ·  ${left} LEFT IN ${loc.name.toUpperCase()}`);
+    this.save();
+  }
+
+  /** Warp to a discovered waypoint from the MAP tab. Not while something is chasing you. */
+  warpTo(i: number) {
+    const b = WORLD_MAP.buildings[i];
+    if (!b || !this.world.waypoints.has(i)) { this.toast('NOT DISCOVERED YET'); return; }
+    if (this.screen !== 'world') { this.toast('WARP FROM THE OPEN WORLD'); return; }
+    const p = this.player;
+    if (this.enemies.some((e) => e.alive && e.aggro && dist(e.x, e.y, p.x, p.y) < 700)) { this.toast('CAN’T WARP MID-FIGHT'); return; }
+    this.closeMenu();
+    this.toWorld(b.doorX, b.doorY + (b.kind === 'forge' || b.kind === 'town' ? -TILE : TILE / 2));
+    this.ring(this.player.x, this.player.y, 0, 10, 120, locById(b.region).look.accent);
+    this.sfx.cast(640);
+    const l = locById(b.region);
+    this.banner(b.name.toUpperCase(), l.name, l.look.accent);
   }
 
   private nudgeTrial(d: number) {
@@ -672,7 +738,7 @@ class Game {
     this.menuOpen = true;
     this.menuTab = tab;
     this.menuIndex = 0;
-    if (tab === 4) this.mapIndex = REGION_IDS.indexOf(this.world.currentLocation);
+    if (tab === 4) this.mapIndex = this.nearestWaypoint();
     this.input.clearBuffer();
   }
 
@@ -1293,11 +1359,12 @@ class Game {
     }
 
     if (this.menuTab === 4) {
-      // the world map: arrows move the cursor between regions
+      // the world map: arrows move between waypoints, ENTER warps
       if (inp.wasPressed('left')) this.moveMapCursor(-1, 0);
       if (inp.wasPressed('right')) this.moveMapCursor(1, 0);
       if (inp.wasPressed('up')) this.moveMapCursor(0, -1);
       if (inp.wasPressed('down')) this.moveMapCursor(0, 1);
+      if (inp.wasPressed('confirm')) this.warpTo(this.mapIndex);
       return;
     }
 
@@ -1323,14 +1390,24 @@ class Game {
     }
   }
 
-  /** Step the map cursor to the next region in a direction, skipping mountains. */
+  /** Step the map cursor to the nearest discovered waypoint roughly in a direction. */
   private moveMapCursor(dx: number, dy: number) {
-    const { rx, ry } = regionCell(REGION_IDS[this.mapIndex]);
-    for (let k = 1; k < GRID_W; k++) {
-      const id = REGION_GRID[ry + dy * k]?.[rx + dx * k];
-      if (id === undefined) return;
-      if (id) { this.mapIndex = REGION_IDS.indexOf(id); this.sfx.guard(); return; }
-    }
+    const cur = WORLD_MAP.buildings[this.mapIndex];
+    if (!cur) { this.mapIndex = this.nearestWaypoint(); return; }
+    const from = mapPointPx(cur.doorX, cur.doorY);
+    let best = -1, bestScore = Infinity;
+    this.world.waypoints.forEach((i) => {
+      if (i === this.mapIndex) return;
+      const b = WORLD_MAP.buildings[i];
+      const p = mapPointPx(b.doorX, b.doorY);
+      const vx = p.x - from.x, vy = p.y - from.y;
+      const d = Math.hypot(vx, vy) || 1;
+      const along = (vx * dx + vy * dy) / d;
+      if (along < 0.3) return;
+      const score = d / along;
+      if (score < bestScore) { bestScore = score; best = i; }
+    });
+    if (best >= 0) { this.mapIndex = best; this.sfx.guard(); }
   }
 
   equip(e: GearEntry) {
@@ -1446,7 +1523,13 @@ class Game {
     this.hitstop(4 * TUNING.hitstopScale);
     if (this.player.lock === e) this.player.lock = null;
 
-    const luck = TUNING.dropRate * (this.player.hasT('scavenger') ? 1.55 : 1);
+    const luck = TUNING.dropRate * (this.player.hasT('scavenger') ? 1.55 : 1) * (e.elite ? 3 : 1);
+    if (e.elite) {
+      const loc = locById(regionAtPx(e.x, e.y) || HUB_ID);
+      if (loc.bosses.length && Math.random() < 0.3) this.pickups.push(new Pickup(e.x, e.y, e.z + 12, 'mat', loc.bosses[0].uniqueMaterials[0], 1));
+      this.pickups.push(new Pickup(e.x, e.y, e.z + 12, 'potion', null, 1));
+      this.banner('ELITE FELLED', '', PAL.mpCharge);
+    }
     for (const d of rollDrops(e.def.id, e.tier, luck)) {
       this.pickups.push(new Pickup(e.x, e.y, e.z + 12, d.kind, d.id, d.count));
     }
@@ -1543,12 +1626,16 @@ class Game {
       }
     }
     if (this.menuTab === 4) {
-      // tap a region to read about it
-      for (let i = 0; i < REGION_IDS.length; i++) {
-        const r = mapRect(REGION_IDS[i]);
-        if (tap.x >= r.x && tap.x <= r.x + r.w && tap.y >= r.y && tap.y <= r.y + r.h) {
-          this.mapIndex = i; this.sfx.guard(); return true;
-        }
+      // tap a waypoint to select it, tap it again to warp there
+      let hit = -1;
+      this.world.waypoints.forEach((i) => {
+        const b = WORLD_MAP.buildings[i];
+        const p = mapPointPx(b.doorX, b.doorY);
+        if (Math.hypot(tap.x - p.x, tap.y - p.y) < 14) hit = i;
+      });
+      if (hit >= 0) {
+        if (this.mapIndex === hit) this.warpTo(hit); else { this.mapIndex = hit; this.sfx.guard(); }
+        return true;
       }
     }
     if (this.menuTab === 2) {
@@ -1686,6 +1773,12 @@ class Game {
   ring(x: number, y: number, z: number, r: number, maxR: number, color: string) {
     this.rings.push({ x, y, z, r, maxR, life: 0.4, maxLife: 0.4, color });
   }
+}
+
+/** A world pixel position on the MAP tab. */
+function mapPointPx(x: number, y: number): { x: number; y: number } {
+  const gx = MAP_BOX.x + 12, gy = MAP_BOX.y + 12, gw = MAP_BOX.w - 24, gh = MAP_BOX.h - 24;
+  return { x: gx + (x / WORLD_PW) * gw, y: gy + (y / WORLD_PH) * gh };
 }
 
 /** Screen rectangle of a region on the MAP tab. */

@@ -6,12 +6,16 @@
  * region is REG_W x REG_H tiles with cliffs around its edge; neighbouring
  * regions are joined by a passage, and a passage into a locked region is
  * sealed by a magic barrier until its dungeon's final boss falls.
- * Everything is generated from a fixed seed, so the map never changes.
+ *
+ * A region holds a dungeon, two towns (one with a forge where the area has
+ * a station), a landmark, treasure chests and ~110 enemy spawn points, a
+ * few of them Elite. Everything is generated from fixed seeds, so the map
+ * is the same on every load.
  * ========================================================================= */
 
 const TILE = 40;
-const REG_W = 32;
-const REG_H = 20;
+const REG_W = 128;
+const REG_H = 80;
 const GRID_W = 5;
 const GRID_H = 3;
 const WORLD_TW = REG_W * GRID_W;          // tiles
@@ -28,11 +32,12 @@ const REGION_GRID: (string | null)[][] = [
 
 const T_GROUND = 0, T_PATH = 1, T_SOLID = 2, T_WALL = 3, T_LIQUID = 4, T_BUILD = 5;
 
-type BuildingKind = 'dungeon' | 'forge' | 'colosseum';
+type BuildingKind = 'dungeon' | 'forge' | 'town' | 'colosseum' | 'landmark';
 
 interface Building {
   kind: BuildingKind;
   region: string;
+  name: string;
   tx: number; ty: number; tw: number; th: number;   // footprint in tiles
   doorX: number; doorY: number;                      // pixel point you stand on to use it
 }
@@ -42,6 +47,7 @@ interface Passage { a: string; b: string; tiles: number[]; }
 interface Spawner {
   region: string;
   x: number; y: number;
+  elite: boolean;
   enemy: Enemy | null;
   cooldown: number;          // seconds until it may spawn again
 }
@@ -52,9 +58,15 @@ interface OverworldMap {
   passageOf: Int16Array;     // passage index per tile, -1 if none
   passages: Passage[];
   buildings: Building[];
-  spawnPoints: { region: string; x: number; y: number }[];
+  spawnPoints: { region: string; x: number; y: number; elite: boolean }[];
+  chests: Chest[];
   variant: Uint8Array;       // per-tile random byte, for decoration
 }
+
+interface Chest { id: string; region: string; x: number; y: number; }
+
+/** Map layout version: bumped when the world changes shape, so old saved positions are dropped. */
+const MAP_VERSION = 3;
 
 const REGION_IDS: string[] = REGION_GRID.flat().filter((id): id is string => !!id);
 
@@ -79,13 +91,34 @@ function seeded(seed: number): () => number {
 
 /** How much of a region's clutter is liquid (water, lava, void) rather than rock or trees. */
 const LIQUID_SHARE: Record<Theme, number> = {
-  Haven: 0.1, Forest: 0.12, Coast: 0.45, Ruins: 0.15, Desert: 0,
+  Haven: 0.1, Forest: 0.12, Coast: 0.45, Ruins: 0.15, Desert: 0.02,
   Volcano: 0.4, Tundra: 0.25, Sky: 0.35, Rift: 0.35,
 };
+/** Clutter clusters per region (scaled for 128x80) and big lakes. */
 const CLUTTER: Record<Theme, number> = {
-  Haven: 10, Forest: 34, Coast: 24, Ruins: 26, Desert: 18,
-  Volcano: 26, Tundra: 24, Sky: 24, Rift: 28,
+  Haven: 160, Forest: 560, Coast: 380, Ruins: 420, Desert: 280,
+  Volcano: 420, Tundra: 380, Sky: 380, Rift: 440,
 };
+const LAKES: Record<Theme, number> = {
+  Haven: 2, Forest: 5, Coast: 12, Ruins: 3, Desert: 1, Volcano: 9, Tundra: 7, Sky: 10, Rift: 9,
+};
+
+/** Each biome's set piece, and whether it is a lake crossed by a bridge. */
+const LANDMARKS: Record<Theme, { name: string; lake: boolean }> = {
+  Haven: { name: 'Lantern Fountain', lake: false },
+  Forest: { name: 'The Eldest Tree', lake: false },
+  Coast: { name: 'The Drowned Ship', lake: false },
+  Ruins: { name: 'Fallen Colossus', lake: false },
+  Desert: { name: 'Mirror Oasis', lake: true },
+  Volcano: { name: 'Lake of Cinders', lake: true },
+  Tundra: { name: 'The Still Lake', lake: true },
+  Sky: { name: 'Wind Shrine', lake: false },
+  Rift: { name: 'The Monolith', lake: false },
+};
+
+const TOWN_NAMES = ['Ashford', 'Brightwell', 'Cindervale', 'Dunmere', 'Elderholm', 'Fernwick', 'Glimmerdeep', 'Hollowmere',
+  'Ironbrook', 'Juniper Rest', 'Kestrel Point', 'Lowmarsh', 'Mistral', 'Northwatch', 'Oakenshaw', 'Pale Harbour',
+  'Quietwater', 'Rimeholt', 'Stormhaven', 'Thistledown', 'Umberfield', 'Verdant', 'Windrest', 'Yarrow', 'Zephyr Hill', 'Harrow Inn'];
 
 function buildOverworld(): OverworldMap {
   const n = WORLD_TW * WORLD_TH;
@@ -96,41 +129,47 @@ function buildOverworld(): OverworldMap {
   const rnd0 = seeded(1337);
   for (let i = 0; i < n; i++) variant[i] = Math.floor(rnd0() * 256);
   const at = (tx: number, ty: number) => ty * WORLD_TW + tx;
-  const set = (tx: number, ty: number, v: number) => {
-    if (tx >= 0 && ty >= 0 && tx < WORLD_TW && ty < WORLD_TH) tiles[at(tx, ty)] = v;
-  };
+  const inside = (tx: number, ty: number) => tx >= 0 && ty >= 0 && tx < WORLD_TW && ty < WORLD_TH;
+  const set = (tx: number, ty: number, v: number) => { if (inside(tx, ty)) tiles[at(tx, ty)] = v; };
 
   // 1. regions: open ground inside a ring of cliffs
   for (let ry = 0; ry < GRID_H; ry++) for (let rx = 0; rx < GRID_W; rx++) {
     const id = REGION_GRID[ry][rx];
+    if (!id) continue;
     const ox = rx * REG_W, oy = ry * REG_H;
     for (let y = 0; y < REG_H; y++) for (let x = 0; x < REG_W; x++) {
       const i = at(ox + x, oy + y);
-      if (!id) continue;
       region[i] = REGION_IDS.indexOf(id);
       const edge = x === 0 || y === 0 || x === REG_W - 1 || y === REG_H - 1;
       tiles[i] = edge ? T_WALL : T_GROUND;
     }
   }
 
-  // 2. clutter: clusters of trees / rocks / pillars and pools of liquid
+  // 2. clutter: lakes, then clusters of trees / rocks / pillars and small pools
+  const blob = (cx: number, cy: number, rx: number, ry: number, v: number, ox: number, oy: number, r: () => number) => {
+    for (let y = -ry; y <= ry; y++) for (let x = -rx; x <= rx; x++) {
+      const k = (x * x) / (rx * rx + 0.5) + (y * y) / (ry * ry + 0.5);
+      if (k > 1 + (r() - 0.5) * 0.35) continue;
+      const tx = cx + x, ty = cy + y;
+      if (tx <= ox || ty <= oy || tx >= ox + REG_W - 1 || ty >= oy + REG_H - 1) continue;
+      set(tx, ty, v);
+    }
+  };
   for (const id of REGION_IDS) {
     const { rx, ry } = regionCell(id);
     const loc = locById(id);
     const r = seeded(100 + REGION_IDS.indexOf(id) * 17);
     const ox = rx * REG_W, oy = ry * REG_H;
+    for (let k = 0; k < LAKES[loc.theme]; k++) {
+      const lrx = 3 + Math.floor(r() * 5), lry = 2 + Math.floor(r() * 4);
+      blob(ox + 8 + Math.floor(r() * (REG_W - 16)), oy + 6 + Math.floor(r() * (REG_H - 12)), lrx, lry, T_LIQUID, ox, oy, r);
+    }
     for (let k = 0; k < CLUTTER[loc.theme]; k++) {
       const cx = ox + 2 + Math.floor(r() * (REG_W - 4));
       const cy = oy + 2 + Math.floor(r() * (REG_H - 4));
       const liquid = r() < LIQUID_SHARE[loc.theme];
       const rad = liquid ? 1 + Math.floor(r() * 2) : Math.floor(r() * 2);
-      for (let y = -rad; y <= rad; y++) for (let x = -rad; x <= rad; x++) {
-        if (x * x + y * y > rad * rad + (liquid ? 1 : 0)) continue;
-        if (r() < 0.2 && (x || y)) continue;   // ragged edges
-        const tx = cx + x, ty = cy + y;
-        if (tx <= ox || ty <= oy || tx >= ox + REG_W - 1 || ty >= oy + REG_H - 1) continue;
-        set(tx, ty, liquid ? T_LIQUID : T_SOLID);
-      }
+      blob(cx, cy, rad, rad, liquid ? T_LIQUID : T_SOLID, ox, oy, r);
     }
   }
 
@@ -139,33 +178,34 @@ function buildOverworld(): OverworldMap {
   const doorsOf: Record<string, { x: number; y: number }[]> = {};
   for (const id of REGION_IDS) doorsOf[id] = [];
   const rp = seeded(4242);
+  const PW = 6;
   for (let ry = 0; ry < GRID_H; ry++) for (let rx = 0; rx < GRID_W; rx++) {
     const a = REGION_GRID[ry][rx];
     if (!a) continue;
     const east = rx + 1 < GRID_W ? REGION_GRID[ry][rx + 1] : null;
     const south = ry + 1 < GRID_H ? REGION_GRID[ry + 1][rx] : null;
     if (east) {
-      const py = ry * REG_H + 8 + Math.floor(rp() * 2);
+      const py = ry * REG_H + 34 + Math.floor(rp() * 8);
       const xa = rx * REG_W + REG_W - 1, xb = xa + 1;
       const p: Passage = { a, b: east, tiles: [] };
-      for (let y = py; y < py + 4; y++) for (const x of [xa, xb]) { set(x, y, T_PATH); p.tiles.push(at(x, y)); }
+      for (let y = py; y < py + PW; y++) for (const x of [xa, xb]) { set(x, y, T_PATH); p.tiles.push(at(x, y)); }
       passages.push(p);
-      doorsOf[a].push({ x: xa, y: py + 1 });
-      doorsOf[east].push({ x: xb, y: py + 1 });
+      doorsOf[a].push({ x: xa, y: py + 2 });
+      doorsOf[east].push({ x: xb, y: py + 2 });
     }
     if (south) {
-      const px = rx * REG_W + 12 + Math.floor(rp() * 6);
+      const px = rx * REG_W + 56 + Math.floor(rp() * 12);
       const ya = ry * REG_H + REG_H - 1, yb = ya + 1;
       const p: Passage = { a, b: south, tiles: [] };
-      for (let x = px; x < px + 4; x++) for (const y of [ya, yb]) { set(x, y, T_PATH); p.tiles.push(at(x, y)); }
+      for (let x = px; x < px + PW; x++) for (const y of [ya, yb]) { set(x, y, T_PATH); p.tiles.push(at(x, y)); }
       passages.push(p);
-      doorsOf[a].push({ x: px + 1, y: ya });
-      doorsOf[south].push({ x: px + 1, y: yb });
+      doorsOf[a].push({ x: px + 2, y: ya });
+      doorsOf[south].push({ x: px + 2, y: yb });
     }
   }
   passages.forEach((p, i) => { for (const t of p.tiles) passageOf[t] = i; });
 
-  // 4. roads: every passage and building joins the middle of its region
+  // 4. roads: every passage, town, dungeon and landmark joins the middle of its region
   const carve = (x0: number, y0: number, x1: number, y1: number) => {
     // an L: along x at y0, then along y at x1, three tiles wide
     const sx = Math.sign(x1 - x0) || 1, sy = Math.sign(y1 - y0) || 1;
@@ -180,65 +220,56 @@ function buildOverworld(): OverworldMap {
   };
 
   const buildings: Building[] = [];
-  for (const id of REGION_IDS) {
-    const { rx, ry } = regionCell(id);
-    const ox = rx * REG_W, oy = ry * REG_H;
-    const cx = ox + 16, cy = oy + 10;
-    const loc = locById(id);
-    for (const d of doorsOf[id]) {
-      // walk in from the passage a couple of tiles before turning
-      const inX = d.x === ox ? ox + 2 : d.x === ox + REG_W - 1 ? ox + REG_W - 3 : d.x;
-      const inY = d.y === oy ? oy + 2 : d.y === oy + REG_H - 1 ? oy + REG_H - 3 : d.y;
-      carve(d.x, d.y, inX, inY);
-      carve(inX, inY, cx, cy);
-    }
-    // the dungeon (or, in the Haven, the colosseum) sits top-right; doors face down
-    const bigKind: BuildingKind = loc.tier === 0 ? 'colosseum' : 'dungeon';
-    buildings.push(placeBuilding(bigKind, id, ox + 22, oy + 3, 5, 4, 'down'));
-    carve(ox + 24, oy + 8, cx, cy);
-    // a town with a forge, bottom-left; door faces up
-    if (loc.hasCraftingStation) {
-      buildings.push(placeBuilding('forge', id, ox + 4, oy + 14, 5, 3, 'up'));
-      carve(ox + 6, oy + 12, cx, cy);
-    }
-  }
-  function placeBuilding(kind: BuildingKind, id: string, tx: number, ty: number, tw: number, th: number, face: 'up' | 'down'): Building {
+  let townName = 0;
+  function placeBuilding(kind: BuildingKind, id: string, name: string, tx: number, ty: number, tw: number, th: number, face: 'up' | 'down'): Building {
     // clear a yard around it, then stamp the footprint
-    for (let y = ty - 2; y < ty + th + 2; y++) for (let x = tx - 2; x < tx + tw + 2; x++) {
+    for (let y = ty - 3; y < ty + th + 3; y++) for (let x = tx - 3; x < tx + tw + 3; x++) {
       if (tiles[at(x, y)] === T_SOLID || tiles[at(x, y)] === T_LIQUID) tiles[at(x, y)] = T_GROUND;
     }
     for (let y = ty; y < ty + th; y++) for (let x = tx; x < tx + tw; x++) tiles[at(x, y)] = T_BUILD;
     const dx = tx + Math.floor(tw / 2);
     const dy = face === 'down' ? ty + th : ty - 1;
-    return {
-      kind, region: id, tx, ty, tw, th,
-      doorX: dx * TILE + TILE / 2, doorY: dy * TILE + TILE / 2,
-    };
+    const b: Building = { kind, region: id, name, tx, ty, tw, th, doorX: dx * TILE + TILE / 2, doorY: dy * TILE + TILE / 2 };
+    buildings.push(b);
+    return b;
   }
 
-  // 5. enemy spawn points: open ground, away from buildings and roads' ends
-  const spawnPoints: { region: string; x: number; y: number }[] = [];
   for (const id of REGION_IDS) {
-    if (locById(id).tier === 0) continue;    // the Haven is safe
     const { rx, ry } = regionCell(id);
-    const r = seeded(900 + REGION_IDS.indexOf(id) * 31);
     const ox = rx * REG_W, oy = ry * REG_H;
-    let tries = 0;
-    let count = 0;
-    while (count < 9 && tries++ < 400) {
-      const tx = ox + 2 + Math.floor(r() * (REG_W - 4));
-      const ty = oy + 2 + Math.floor(r() * (REG_H - 4));
-      const t = tiles[at(tx, ty)];
-      if (t !== T_GROUND && t !== T_PATH) continue;
-      const px = tx * TILE + TILE / 2, py = ty * TILE + TILE / 2;
-      if (buildings.some((b) => dist(px, py, b.doorX, b.doorY) < 6 * TILE)) continue;
-      if (spawnPoints.some((s) => dist(px, py, s.x, s.y) < 4 * TILE)) continue;
-      spawnPoints.push({ region: id, x: px, y: py });
-      count++;
+    const cx = ox + 64, cy = oy + 40;
+    const loc = locById(id);
+    for (const d of doorsOf[id]) {
+      const inX = d.x === ox ? ox + 3 : d.x === ox + REG_W - 1 ? ox + REG_W - 4 : d.x;
+      const inY = d.y === oy ? oy + 3 : d.y === oy + REG_H - 1 ? oy + REG_H - 4 : d.y;
+      carve(d.x, d.y, inX, inY);
+      carve(inX, inY, cx, cy);
+    }
+    // the dungeon (or, in the Haven, the colosseum): top-right, door facing down
+    if (loc.tier === 0) placeBuilding('colosseum', id, 'Colosseum', ox + 96, oy + 12, 7, 5, 'down');
+    else placeBuilding('dungeon', id, `${loc.name} dungeon`, ox + 96, oy + 12, 7, 5, 'down');
+    carve(ox + 99, oy + 18, cx, cy);
+    // two towns along the bottom; the first has the forge where there is one
+    placeBuilding(loc.hasCraftingStation ? 'forge' : 'town', id,
+      loc.hasCraftingStation ? (loc.stationName || 'Forge') : TOWN_NAMES[townName++ % TOWN_NAMES.length], ox + 18, oy + 58, 7, 4, 'up');
+    carve(ox + 21, oy + 55, cx, cy);
+    placeBuilding('town', id, TOWN_NAMES[townName++ % TOWN_NAMES.length], ox + 100, oy + 60, 7, 4, 'up');
+    carve(ox + 103, oy + 57, cx, cy);
+    // the landmark: top-left
+    const lm = LANDMARKS[loc.theme];
+    if (lm.lake) {
+      const lr = seeded(700 + REGION_IDS.indexOf(id));
+      blob(ox + 26, oy + 18, 9, 6, T_LIQUID, ox, oy, lr);
+      for (let x = ox + 15; x <= ox + 37; x++) for (let d = -1; d <= 0; d++) tiles[at(x, oy + 18 + d)] = T_PATH;   // the bridge
+      buildings.push({ kind: 'landmark', region: id, name: lm.name, tx: ox + 26, ty: oy + 18, tw: 0, th: 0, doorX: (ox + 26) * TILE, doorY: (oy + 18) * TILE });
+      carve(ox + 37, oy + 18, cx, cy);
+    } else {
+      placeBuilding('landmark', id, lm.name, ox + 23, oy + 15, 6, 5, 'down');
+      carve(ox + 26, oy + 21, cx, cy);
     }
   }
 
-  // Drop any spawn point walled off in a pocket (flood from the Haven, all passages open).
+  // Everything reachable from the Haven with every passage open.
   const reach = new Uint8Array(n);
   const hub = buildings.find((b) => b.kind === 'forge' && b.region === HUB_ID)!;
   const stack = [[Math.floor(hub.doorX / TILE), Math.floor(hub.doorY / TILE)]];
@@ -247,16 +278,50 @@ function buildOverworld(): OverworldMap {
     const [x, y] = stack.pop()!;
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const nx = x + dx, ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= WORLD_TW || ny >= WORLD_TH) continue;
+      if (!inside(nx, ny)) continue;
       const i = at(nx, ny), t = tiles[i];
       if (reach[i] || (t !== T_GROUND && t !== T_PATH)) continue;
       reach[i] = 1;
       stack.push([nx, ny]);
     }
   }
-  const reachable = spawnPoints.filter((sp) => reach[at(Math.floor(sp.x / TILE), Math.floor(sp.y / TILE))]);
 
-  return { tiles, region, passageOf, passages, buildings, spawnPoints: reachable, variant };
+  // 5. enemy spawn points (a few Elite) and treasure chests, on reachable ground
+  const spawnPoints: { region: string; x: number; y: number; elite: boolean }[] = [];
+  const chests: Chest[] = [];
+  const nearTown = (px: number, py: number, r: number) =>
+    buildings.some((b) => b.kind !== 'landmark' && b.region && dist(px, py, b.doorX, b.doorY) < r);
+  for (const id of REGION_IDS) {
+    const { rx, ry } = regionCell(id);
+    const r = seeded(900 + REGION_IDS.indexOf(id) * 31);
+    const ox = rx * REG_W, oy = ry * REG_H;
+    const pickSpot = (minGap: number, list: { x: number; y: number }[], avoid: number, tries: number) => {
+      for (let k = 0; k < tries; k++) {
+        const tx = ox + 3 + Math.floor(r() * (REG_W - 6));
+        const ty = oy + 3 + Math.floor(r() * (REG_H - 6));
+        const t = tiles[at(tx, ty)];
+        if ((t !== T_GROUND && t !== T_PATH) || !reach[at(tx, ty)]) continue;
+        const px = tx * TILE + TILE / 2, py = ty * TILE + TILE / 2;
+        if (nearTown(px, py, avoid)) continue;
+        if (list.some((s) => dist(px, py, s.x, s.y) < minGap)) continue;
+        return { x: px, y: py };
+      }
+      return null;
+    };
+    if (locById(id).tier > 0) {
+      for (let k = 0; k < 110; k++) {
+        const p = pickSpot(5 * TILE, spawnPoints, 9 * TILE, 60);
+        if (p) spawnPoints.push({ region: id, x: p.x, y: p.y, elite: k % 12 === 11 });
+      }
+    }
+    const nChests = locById(id).tier > 0 ? 14 : 4;
+    for (let k = 0; k < nChests; k++) {
+      const p = pickSpot(12 * TILE, chests, 6 * TILE, 200);
+      if (p) chests.push({ id: `${id}#${k}`, region: id, x: p.x, y: p.y });
+    }
+  }
+
+  return { tiles, region, passageOf, passages, buildings, spawnPoints, chests, variant };
 }
 
 const WORLD_MAP: OverworldMap = buildOverworld();
@@ -331,6 +396,12 @@ function buildingOf(kind: BuildingKind, region: string): Building | null {
   return WORLD_MAP.buildings.find((b) => b.kind === kind && b.region === region) || null;
 }
 
+/** Buildings you can warp to once you have been there. */
+function isWaypoint(b: Building): boolean { return b.kind !== 'landmark'; }
+
+/** Towns and forges: rest stops and checkpoints. */
+function isTown(b: Building): boolean { return b.kind === 'forge' || b.kind === 'town'; }
+
 /** Where a new game (and a lost checkpoint) begins: outside the Haven's forge. */
 function havenStart(): { x: number; y: number } {
   const f = buildingOf('forge', HUB_ID)!;
@@ -354,6 +425,19 @@ function makeSpawners(): Spawner[] {
   return WORLD_MAP.spawnPoints.map((p) => ({ ...p, enemy: null, cooldown: 0 }));
 }
 
+/** Elites: rarer, tougher, glowing, and much better loot. */
+function makeElite(e: Enemy) {
+  e.elite = true;
+  e.maxHp = Math.round(e.maxHp * 2.6);
+  e.hp = e.maxHp;
+  e.str *= 1.35;
+  e.edef *= 1.3;
+  e.exp = Math.round(e.exp * 3);
+  e.radius = Math.round(e.radius * 1.25);
+  e.maxPoise = Math.round(e.maxPoise * 2);
+  e.poise = e.maxPoise;
+}
+
 /**
  * Keep the world populated around the player: fill empty spawners that are
  * near but off-screen, recycle ones far away, and start respawn timers.
@@ -364,7 +448,7 @@ function tickSpawners(g: Game, dt: number) {
     if (s.enemy) {
       if (!s.enemy.alive) {
         s.enemy = null;
-        s.cooldown = RESPAWN_TIME;
+        s.cooldown = s.elite ? RESPAWN_TIME * 3 : RESPAWN_TIME;
       } else if (!s.enemy.aggro && dist(s.enemy.x, s.enemy.y, p.x, p.y) > DESPAWN_FAR) {
         const i = g.enemies.indexOf(s.enemy);
         if (i >= 0) g.enemies.splice(i, 1);
@@ -381,6 +465,7 @@ function tickSpawners(g: Game, dt: number) {
     const e = new Enemy(ENEMIES[pick(loc.enemyTypes)], s.x, s.y, rollEnemyLevel(loc), loc.tier);
     e.aggro = false;
     e.homeX = s.x; e.homeY = s.y;
+    if (s.elite) makeElite(e);
     e.state = 'chase';
     s.enemy = e;
     g.enemies.push(e);

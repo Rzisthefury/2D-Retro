@@ -100,9 +100,33 @@ class Renderer {
     for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) this.drawTile(c, g, tx, ty);
     for (const b of WORLD_MAP.buildings) {
       const bx = b.tx * TILE, by = b.ty * TILE;
-      if (bx > cam.x + VIEW_W + 100 || bx + b.tw * TILE < cam.x - 100 || by > cam.y + VIEW_H + 100 || by + b.th * TILE < cam.y - 140) continue;
+      if (bx > cam.x + VIEW_W + 200 || bx + b.tw * TILE < cam.x - 200 || by > cam.y + VIEW_H + 200 || by + b.th * TILE < cam.y - 200) continue;
       this.drawBuilding(c, g, b);
     }
+    for (const ch of WORLD_MAP.chests) {
+      if (ch.x < cam.x - 40 || ch.x > cam.x + VIEW_W + 40 || ch.y < cam.y - 40 || ch.y > cam.y + VIEW_H + 40) continue;
+      this.drawChest(c, g, ch);
+    }
+  }
+
+  private drawChest(c: CanvasRenderingContext2D, g: Game, ch: Chest) {
+    const open = g.world.openedChests.has(ch.id);
+    const x = ch.x, y = ch.y;
+    c.save();
+    c.fillStyle = 'rgba(0,0,0,0.35)';
+    c.beginPath(); c.ellipse(x, y + 10, 16, 5, 0, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#6a4424'; c.fillRect(x - 14, y - 6, 28, 16);
+    c.fillStyle = '#d8a84a'; c.fillRect(x - 14, y - 1, 28, 3); c.fillRect(x - 2, y - 4, 4, 8);
+    if (open) {
+      c.fillStyle = '#4a2e18'; c.fillRect(x - 14, y - 16, 28, 8);
+    } else {
+      c.fillStyle = '#7a5030'; c.fillRect(x - 14, y - 12, 28, 7);
+      c.fillStyle = '#d8a84a'; c.fillRect(x - 14, y - 12, 28, 2);
+      c.globalAlpha = 0.35 + Math.sin(g.time * 3 + x) * 0.25;
+      c.fillStyle = '#fff3b0';
+      c.beginPath(); c.arc(x, y - 18 + Math.sin(g.time * 2 + y) * 2, 2.5, 0, Math.PI * 2); c.fill();
+    }
+    c.restore();
   }
 
   private drawTile(c: CanvasRenderingContext2D, g: Game, tx: number, ty: number) {
@@ -266,7 +290,7 @@ class Renderer {
       c.globalAlpha = 0.6 + Math.sin(g.time * 2.5) * 0.25;
       c.beginPath(); c.moveTo(dx - 22, y + h); c.lineTo(dx - 22, y + h - 40); c.arc(dx, y + h - 40, 22, Math.PI, 0); c.lineTo(dx + 22, y + h); c.stroke();
       c.globalAlpha = 1;
-      this.worldLabel(c, `${loc.name} dungeon${cleared ? '  ✓' : ''}`, dx, y - 8, accent);
+      this.worldLabel(c, `${b.name}${cleared ? '  ✓' : ''}`, dx, y - 8, accent);
     } else if (b.kind === 'forge') {
       c.fillStyle = '#3a2e28'; c.fillRect(x, y + 20, w, h - 20);
       c.fillStyle = this.mix(accent, '#2a2030', 0.55);
@@ -285,7 +309,22 @@ class Renderer {
       c.fillRect(x + w / 2 - 30, y, 60, 50);
       c.globalAlpha = 1;
       c.fillStyle = '#120c0a'; c.fillRect(x + w / 2 - 14, y + 22, 28, 30);
-      this.worldLabel(c, `⚒ ${loc.stationName || 'Forge'}`, x + w / 2, y - 22, accent);
+      this.worldLabel(c, `⚒ ${b.name}`, x + w / 2, y - 22, accent);
+    } else if (b.kind === 'town') {
+      // a couple of cottages around a campfire
+      for (const [hx, hw] of [[x, w * 0.42], [x + w * 0.55, w * 0.45]] as [number, number][]) {
+        c.fillStyle = '#4a3a30'; c.fillRect(hx, y + 26, hw, h - 26);
+        c.fillStyle = this.mix(accent, '#3a2a2a', 0.65);
+        c.beginPath(); c.moveTo(hx - 6, y + 30); c.lineTo(hx + hw / 2, y + 2); c.lineTo(hx + hw + 6, y + 30); c.fill();
+        c.fillStyle = '#ffd98a'; c.globalAlpha = 0.7; c.fillRect(hx + hw / 2 - 6, y + 46, 12, 10); c.globalAlpha = 1;
+      }
+      const fx = b.doorX, fy = b.doorY - 8;
+      const fl = Math.sin(g.time * 11) * 2;
+      c.fillStyle = '#ff9d4a'; c.beginPath(); c.moveTo(fx - 7, fy + 6); c.quadraticCurveTo(fx, fy - 14 - fl, fx + 7, fy + 6); c.fill();
+      c.fillStyle = '#5a3a24'; c.fillRect(fx - 9, fy + 4, 18, 4);
+      this.worldLabel(c, `⌂ ${b.name}`, x + w / 2, y - 8, accent);
+    } else if (b.kind === 'landmark') {
+      this.drawLandmark(c, g, b, loc);
     } else {
       // the colosseum: a ring of arches
       c.fillStyle = '#4a3e2c'; c.beginPath(); c.ellipse(x + w / 2, y + h / 2, w / 2 + 6, h / 2 + 4, 0, 0, Math.PI * 2); c.fill();
@@ -299,6 +338,65 @@ class Renderer {
       this.worldLabel(c, 'Colosseum  ·  Wave Trials', x + w / 2, y - 8, PAL.mpCharge);
     }
     c.restore();
+  }
+
+  /** Each biome's set piece. Lakes are tiles; this adds the dressing and the name. */
+  private drawLandmark(c: CanvasRenderingContext2D, g: Game, b: Building, loc: WorldLocation) {
+    const x = b.tx * TILE, y = b.ty * TILE, w = b.tw * TILE, h = b.th * TILE;
+    const cx = x + w / 2, cy = y + h / 2;
+    const accent = loc.look.accent;
+    c.save();
+    switch (loc.theme) {
+      case 'Haven': {
+        c.fillStyle = '#3a4058'; c.beginPath(); c.ellipse(cx, cy, w / 2, h / 2, 0, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#2a5a80'; c.beginPath(); c.ellipse(cx, cy, w / 2 - 12, h / 2 - 10, 0, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#5a6488'; c.fillRect(cx - 8, cy - 40, 16, 40);
+        c.fillStyle = accent; c.globalAlpha = 0.7 + Math.sin(g.time * 2) * 0.2;
+        c.beginPath(); c.arc(cx, cy - 46, 8, 0, Math.PI * 2); c.fill();
+        break;
+      }
+      case 'Forest': {
+        c.fillStyle = '#3a2a1e'; c.fillRect(cx - 22, cy - 10, 44, h / 2 + 10);
+        c.fillStyle = '#16402a'; c.beginPath(); c.arc(cx, cy - 30, w * 0.62, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#1f5a34'; c.beginPath(); c.arc(cx - 30, cy - 50, w * 0.36, 0, Math.PI * 2); c.fill();
+        c.fillStyle = 'rgba(200,255,200,0.18)';
+        for (let k = 0; k < 8; k++) { c.beginPath(); c.arc(cx + Math.cos(g.time * 0.5 + k) * 70, cy - 40 + Math.sin(g.time * 0.7 + k * 2) * 40, 3, 0, Math.PI * 2); c.fill(); }
+        break;
+      }
+      case 'Coast': {
+        c.fillStyle = '#4a3222'; c.beginPath(); c.moveTo(x, cy); c.lineTo(x + w * 0.2, y + h); c.lineTo(x + w * 0.9, y + h); c.lineTo(x + w, cy - 10); c.closePath(); c.fill();
+        c.fillStyle = '#5e4230'; c.fillRect(x + w * 0.2, cy - 6, w * 0.7, 8);
+        c.strokeStyle = '#3a2a1e'; c.lineWidth = 6; c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + 20, y - 60); c.stroke();
+        c.fillStyle = 'rgba(220,220,200,0.5)'; c.beginPath(); c.moveTo(cx + 20, y - 56); c.lineTo(cx + 60, y - 30); c.lineTo(cx + 18, y - 10); c.fill();
+        break;
+      }
+      case 'Ruins': {
+        c.fillStyle = '#4a4450';
+        c.beginPath(); c.ellipse(cx, cy + 10, w / 2, h / 3, -0.2, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#5e5866'; c.beginPath(); c.arc(cx - w / 2 + 20, cy - 4, 30, 0, Math.PI * 2); c.fill();
+        c.fillStyle = accent; c.globalAlpha = 0.6; c.fillRect(cx - w / 2 + 10, cy - 10, 8, 4); c.fillRect(cx - w / 2 + 24, cy - 10, 8, 4);
+        break;
+      }
+      case 'Sky': {
+        for (let k = 0; k < 6; k++) {
+          const a = (k / 6) * Math.PI * 2 + g.time * 0.2;
+          const px = cx + Math.cos(a) * w * 0.45, py = cy + Math.sin(a) * h * 0.4 + Math.sin(g.time + k) * 4;
+          c.fillStyle = '#d8e0f4'; c.fillRect(px - 6, py - 40, 12, 40);
+        }
+        c.fillStyle = accent; c.globalAlpha = 0.5 + Math.sin(g.time * 3) * 0.3;
+        c.beginPath(); c.arc(cx, cy - 20, 12, 0, Math.PI * 2); c.fill();
+        break;
+      }
+      case 'Rift': {
+        c.fillStyle = '#1a0e2a'; c.beginPath(); c.moveTo(cx, y - 90); c.lineTo(cx + 34, y + h); c.lineTo(cx - 34, y + h); c.closePath(); c.fill();
+        c.strokeStyle = accent; c.lineWidth = 2; c.globalAlpha = 0.5 + Math.sin(g.time * 2) * 0.3;
+        c.beginPath(); c.moveTo(cx, y - 80); c.lineTo(cx + 6, y); c.lineTo(cx - 4, y + 40); c.lineTo(cx + 3, y + h - 10); c.stroke();
+        break;
+      }
+      default: break;   // lakes: the water / lava / ice is the landmark
+    }
+    c.restore();
+    this.worldLabel(c, `✶ ${b.name}`, b.tw ? cx : b.doorX, (b.tw ? y : b.doorY) - (loc.theme === 'Rift' ? 100 : 30), accent);
   }
 
   private worldLabel(c: CanvasRenderingContext2D, text: string, x: number, y: number, color: string) {
@@ -706,6 +804,12 @@ class Renderer {
     const telegraphing = e.state === 'telegraph';
     const body = flash ? '#ffffff' : (telegraphing ? this.mix(d.color, d.accent, 0.45 + Math.sin(g.time * 26) * 0.25) : d.color);
 
+    if (e.elite && !dying) {
+      c.fillStyle = 'rgba(255,213,74,0.22)';
+      c.globalAlpha = fade * (0.6 + Math.sin(g.time * 5) * 0.3);
+      c.beginPath(); c.ellipse(0, -2, d.radius * 1.9, d.radius * 0.9, 0, 0, Math.PI * 2); c.fill();
+      c.globalAlpha = fade;
+    }
     if (e.boss && !dying) {
       // a slow-pulsing aura so a boss reads at a glance in a crowd
       const ag = c.createRadialGradient(0, -d.height * 0.5, 4, 0, -d.height * 0.5, d.radius * 2.2);
@@ -753,6 +857,14 @@ class Renderer {
     c.restore();
 
     if (!dying && !e.boss) this.drawEnemyBar(c, e, ex, ey);
+    if (e.elite && !dying) {
+      c.save();
+      c.font = '800 9px ui-monospace, Menlo, Consolas, monospace';
+      c.textAlign = 'center';
+      c.fillStyle = PAL.mpCharge;
+      c.fillText('ELITE', ex, ey - d.height - 26);
+      c.restore();
+    }
   }
 
   private drawGrunt(c: CanvasRenderingContext2D, e: Enemy, body: string, accent: string, g: Game) {
@@ -856,7 +968,7 @@ class Renderer {
   }
 
   private drawEnemyBar(c: CanvasRenderingContext2D, e: Enemy, ex: number, ey: number) {
-    if (e.hp >= e.maxHp && e.state !== 'stagger') return;
+    if (e.hp >= e.maxHp && e.state !== 'stagger' && !e.elite) return;
     const w = Math.max(26, e.radius * 2.4);
     const top = ey - e.def.height - 20;
     c.fillStyle = 'rgba(0,0,0,0.55)';
@@ -1131,7 +1243,7 @@ class Renderer {
       c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = PAL.dim;
       c.fillText(scene.tier ? `tier ${scene.tier}  ·  recommended Lv ${recommendedLevel(scene)}` : 'safe ground', VIEW_W - 18, 48);
-      this.drawMinimap(c, g, VIEW_W - 18 - 110, 58, 110);
+      this.drawMinimap(c, g, VIEW_W - 18 - REG_W, 58);
     }
     c.restore();
 
@@ -1212,23 +1324,55 @@ class Renderer {
     if (g.menuOpen) this.drawBigMenu(c, g);
   }
 
-  /** The minimap: the region grid, what you have found, and where you are. */
-  private drawMinimap(c: CanvasRenderingContext2D, g: Game, x: number, y: number, w: number) {
-    const cw = w / GRID_W, ch = cw * (REG_H / REG_W);
-    c.save();
-    c.fillStyle = 'rgba(6,8,14,0.7)';
-    this.roundRect(c, x - 4, y - 4, w + 8, ch * GRID_H + 8, 5); c.fill();
-    for (let ry = 0; ry < GRID_H; ry++) for (let rx = 0; rx < GRID_W; rx++) {
-      const id = REGION_GRID[ry][rx];
-      if (!id) continue;
-      const known = g.world.discoveredLocations.has(id);
-      const open = g.world.unlockedAreas.has(id);
-      c.fillStyle = !open ? '#262a38' : known ? this.alpha(locById(id).look.accent, 0.55) : 'rgba(120,130,160,0.25)';
-      c.fillRect(x + rx * cw + 1, y + ry * ch + 1, cw - 2, ch - 2);
+  private miniCache: Record<string, HTMLCanvasElement> = {};
+
+  /** The region's terrain at one pixel per tile, drawn once and cached. */
+  private regionMini(id: string): HTMLCanvasElement {
+    if (this.miniCache[id]) return this.miniCache[id];
+    const cv = document.createElement('canvas');
+    cv.width = REG_W; cv.height = REG_H;
+    const cx = cv.getContext('2d')!;
+    const img = cx.createImageData(REG_W, REG_H);
+    const { rx, ry } = regionCell(id);
+    const look = locById(id).look;
+    const ground = this.hex(look.floorAlt), path = this.hex(look.motif), liquid = this.hex(look.accent);
+    const solid = [12, 14, 20];
+    for (let y = 0; y < REG_H; y++) for (let x = 0; x < REG_W; x++) {
+      const t = tileAt(rx * REG_W + x, ry * REG_H + y);
+      const col = t === T_PATH ? path.map((v, i) => (v + ground[i]) / 2) : t === T_GROUND ? ground
+        : t === T_LIQUID ? liquid.map((v) => v * 0.45) : t === T_BUILD ? [230, 230, 240] : solid;
+      const o = (y * REG_W + x) * 4;
+      img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
     }
-    c.fillStyle = '#ffffff';
-    const px = x + (g.player.x / WORLD_PW) * w, py = y + (g.player.y / WORLD_PH) * ch * GRID_H;
-    c.beginPath(); c.arc(px, py, 2.5 + Math.sin(g.time * 6) * 0.6, 0, Math.PI * 2); c.fill();
+    cx.putImageData(img, 0, 0);
+    this.miniCache[id] = cv;
+    return cv;
+  }
+
+  /** The minimap: this region's terrain, its towns, dungeon and chests, and you. */
+  private drawMinimap(c: CanvasRenderingContext2D, g: Game, x: number, y: number) {
+    const id = g.world.currentLocation;
+    const { rx, ry } = regionCell(id);
+    const ox = rx * REG_W * TILE, oy = ry * REG_H * TILE;
+    const sc = 1 / TILE;
+    c.save();
+    c.fillStyle = 'rgba(6,8,14,0.75)';
+    this.roundRect(c, x - 4, y - 4, REG_W + 8, REG_H + 8, 5); c.fill();
+    c.globalAlpha = 0.9;
+    c.drawImage(this.regionMini(id), x, y);
+    c.globalAlpha = 1;
+    for (const ch of WORLD_MAP.chests) {
+      if (ch.region !== id || g.world.openedChests.has(ch.id)) continue;
+      c.fillStyle = PAL.mpCharge;
+      c.fillRect(x + (ch.x - ox) * sc - 1, y + (ch.y - oy) * sc - 1, 2, 2);
+    }
+    for (const b of WORLD_MAP.buildings) {
+      if (b.region !== id || b.kind === 'landmark') continue;
+      c.fillStyle = b.kind === 'dungeon' ? '#ff6b6b' : '#ffffff';
+      c.fillRect(x + (b.doorX - ox) * sc - 2, y + (b.doorY - oy) * sc - 2, 4, 4);
+    }
+    c.fillStyle = '#7fe8ff';
+    c.beginPath(); c.arc(x + (g.player.x - ox) * sc, y + (g.player.y - oy) * sc, 2.5 + Math.sin(g.time * 6) * 0.6, 0, Math.PI * 2); c.fill();
     c.restore();
   }
 
@@ -1468,7 +1612,7 @@ class Renderer {
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillText(IS_TOUCH
       ? 'tap a tab  ·  tap a row to select, tap again to confirm  ·  \u2715 to close'
-      : g.menuTab === 4 ? '1-5 tabs  ·  arrows move between regions  ·  TAB or ESC close'
+      : g.menuTab === 4 ? '1-5 tabs  ·  arrows pick a waypoint  ·  ENTER warp  ·  TAB or ESC close'
       : '1-5 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close',
       26, VIEW_H - 18);
     void p;
@@ -1757,8 +1901,9 @@ class Renderer {
       c.save();
       c.fillStyle = !open ? '#1c1f2c' : this.alpha(l.look.accent, known ? 0.28 : 0.1);
       this.roundRect(c, r.x, r.y, r.w, r.h, 6); c.fill();
-      c.strokeStyle = i === g.mapIndex ? '#ffffff' : open ? this.alpha(l.look.accent, 0.6) : 'rgba(90,100,140,0.3)';
-      c.lineWidth = i === g.mapIndex ? 2.5 : 1.2;
+      const selRegion = WORLD_MAP.buildings[g.mapIndex]?.region === id;
+      c.strokeStyle = selRegion ? '#ffffff' : open ? this.alpha(l.look.accent, 0.6) : 'rgba(90,100,140,0.3)';
+      c.lineWidth = selRegion ? 2.5 : 1.2;
       if (!open) c.setLineDash([4, 5]);
       this.roundRect(c, r.x, r.y, r.w, r.h, 6); c.stroke();
       c.setLineDash([]);
@@ -1775,17 +1920,30 @@ class Renderer {
       c.fillText(tags.join('  '), r.x + r.w / 2, r.y + r.h / 2 + 10);
       c.restore();
     }
+    // waypoints you have found; the cursor walks between them
+    w.waypoints.forEach((i) => {
+      const b = WORLD_MAP.buildings[i];
+      const p = mapPointPx(b.doorX, b.doorY);
+      const sel = i === g.mapIndex;
+      c.fillStyle = b.kind === 'dungeon' ? '#ff8b8b' : b.kind === 'colosseum' ? PAL.mpCharge : '#ffffff';
+      c.beginPath();
+      if (b.kind === 'dungeon') { c.moveTo(p.x, p.y - 6); c.lineTo(p.x + 6, p.y + 5); c.lineTo(p.x - 6, p.y + 5); c.closePath(); }
+      else c.rect(p.x - 4, p.y - 4, 8, 8);
+      c.fill();
+      if (sel) { c.strokeStyle = '#ffffff'; c.lineWidth = 2; c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.stroke(); }
+    });
     // you are here
     const gx = M.x + 12, gy = M.y + 12, gw = M.w - 24, gh = M.h - 24;
     const px = gx + (g.player.x / WORLD_PW) * gw, py = gy + (g.player.y / WORLD_PH) * gh;
-    c.fillStyle = PAL.mpCharge;
-    c.beginPath(); c.arc(px, py, 5 + Math.sin(g.time * 5), 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#7fe8ff';
+    c.beginPath(); c.arc(px, py, 4 + Math.sin(g.time * 5), 0, Math.PI * 2); c.fill();
 
     // detail panel
     const dx = M.x + M.w + 14;
     const dw = VIEW_W - dx - 26;
     this.listBox(c, dx, M.y, dw, M.h);
-    const l = locById(REGION_IDS[g.mapIndex]);
+    const wp = WORLD_MAP.buildings[g.mapIndex];
+    const l = locById(wp ? wp.region : w.currentLocation);
     const open = w.unlockedAreas.has(l.id);
     const known = w.discoveredLocations.has(l.id);
     let y = M.y + 26;
@@ -1808,6 +1966,8 @@ class Renderer {
     rows.push(['Forge', l.hasCraftingStation ? (l.stationName || 'yes') : '-']);
     if (l.tier) rows.push(['Foes', l.enemyTypes.map((id) => ENEMIES[id].name).join(', ')]);
     if (l.tier === 0) rows.push(['Colosseum', 'Wave Trials']);
+    const chests = WORLD_MAP.chests.filter((x) => x.region === l.id);
+    rows.push(['Chests', `${chests.filter((x) => w.openedChests.has(x.id)).length}/${chests.length} opened`]);
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     for (const [k, v] of rows) {
       c.fillStyle = PAL.dim; c.fillText(k, dx + 16, y);
@@ -1830,7 +1990,8 @@ class Renderer {
     }
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText(l.id === w.currentLocation ? 'You are here' : !open ? 'Sealed by a barrier' : 'Walk there', dx + 16, M.y + M.h - 14);
+    c.fillStyle = wp ? PAL.mpCharge : PAL.dim;
+    c.fillText(this.clip(c, wp ? `${IS_TOUCH ? 'Tap again' : 'ENTER'}: warp to ${wp.name}` : 'Find towns and dungeons to warp', dw - 32), dx + 16, M.y + M.h - 14);
   }
 
   /** Greedy word wrap to `w` pixels in the current font. */
@@ -2054,12 +2215,12 @@ class Renderer {
       ];
 
     const rules: string[] = [
-      'Walk the open world. Enemies roam each region and chase you when you',
-      'get close. Glowing barriers seal regions you have not opened yet.',
-      'Each region has a dungeon: rooms lock until you clear them, and its',
-      'bosses wait in order. Its last boss breaks the barrier to the next region.',
-      'Towns have forges (heal, restock, craft any recipe). Towns and dungeon',
-      'doors are checkpoints. The Haven colosseum runs endless Wave Trials.',
+      'Explore the open world. Enemies roam each region and chase you when you get',
+      'close; glowing ELITES hit harder and drop far better loot. Chests hide supplies.',
+      'Each region has a dungeon: rooms lock until cleared, bosses wait in order, and',
+      'the last one breaks the barrier sealing the next region.',
+      'Towns heal you and are checkpoints and waypoints: warp between any you have',
+      'found from the MAP tab. Forge gear in towns with a forge.',
       'Dying loses nothing. Stand at a door and press ENTER to go in; B leaves.',
     ];
 

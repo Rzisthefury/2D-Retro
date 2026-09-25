@@ -632,6 +632,7 @@ class Enemy {
   // overworld: enemies idle near home until you come close, and give up
   // the chase if you drag them too far from it
   aggro = true;
+  elite = false;              // a rare, tougher variant with better loot
   homeX = 0; homeY = 0;
   wanderX = 0; wanderY = 0;
   wanderT = 0;

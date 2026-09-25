@@ -273,7 +273,7 @@ const TUNING = {
     expMult: 1.0,
     dropRate: 1.0,
     // audio
-    musicVolume: 0.3,
+    musicVolume: 0.2,
     sfxVolume: 0.7,
     waveIntro: 1.6,
     travelSpawnMult: 1.0,
@@ -1217,6 +1217,8 @@ function freshWorld() {
         trialBest: {},
         pos: havenStart(),
         checkpoint: havenStart(),
+        waypoints: new Set([WORLD_MAP.buildings.findIndex((b) => b.kind === 'forge' && b.region === HUB_ID)]),
+        openedChests: new Set(),
     };
 }
 function worldToSave(w) {
@@ -1239,6 +1241,9 @@ function worldToSave(w) {
         trialBest: tb,
         pos: { x: Math.round(w.pos.x), y: Math.round(w.pos.y) },
         checkpoint: { x: Math.round(w.checkpoint.x), y: Math.round(w.checkpoint.y) },
+        waypoints: [...w.waypoints],
+        openedChests: [...w.openedChests],
+        mapVersion: MAP_VERSION,
     };
 }
 /** Rebuild a WorldState from a save, dropping anything that no longer exists. */
@@ -1276,7 +1281,20 @@ function worldFromSave(j) {
     // Re-derive unlocks from defeated bosses, so a save can never hold a boss
     // kill without the door it opened.
     w.completedBosses.forEach((_, id) => applyBossUnlocks(w, BOSS_MAP[id]));
-    const okPt = (p) => p && typeof p.x === 'number' && typeof p.y === 'number' && standable(w, p.x, p.y);
+    // Positions, waypoints and chests only mean something on the same map layout.
+    const sameMap = j.mapVersion === MAP_VERSION;
+    if (sameMap && Array.isArray(j.waypoints)) {
+        for (const i of j.waypoints)
+            if (WORLD_MAP.buildings[i] && isWaypoint(WORLD_MAP.buildings[i]))
+                w.waypoints.add(i);
+    }
+    if (sameMap && Array.isArray(j.openedChests)) {
+        const ids = new Set(WORLD_MAP.chests.map((c) => c.id));
+        for (const id of j.openedChests)
+            if (ids.has(id))
+                w.openedChests.add(id);
+    }
+    const okPt = (p) => sameMap && p && typeof p.x === 'number' && typeof p.y === 'number' && standable(w, p.x, p.y);
     if (okPt(j.checkpoint))
         w.checkpoint = { x: j.checkpoint.x, y: j.checkpoint.y };
     w.pos = okPt(j.pos) ? { x: j.pos.x, y: j.pos.y } : { ...w.checkpoint };
@@ -1614,11 +1632,15 @@ function winAscendant(g, b, e) {
  * region is REG_W x REG_H tiles with cliffs around its edge; neighbouring
  * regions are joined by a passage, and a passage into a locked region is
  * sealed by a magic barrier until its dungeon's final boss falls.
- * Everything is generated from a fixed seed, so the map never changes.
+ *
+ * A region holds a dungeon, two towns (one with a forge where the area has
+ * a station), a landmark, treasure chests and ~110 enemy spawn points, a
+ * few of them Elite. Everything is generated from fixed seeds, so the map
+ * is the same on every load.
  * ========================================================================= */
 const TILE = 40;
-const REG_W = 32;
-const REG_H = 20;
+const REG_W = 128;
+const REG_H = 80;
 const GRID_W = 5;
 const GRID_H = 3;
 const WORLD_TW = REG_W * GRID_W; // tiles
@@ -1632,6 +1654,8 @@ const REGION_GRID = [
     ['coast-1', 'ruins-1', 'ruins-2', 'tundra-1', null],
 ];
 const T_GROUND = 0, T_PATH = 1, T_SOLID = 2, T_WALL = 3, T_LIQUID = 4, T_BUILD = 5;
+/** Map layout version: bumped when the world changes shape, so old saved positions are dropped. */
+const MAP_VERSION = 3;
 const REGION_IDS = REGION_GRID.flat().filter((id) => !!id);
 function regionCell(id) {
     for (let ry = 0; ry < GRID_H; ry++)
@@ -1654,13 +1678,32 @@ function seeded(seed) {
 }
 /** How much of a region's clutter is liquid (water, lava, void) rather than rock or trees. */
 const LIQUID_SHARE = {
-    Haven: 0.1, Forest: 0.12, Coast: 0.45, Ruins: 0.15, Desert: 0,
+    Haven: 0.1, Forest: 0.12, Coast: 0.45, Ruins: 0.15, Desert: 0.02,
     Volcano: 0.4, Tundra: 0.25, Sky: 0.35, Rift: 0.35,
 };
+/** Clutter clusters per region (scaled for 128x80) and big lakes. */
 const CLUTTER = {
-    Haven: 10, Forest: 34, Coast: 24, Ruins: 26, Desert: 18,
-    Volcano: 26, Tundra: 24, Sky: 24, Rift: 28,
+    Haven: 160, Forest: 560, Coast: 380, Ruins: 420, Desert: 280,
+    Volcano: 420, Tundra: 380, Sky: 380, Rift: 440,
 };
+const LAKES = {
+    Haven: 2, Forest: 5, Coast: 12, Ruins: 3, Desert: 1, Volcano: 9, Tundra: 7, Sky: 10, Rift: 9,
+};
+/** Each biome's set piece, and whether it is a lake crossed by a bridge. */
+const LANDMARKS = {
+    Haven: { name: 'Lantern Fountain', lake: false },
+    Forest: { name: 'The Eldest Tree', lake: false },
+    Coast: { name: 'The Drowned Ship', lake: false },
+    Ruins: { name: 'Fallen Colossus', lake: false },
+    Desert: { name: 'Mirror Oasis', lake: true },
+    Volcano: { name: 'Lake of Cinders', lake: true },
+    Tundra: { name: 'The Still Lake', lake: true },
+    Sky: { name: 'Wind Shrine', lake: false },
+    Rift: { name: 'The Monolith', lake: false },
+};
+const TOWN_NAMES = ['Ashford', 'Brightwell', 'Cindervale', 'Dunmere', 'Elderholm', 'Fernwick', 'Glimmerdeep', 'Hollowmere',
+    'Ironbrook', 'Juniper Rest', 'Kestrel Point', 'Lowmarsh', 'Mistral', 'Northwatch', 'Oakenshaw', 'Pale Harbour',
+    'Quietwater', 'Rimeholt', 'Stormhaven', 'Thistledown', 'Umberfield', 'Verdant', 'Windrest', 'Yarrow', 'Zephyr Hill', 'Harrow Inn'];
 function buildOverworld() {
     const n = WORLD_TW * WORLD_TH;
     const tiles = new Uint8Array(n).fill(T_WALL);
@@ -1671,47 +1714,52 @@ function buildOverworld() {
     for (let i = 0; i < n; i++)
         variant[i] = Math.floor(rnd0() * 256);
     const at = (tx, ty) => ty * WORLD_TW + tx;
-    const set = (tx, ty, v) => {
-        if (tx >= 0 && ty >= 0 && tx < WORLD_TW && ty < WORLD_TH)
-            tiles[at(tx, ty)] = v;
-    };
+    const inside = (tx, ty) => tx >= 0 && ty >= 0 && tx < WORLD_TW && ty < WORLD_TH;
+    const set = (tx, ty, v) => { if (inside(tx, ty))
+        tiles[at(tx, ty)] = v; };
     // 1. regions: open ground inside a ring of cliffs
     for (let ry = 0; ry < GRID_H; ry++)
         for (let rx = 0; rx < GRID_W; rx++) {
             const id = REGION_GRID[ry][rx];
+            if (!id)
+                continue;
             const ox = rx * REG_W, oy = ry * REG_H;
             for (let y = 0; y < REG_H; y++)
                 for (let x = 0; x < REG_W; x++) {
                     const i = at(ox + x, oy + y);
-                    if (!id)
-                        continue;
                     region[i] = REGION_IDS.indexOf(id);
                     const edge = x === 0 || y === 0 || x === REG_W - 1 || y === REG_H - 1;
                     tiles[i] = edge ? T_WALL : T_GROUND;
                 }
         }
-    // 2. clutter: clusters of trees / rocks / pillars and pools of liquid
+    // 2. clutter: lakes, then clusters of trees / rocks / pillars and small pools
+    const blob = (cx, cy, rx, ry, v, ox, oy, r) => {
+        for (let y = -ry; y <= ry; y++)
+            for (let x = -rx; x <= rx; x++) {
+                const k = (x * x) / (rx * rx + 0.5) + (y * y) / (ry * ry + 0.5);
+                if (k > 1 + (r() - 0.5) * 0.35)
+                    continue;
+                const tx = cx + x, ty = cy + y;
+                if (tx <= ox || ty <= oy || tx >= ox + REG_W - 1 || ty >= oy + REG_H - 1)
+                    continue;
+                set(tx, ty, v);
+            }
+    };
     for (const id of REGION_IDS) {
         const { rx, ry } = regionCell(id);
         const loc = locById(id);
         const r = seeded(100 + REGION_IDS.indexOf(id) * 17);
         const ox = rx * REG_W, oy = ry * REG_H;
+        for (let k = 0; k < LAKES[loc.theme]; k++) {
+            const lrx = 3 + Math.floor(r() * 5), lry = 2 + Math.floor(r() * 4);
+            blob(ox + 8 + Math.floor(r() * (REG_W - 16)), oy + 6 + Math.floor(r() * (REG_H - 12)), lrx, lry, T_LIQUID, ox, oy, r);
+        }
         for (let k = 0; k < CLUTTER[loc.theme]; k++) {
             const cx = ox + 2 + Math.floor(r() * (REG_W - 4));
             const cy = oy + 2 + Math.floor(r() * (REG_H - 4));
             const liquid = r() < LIQUID_SHARE[loc.theme];
             const rad = liquid ? 1 + Math.floor(r() * 2) : Math.floor(r() * 2);
-            for (let y = -rad; y <= rad; y++)
-                for (let x = -rad; x <= rad; x++) {
-                    if (x * x + y * y > rad * rad + (liquid ? 1 : 0))
-                        continue;
-                    if (r() < 0.2 && (x || y))
-                        continue; // ragged edges
-                    const tx = cx + x, ty = cy + y;
-                    if (tx <= ox || ty <= oy || tx >= ox + REG_W - 1 || ty >= oy + REG_H - 1)
-                        continue;
-                    set(tx, ty, liquid ? T_LIQUID : T_SOLID);
-                }
+            blob(cx, cy, rad, rad, liquid ? T_LIQUID : T_SOLID, ox, oy, r);
         }
     }
     // 3. passages between neighbouring regions, carved through both cliffs
@@ -1720,6 +1768,7 @@ function buildOverworld() {
     for (const id of REGION_IDS)
         doorsOf[id] = [];
     const rp = seeded(4242);
+    const PW = 6;
     for (let ry = 0; ry < GRID_H; ry++)
         for (let rx = 0; rx < GRID_W; rx++) {
             const a = REGION_GRID[ry][rx];
@@ -1728,35 +1777,35 @@ function buildOverworld() {
             const east = rx + 1 < GRID_W ? REGION_GRID[ry][rx + 1] : null;
             const south = ry + 1 < GRID_H ? REGION_GRID[ry + 1][rx] : null;
             if (east) {
-                const py = ry * REG_H + 8 + Math.floor(rp() * 2);
+                const py = ry * REG_H + 34 + Math.floor(rp() * 8);
                 const xa = rx * REG_W + REG_W - 1, xb = xa + 1;
                 const p = { a, b: east, tiles: [] };
-                for (let y = py; y < py + 4; y++)
+                for (let y = py; y < py + PW; y++)
                     for (const x of [xa, xb]) {
                         set(x, y, T_PATH);
                         p.tiles.push(at(x, y));
                     }
                 passages.push(p);
-                doorsOf[a].push({ x: xa, y: py + 1 });
-                doorsOf[east].push({ x: xb, y: py + 1 });
+                doorsOf[a].push({ x: xa, y: py + 2 });
+                doorsOf[east].push({ x: xb, y: py + 2 });
             }
             if (south) {
-                const px = rx * REG_W + 12 + Math.floor(rp() * 6);
+                const px = rx * REG_W + 56 + Math.floor(rp() * 12);
                 const ya = ry * REG_H + REG_H - 1, yb = ya + 1;
                 const p = { a, b: south, tiles: [] };
-                for (let x = px; x < px + 4; x++)
+                for (let x = px; x < px + PW; x++)
                     for (const y of [ya, yb]) {
                         set(x, y, T_PATH);
                         p.tiles.push(at(x, y));
                     }
                 passages.push(p);
-                doorsOf[a].push({ x: px + 1, y: ya });
-                doorsOf[south].push({ x: px + 1, y: yb });
+                doorsOf[a].push({ x: px + 2, y: ya });
+                doorsOf[south].push({ x: px + 2, y: yb });
             }
         }
     passages.forEach((p, i) => { for (const t of p.tiles)
         passageOf[t] = i; });
-    // 4. roads: every passage and building joins the middle of its region
+    // 4. roads: every passage, town, dungeon and landmark joins the middle of its region
     const carve = (x0, y0, x1, y1) => {
         // an L: along x at y0, then along y at x1, three tiles wide
         const sx = Math.sign(x1 - x0) || 1, sy = Math.sign(y1 - y0) || 1;
@@ -1774,32 +1823,11 @@ function buildOverworld() {
             }
     };
     const buildings = [];
-    for (const id of REGION_IDS) {
-        const { rx, ry } = regionCell(id);
-        const ox = rx * REG_W, oy = ry * REG_H;
-        const cx = ox + 16, cy = oy + 10;
-        const loc = locById(id);
-        for (const d of doorsOf[id]) {
-            // walk in from the passage a couple of tiles before turning
-            const inX = d.x === ox ? ox + 2 : d.x === ox + REG_W - 1 ? ox + REG_W - 3 : d.x;
-            const inY = d.y === oy ? oy + 2 : d.y === oy + REG_H - 1 ? oy + REG_H - 3 : d.y;
-            carve(d.x, d.y, inX, inY);
-            carve(inX, inY, cx, cy);
-        }
-        // the dungeon (or, in the Haven, the colosseum) sits top-right; doors face down
-        const bigKind = loc.tier === 0 ? 'colosseum' : 'dungeon';
-        buildings.push(placeBuilding(bigKind, id, ox + 22, oy + 3, 5, 4, 'down'));
-        carve(ox + 24, oy + 8, cx, cy);
-        // a town with a forge, bottom-left; door faces up
-        if (loc.hasCraftingStation) {
-            buildings.push(placeBuilding('forge', id, ox + 4, oy + 14, 5, 3, 'up'));
-            carve(ox + 6, oy + 12, cx, cy);
-        }
-    }
-    function placeBuilding(kind, id, tx, ty, tw, th, face) {
+    let townName = 0;
+    function placeBuilding(kind, id, name, tx, ty, tw, th, face) {
         // clear a yard around it, then stamp the footprint
-        for (let y = ty - 2; y < ty + th + 2; y++)
-            for (let x = tx - 2; x < tx + tw + 2; x++) {
+        for (let y = ty - 3; y < ty + th + 3; y++)
+            for (let x = tx - 3; x < tx + tw + 3; x++) {
                 if (tiles[at(x, y)] === T_SOLID || tiles[at(x, y)] === T_LIQUID)
                     tiles[at(x, y)] = T_GROUND;
             }
@@ -1808,37 +1836,49 @@ function buildOverworld() {
                 tiles[at(x, y)] = T_BUILD;
         const dx = tx + Math.floor(tw / 2);
         const dy = face === 'down' ? ty + th : ty - 1;
-        return {
-            kind, region: id, tx, ty, tw, th,
-            doorX: dx * TILE + TILE / 2, doorY: dy * TILE + TILE / 2,
-        };
+        const b = { kind, region: id, name, tx, ty, tw, th, doorX: dx * TILE + TILE / 2, doorY: dy * TILE + TILE / 2 };
+        buildings.push(b);
+        return b;
     }
-    // 5. enemy spawn points: open ground, away from buildings and roads' ends
-    const spawnPoints = [];
     for (const id of REGION_IDS) {
-        if (locById(id).tier === 0)
-            continue; // the Haven is safe
         const { rx, ry } = regionCell(id);
-        const r = seeded(900 + REGION_IDS.indexOf(id) * 31);
         const ox = rx * REG_W, oy = ry * REG_H;
-        let tries = 0;
-        let count = 0;
-        while (count < 9 && tries++ < 400) {
-            const tx = ox + 2 + Math.floor(r() * (REG_W - 4));
-            const ty = oy + 2 + Math.floor(r() * (REG_H - 4));
-            const t = tiles[at(tx, ty)];
-            if (t !== T_GROUND && t !== T_PATH)
-                continue;
-            const px = tx * TILE + TILE / 2, py = ty * TILE + TILE / 2;
-            if (buildings.some((b) => dist(px, py, b.doorX, b.doorY) < 6 * TILE))
-                continue;
-            if (spawnPoints.some((s) => dist(px, py, s.x, s.y) < 4 * TILE))
-                continue;
-            spawnPoints.push({ region: id, x: px, y: py });
-            count++;
+        const cx = ox + 64, cy = oy + 40;
+        const loc = locById(id);
+        for (const d of doorsOf[id]) {
+            const inX = d.x === ox ? ox + 3 : d.x === ox + REG_W - 1 ? ox + REG_W - 4 : d.x;
+            const inY = d.y === oy ? oy + 3 : d.y === oy + REG_H - 1 ? oy + REG_H - 4 : d.y;
+            carve(d.x, d.y, inX, inY);
+            carve(inX, inY, cx, cy);
+        }
+        // the dungeon (or, in the Haven, the colosseum): top-right, door facing down
+        if (loc.tier === 0)
+            placeBuilding('colosseum', id, 'Colosseum', ox + 96, oy + 12, 7, 5, 'down');
+        else
+            placeBuilding('dungeon', id, `${loc.name} dungeon`, ox + 96, oy + 12, 7, 5, 'down');
+        carve(ox + 99, oy + 18, cx, cy);
+        // two towns along the bottom; the first has the forge where there is one
+        placeBuilding(loc.hasCraftingStation ? 'forge' : 'town', id, loc.hasCraftingStation ? (loc.stationName || 'Forge') : TOWN_NAMES[townName++ % TOWN_NAMES.length], ox + 18, oy + 58, 7, 4, 'up');
+        carve(ox + 21, oy + 55, cx, cy);
+        placeBuilding('town', id, TOWN_NAMES[townName++ % TOWN_NAMES.length], ox + 100, oy + 60, 7, 4, 'up');
+        carve(ox + 103, oy + 57, cx, cy);
+        // the landmark: top-left
+        const lm = LANDMARKS[loc.theme];
+        if (lm.lake) {
+            const lr = seeded(700 + REGION_IDS.indexOf(id));
+            blob(ox + 26, oy + 18, 9, 6, T_LIQUID, ox, oy, lr);
+            for (let x = ox + 15; x <= ox + 37; x++)
+                for (let d = -1; d <= 0; d++)
+                    tiles[at(x, oy + 18 + d)] = T_PATH; // the bridge
+            buildings.push({ kind: 'landmark', region: id, name: lm.name, tx: ox + 26, ty: oy + 18, tw: 0, th: 0, doorX: (ox + 26) * TILE, doorY: (oy + 18) * TILE });
+            carve(ox + 37, oy + 18, cx, cy);
+        }
+        else {
+            placeBuilding('landmark', id, lm.name, ox + 23, oy + 15, 6, 5, 'down');
+            carve(ox + 26, oy + 21, cx, cy);
         }
     }
-    // Drop any spawn point walled off in a pocket (flood from the Haven, all passages open).
+    // Everything reachable from the Haven with every passage open.
     const reach = new Uint8Array(n);
     const hub = buildings.find((b) => b.kind === 'forge' && b.region === HUB_ID);
     const stack = [[Math.floor(hub.doorX / TILE), Math.floor(hub.doorY / TILE)]];
@@ -1847,7 +1887,7 @@ function buildOverworld() {
         const [x, y] = stack.pop();
         for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
             const nx = x + dx, ny = y + dy;
-            if (nx < 0 || ny < 0 || nx >= WORLD_TW || ny >= WORLD_TH)
+            if (!inside(nx, ny))
                 continue;
             const i = at(nx, ny), t = tiles[i];
             if (reach[i] || (t !== T_GROUND && t !== T_PATH))
@@ -1856,8 +1896,45 @@ function buildOverworld() {
             stack.push([nx, ny]);
         }
     }
-    const reachable = spawnPoints.filter((sp) => reach[at(Math.floor(sp.x / TILE), Math.floor(sp.y / TILE))]);
-    return { tiles, region, passageOf, passages, buildings, spawnPoints: reachable, variant };
+    // 5. enemy spawn points (a few Elite) and treasure chests, on reachable ground
+    const spawnPoints = [];
+    const chests = [];
+    const nearTown = (px, py, r) => buildings.some((b) => b.kind !== 'landmark' && b.region && dist(px, py, b.doorX, b.doorY) < r);
+    for (const id of REGION_IDS) {
+        const { rx, ry } = regionCell(id);
+        const r = seeded(900 + REGION_IDS.indexOf(id) * 31);
+        const ox = rx * REG_W, oy = ry * REG_H;
+        const pickSpot = (minGap, list, avoid, tries) => {
+            for (let k = 0; k < tries; k++) {
+                const tx = ox + 3 + Math.floor(r() * (REG_W - 6));
+                const ty = oy + 3 + Math.floor(r() * (REG_H - 6));
+                const t = tiles[at(tx, ty)];
+                if ((t !== T_GROUND && t !== T_PATH) || !reach[at(tx, ty)])
+                    continue;
+                const px = tx * TILE + TILE / 2, py = ty * TILE + TILE / 2;
+                if (nearTown(px, py, avoid))
+                    continue;
+                if (list.some((s) => dist(px, py, s.x, s.y) < minGap))
+                    continue;
+                return { x: px, y: py };
+            }
+            return null;
+        };
+        if (locById(id).tier > 0) {
+            for (let k = 0; k < 110; k++) {
+                const p = pickSpot(5 * TILE, spawnPoints, 9 * TILE, 60);
+                if (p)
+                    spawnPoints.push({ region: id, x: p.x, y: p.y, elite: k % 12 === 11 });
+            }
+        }
+        const nChests = locById(id).tier > 0 ? 14 : 4;
+        for (let k = 0; k < nChests; k++) {
+            const p = pickSpot(12 * TILE, chests, 6 * TILE, 200);
+            if (p)
+                chests.push({ id: `${id}#${k}`, region: id, x: p.x, y: p.y });
+        }
+    }
+    return { tiles, region, passageOf, passages, buildings, spawnPoints, chests, variant };
 }
 const WORLD_MAP = buildOverworld();
 // Neighbours come from the region grid in overworld.ts.
@@ -1934,6 +2011,10 @@ function collideWorld(w, o) {
 function buildingOf(kind, region) {
     return WORLD_MAP.buildings.find((b) => b.kind === kind && b.region === region) || null;
 }
+/** Buildings you can warp to once you have been there. */
+function isWaypoint(b) { return b.kind !== 'landmark'; }
+/** Towns and forges: rest stops and checkpoints. */
+function isTown(b) { return b.kind === 'forge' || b.kind === 'town'; }
 /** Where a new game (and a lost checkpoint) begins: outside the Haven's forge. */
 function havenStart() {
     const f = buildingOf('forge', HUB_ID);
@@ -1952,6 +2033,18 @@ const RESPAWN_TIME = 28; // seconds before a killed enemy comes back
 function makeSpawners() {
     return WORLD_MAP.spawnPoints.map((p) => ({ ...p, enemy: null, cooldown: 0 }));
 }
+/** Elites: rarer, tougher, glowing, and much better loot. */
+function makeElite(e) {
+    e.elite = true;
+    e.maxHp = Math.round(e.maxHp * 2.6);
+    e.hp = e.maxHp;
+    e.str *= 1.35;
+    e.edef *= 1.3;
+    e.exp = Math.round(e.exp * 3);
+    e.radius = Math.round(e.radius * 1.25);
+    e.maxPoise = Math.round(e.maxPoise * 2);
+    e.poise = e.maxPoise;
+}
 /**
  * Keep the world populated around the player: fill empty spawners that are
  * near but off-screen, recycle ones far away, and start respawn timers.
@@ -1962,7 +2055,7 @@ function tickSpawners(g, dt) {
         if (s.enemy) {
             if (!s.enemy.alive) {
                 s.enemy = null;
-                s.cooldown = RESPAWN_TIME;
+                s.cooldown = s.elite ? RESPAWN_TIME * 3 : RESPAWN_TIME;
             }
             else if (!s.enemy.aggro && dist(s.enemy.x, s.enemy.y, p.x, p.y) > DESPAWN_FAR) {
                 const i = g.enemies.indexOf(s.enemy);
@@ -1987,6 +2080,8 @@ function tickSpawners(g, dt) {
         e.aggro = false;
         e.homeX = s.x;
         e.homeY = s.y;
+        if (s.elite)
+            makeElite(e);
         e.state = 'chase';
         s.enemy = e;
         g.enemies.push(e);
@@ -2049,73 +2144,312 @@ function waystoneX(a, i, n) {
     return a.x + a.w / 2 + (i - (n - 1) / 2) * 150;
 }
 /* =========================================================================
- * music.ts — melodic neoclassical metal, synthesised live.
+ * music.ts — the score. An orchestral, melody-first soundtrack in the
+ * spirit of Kingdom Hearts, synthesised live: piano, strings, flute,
+ * bells, harp and friends through a shared reverb.
  *
- * Melody-first: the twin leads and the harpsichord carry the tune, the
- * guitar is a bed underneath them, and there are no blast beats anywhere.
- * Five intensity layers still ride the fight, but the top of the ladder is
- * "driving", not "assault". Sections rotate in a reshuffled order so the
- * loop never lands the same way twice.
+ * Every zone has its own theme (key, tempo, meter, instruments, tune).
+ * Each theme is two 8-bar sections (A, B) that loop. Exploring, you hear
+ * the tune over its accompaniment; when a fight starts, a combat layer
+ * (drums, a driving bass, brass stabs) fades in on the next bar and the
+ * melody moves to a brighter instrument — then fades back out after.
+ *
+ * Notation, so the tunes stay readable:
+ *   chords   bars split by '|'; two chords in a bar split by a space.
+ *            Roman numerals relative to the key: I ii iii IV V vi viio,
+ *            with b/# prefixes and 7 / maj7 / sus4 / add9 suffixes.
+ *   melody   bars split by '|'; each note is degree:eighths, e.g. 5:2.
+ *            ' raises an octave, , lowers one, #/b alter; r is a rest.
  * ========================================================================= */
-const SCALE = [0, 2, 3, 5, 7, 8, 11]; // A harmonic minor
-const ROOT_HZ = 55; // A1
-function scaleHz(deg, oct) {
-    const o = Math.floor(deg / 7);
-    const d = ((deg % 7) + 7) % 7;
-    return ROOT_HZ * Math.pow(2, (SCALE[d] + (oct + o) * 12) / 12);
-}
-function semiHz(semi, oct) {
-    return ROOT_HZ * Math.pow(2, (semi + oct * 12) / 12);
-}
-/* ------------------------------------------------------------- patterns */
-// 16 slots per bar. 0 rest · 1 muted chug · 2 sustained power chord ·
-// 3 octave pop · 4 tremolo. The guitar sits under the melody, so most of
-// these are sparse on purpose.
-const RIFFS = [
-    [2, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0], // sustained, twice a bar
-    [1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 2, 0, 0, 0], // light gallop
-    [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], // tremolo — used sparingly
-    [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1], // half-time
-    [1, 0, 0, 1, 0, 1, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0], // syncopated
-    [2, 0, 1, 0, 1, 0, 1, 0, 2, 0, 1, 0, 1, 0, 1, 1], // driving eighths
-];
-const SECTIONS = {
-    A: { id: 'A', chords: [0, 0, 8, 10], riff: [0, 0, 5, 5], lead: true, sweep: false, half: false },
-    B: { id: 'B', chords: [0, 3, 5, 7], riff: [1, 1, 0, 5], lead: true, sweep: false, half: false },
-    C: { id: 'C', chords: [8, 10, 0, 0], riff: [2, 2, 5, 5], lead: true, sweep: false, half: false },
-    D: { id: 'D', chords: [0, 5, 8, 3], riff: [0, 0, 5, 1], lead: true, sweep: false, half: false },
-    E: { id: 'E', chords: [0, 0, 10, 8], riff: [3, 3, 3, 4], lead: false, sweep: false, half: true },
-    F: { id: 'F', chords: [0, 8, 5, 11], riff: [5, 5, 2, 2], lead: true, sweep: true, half: false },
+const MAJOR = [0, 2, 4, 5, 7, 9, 11];
+const MINOR = [0, 2, 3, 5, 7, 8, 10];
+const DORIAN = [0, 2, 3, 5, 7, 9, 10];
+const LYDIAN = [0, 2, 4, 6, 7, 9, 11];
+const PHRYG_DOM = [0, 1, 4, 5, 7, 8, 10];
+const TRACKS = {
+    // A piano lullaby: the first thing you hear.
+    title: {
+        id: 'title', name: "Heart's Lantern", bpm: 72, meter: 4, tonic: 74, scale: MAJOR,
+        melody: 'piano', lead: 'piano', double: 'strings', arp: 'harp', arpStyle: 'flow', pad: 'pad',
+        A: {
+            chords: 'I | V | vi | iii | IV | I | ii | V',
+            melody: "3:4 2:2 1:2 | 7,:2 1:2 2:4 | 3:3 4:1 3:2 2:2 | 3:6 r:2 | 4:4 5:2 6:2 | 5:3 4:1 3:4 | 2:2 3:2 4:2 6:2 | 5:6 r:2",
+        },
+        B: {
+            chords: 'IV | V | iii | vi | ii | V | I | I',
+            melody: "1':4 7:2 6:2 | 5:3 6:1 7:4 | 7:3 5:1 3:4 | 4:2 3:2 2:2 6,:2 | 2:3 3:1 4:4 | 5:2 4:2 3:2 2:2 | 3:4 1:4 | 1:6 r:2",
+        },
+    },
+    // The Haven: a small-town waltz on celesta and pizzicato.
+    haven: {
+        id: 'haven', name: 'Lanterns of the Haven', bpm: 150, meter: 3, tonic: 77, scale: MAJOR,
+        melody: 'bell', lead: 'flute', double: 'flute', arp: 'pizz', arpStyle: 'waltz', pad: 'pad',
+        A: {
+            chords: 'I | I | IV | I | ii | V | I | V',
+            melody: "5:2 3:2 5:2 | 1':4 7:2 | 6:2 4:2 6:2 | 5:6 | 4:2 6:2 5:2 | 4:2 3:2 2:2 | 3:2 1:2 3:2 | 2:6",
+        },
+        B: {
+            chords: 'vi | iii | IV | I | ii | V7 | I | I',
+            melody: "6:3 5:1 6:2 | 7:2 5:2 3:2 | 4:2 5:2 6:2 | 1':4 5:2 | 6:2 5:2 4:2 | 3:2 2:2 7,:2 | 1:6 | r:6",
+        },
+    },
+    // Forest: flute over a rippling harp, light on its feet.
+    forest: {
+        id: 'forest', name: 'Where the Old Trees Listen', bpm: 96, meter: 4, tonic: 79, scale: MAJOR,
+        melody: 'flute', lead: 'strings', double: 'piano', arp: 'harp', arpStyle: 'flow', pad: 'pad',
+        A: {
+            chords: 'I | IV | vi | V | I | IV | ii V | I',
+            melody: "5:2 6:1 5:1 3:2 5:2 | 6:3 5:1 4:2 3:2 | 3:2 5:2 1':4 | 7:2 6:2 5:4 | 5:2 6:1 5:1 3:2 1':2 | 2':3 1':1 6:2 1':2 | 6:2 1':2 7:2 2':2 | 1':6 r:2",
+        },
+        B: {
+            chords: 'vi | IV | I | V | vi | IV | I V | I',
+            melody: "3':4 2':2 1':2 | 1':3 7:1 6:4 | 5:2 1':2 3':4 | 2':6 r:2 | 3':3 2':1 1':2 7:2 | 6:2 1':2 4':4 | 3':2 1':2 2':2 7:2 | 1':6 r:2",
+        },
+    },
+    // Coast: a lilting 6/8 on marimba and flute, with a shaker.
+    coast: {
+        id: 'coast', name: 'Saltglass Morning', bpm: 100, meter: 6, tonic: 81, scale: MAJOR,
+        melody: 'flute', lead: 'strings', double: 'marimba', arp: 'marimba', arpStyle: 'roll68', pad: 'pad', shaker: true,
+        A: {
+            chords: 'I | vi | IV | V | I | vi | IV V | I',
+            melody: "3:3 5:3 | 6:2 5:1 3:3 | 4:3 6:3 | 5:6 | 3:2 4:1 5:3 | 1':3 7:2 6:1 | 6:3 7:3 | 1':6",
+        },
+        B: {
+            chords: 'IV | I | V | vi | IV | I | ii V | I',
+            melody: "1':3 6:3 | 5:2 3:1 1:3 | 2:3 5:3 | 3:6 | 4:2 5:1 6:3 | 1':2 7:1 5:3 | 4:3 2:3 | 1:6",
+        },
+    },
+    // Ruins: dorian strings over a slow piano — old stone, old memories.
+    ruins: {
+        id: 'ruins', name: 'Verses in Stone', bpm: 84, meter: 4, tonic: 62, scale: DORIAN,
+        melody: 'strings', lead: 'strings', double: 'piano', arp: 'piano', arpStyle: 'flow', pad: 'pad',
+        A: {
+            chords: 'i | bVII | IV | i | i | bVII | bVI | V',
+            melody: "5:4 3:2 1:2 | 2:2 3:2 4:4 | 6:3 5:1 4:4 | 5:6 r:2 | 1':4 7:2 6:2 | 5:3 4:1 3:4 | 3:4 1:4 | #7,:4 2:4",
+        },
+        B: {
+            chords: 'bVI | bVII | i | i | bVI | bVII | V | V',
+            melody: "1':4 7:2 1':2 | 2':4 1':2 7:2 | 1':3 7:1 5:4 | 3:2 4:2 5:4 | 4':4 3':2 1':2 | 2':4 5:4 | #7:4 2':4 | 5:6 r:2",
+        },
+    },
+    // Desert: an oud-like pluck in phrygian dominant, hand drums underneath.
+    desert: {
+        id: 'desert', name: 'Glass and Wind', bpm: 100, meter: 4, tonic: 64, scale: PHRYG_DOM,
+        melody: 'oud', lead: 'strings', double: 'flute', arp: 'harp', arpStyle: 'slow', pad: 'choir', shaker: true,
+        A: {
+            chords: 'I | bII | I | I | iv | bII | I | I',
+            melody: "1:1 2:1 3:2 2:1 1:1 3:2 | 4:2 3:2 2:4 | 3:2 5:2 6:1 5:1 3:2 | 2:2 1:6 | 4:2 6:2 1':4 | 7:2 6:2 4:4 | 5:3 3:1 2:2 1:2 | 1:6 r:2",
+        },
+        B: {
+            chords: 'bVI | bvii | bVI | bII | iv | bII | I | I',
+            melody: "1':4 7:2 6:2 | 7:3 6:1 4:4 | 6:2 1':2 6:4 | 4:2 6:2 2:4 | 4:3 3:1 4:2 6:2 | 6:3 4:1 2:4 | 2:2 3:2 2:2 1:2 | 1:6 r:2",
+        },
+    },
+    // Volcano: heroic and warm — a string ostinato and a noble horn line.
+    volcano: {
+        id: 'volcano', name: 'Embers Rising', bpm: 116, meter: 4, tonic: 72, scale: MINOR,
+        melody: 'brass', lead: 'brass', double: 'strings', arp: 'strings', arpStyle: 'ostinato', pad: 'pad',
+        A: {
+            chords: 'i | bVI | bIII | bVII | i | bVI | iv | V',
+            melody: "1:3 2:1 3:2 5:2 | 6:4 5:2 3:2 | 5:3 3:1 2:2 3:2 | 4:6 r:2 | 1':3 7:1 6:2 5:2 | 6:3 5:1 3:4 | 4:2 6:2 1':4 | #7:4 5:4",
+        },
+        B: {
+            chords: 'bVI | bVII | i | i | bVI | bVII | V | V',
+            melody: "3':4 2':2 1':2 | 2':3 1':1 7:4 | 1':4 5:4 | 3:2 4:2 5:4 | 6:2 1':2 3':4 | 4':3 3':1 2':4 | 2':4 #7:4 | 5:6 r:2",
+        },
+    },
+    // Tundra: slow bells and piano, like breath on cold glass.
+    tundra: {
+        id: 'tundra', name: 'Frostveil Lullaby', bpm: 70, meter: 4, tonic: 71, scale: MINOR,
+        melody: 'bell', lead: 'strings', double: 'piano', arp: 'harp', arpStyle: 'slow', pad: 'pad',
+        A: {
+            chords: 'i | bVII | bVI | bVII | i | iv | bVI | V',
+            melody: "5:4 1':4 | 7:4 6:2 5:2 | 6:6 5:2 | 4:4 2:4 | 3:3 4:1 5:4 | 6:3 5:1 4:4 | 3:4 1:4 | 2:4 #7,:4",
+        },
+        B: {
+            chords: 'bIII | bVII | bVI | i | bIII | bVII | iv V | i',
+            melody: "3:2 5:2 7:4 | 2':4 7:4 | 6:4 5:2 3:2 | 1:6 r:2 | 5:3 6:1 7:4 | 1':4 7:2 6:2 | 6:2 4:2 2:4 | 1:6 r:2",
+        },
+    },
+    // Sky: lydian and soaring — strings lifting over harp.
+    sky: {
+        id: 'sky', name: 'Above the Storm', bpm: 104, meter: 4, tonic: 75, scale: LYDIAN,
+        melody: 'strings', lead: 'brass', double: 'flute', arp: 'harp', arpStyle: 'flow', pad: 'choir',
+        A: {
+            chords: 'I | II | I | II | vi | IV | V | V',
+            melody: "5:4 3:2 5:2 | 6:3 5:1 4:4 | 3:3 2:1 1:4 | 2:2 4:2 6:4 | 1':4 7:2 6:2 | 6:4 1':4 | 7:3 6:1 5:4 | 2:6 r:2",
+        },
+        B: {
+            chords: 'vi | V | IV | I | vi | II | IV V | I',
+            melody: "3':4 2':2 1':2 | 2':3 1':1 7:4 | 6:4 1':4 | 5:6 r:2 | 1':3 2':1 3':4 | 4':4 2':4 | 1':4 7:4 | 1':6 r:2",
+        },
+    },
+    // The Rift: strange and beautiful — bells and a choir in the dark.
+    rift: {
+        id: 'rift', name: 'The Space Between Stars', bpm: 76, meter: 4, tonic: 66, scale: MINOR,
+        melody: 'bell', lead: 'strings', double: 'choir', arp: 'piano', arpStyle: 'slow', pad: 'choir',
+        A: {
+            chords: 'i | bVI | bIII | bVII | i | bVI | iv | iv',
+            melody: "1:2 3:2 5:4 | 6:6 5:2 | 5:4 3:4 | 2:4 7,:4 | 1:2 5:2 1':4 | 1':2 7:2 6:4 | 4:4 6:2 1':2 | 7:6 r:2",
+        },
+        B: {
+            chords: 'bVI | bVII | i | i | bVI | bVII | V | V',
+            melody: "6:4 1':4 | 7:4 2':4 | 3':6 2':2 | 1':6 r:2 | 1':3 6:1 3':4 | 2':4 7:4 | #7:4 5:4 | 5:6 r:2",
+        },
+    },
+    // Dungeons: low piano and cello, keeping its voice down.
+    dungeon: {
+        id: 'dungeon', name: 'Beneath', bpm: 92, meter: 4, tonic: 57, scale: MINOR,
+        melody: 'strings', lead: 'brass', double: 'piano', arp: 'piano', arpStyle: 'low', pad: 'pad',
+        A: {
+            chords: 'i | i | bVI | bVI | iv | iv | V | V',
+            melody: "1:6 2:2 | 3:6 r:2 | 3:4 2:2 1:2 | 6,:6 r:2 | 4:6 5:2 | 6:6 r:2 | 5:4 #7,:4 | 5,:6 r:2",
+        },
+        B: {
+            chords: 'bVI | bVII | i | i | bVI | bVII | V | V',
+            melody: "1':4 7:2 6:2 | 5:6 4:2 | 3:4 1:4 | 2:2 3:2 2:4 | 3:4 6:4 | 7:4 5:4 | #7:4 5:4 | 5:6 r:2",
+        },
+    },
+    // Bosses (and the colosseum): everything at once, still with a tune.
+    boss: {
+        id: 'boss', name: 'Crown of Thorns', bpm: 144, meter: 4, tonic: 62, scale: MINOR,
+        melody: 'brass', lead: 'brass', double: 'strings', arp: 'strings', arpStyle: 'ostinato', pad: 'choir', alwaysCombat: true,
+        A: {
+            chords: 'i | bVI | bVII | i | i | bVI | iv | V',
+            melody: "1:3 1:1 2:2 3:2 | 6,:2 1:2 3:4 | 2:3 3:1 4:4 | 5:6 r:2 | 1':3 7:1 5:2 3:2 | 6:3 5:1 4:4 | 4:2 6:2 1':4 | #7:4 5:4",
+        },
+        B: {
+            chords: 'bVI | bVII | bIII | bVI | iv | bVII | V | V',
+            melody: "1':4 3':4 | 2':6 1':2 | 7:4 1':2 3':2 | 1':4 6:4 | 4:3 6:1 1':4 | 2':3 1':1 7:4 | #7:4 2':4 | 5:6 r:2",
+        },
+    },
 };
-// Lead phrases as [scale degree, length in 16ths]; degrees run past 7 for the
-// octave above. These are the tune — everything else accompanies them.
-const PHRASES = [
-    [[7, 2], [6, 2], [4, 2], [6, 2], [7, 4], [9, 4]],
-    [[9, 2], [8, 1], [7, 1], [6, 2], [4, 2], [7, 4], [6, 4]],
-    [[4, 4], [6, 2], [7, 2], [9, 4], [8, 2], [7, 2]],
-    [[11, 2], [9, 2], [7, 2], [6, 2], [7, 2], [9, 2], [11, 4]],
-    [[7, 4], [9, 4], [8, 2], [7, 2], [6, 4]],
-    [[6, 2], [7, 2], [9, 4], [11, 2], [9, 2], [7, 4]],
-];
+/** Which theme plays where: [track, transpose in semitones, tempo multiplier]. */
+const ZONE_MUSIC = {
+    'hub': ['haven', 0, 1],
+    'forest-1': ['forest', 0, 1], 'forest-2': ['forest', -2, 0.94],
+    'coast-1': ['coast', 0, 1],
+    'ruins-1': ['ruins', 0, 1], 'ruins-2': ['ruins', 2, 1.04],
+    'desert-1': ['desert', 0, 1],
+    'volcano-1': ['volcano', 0, 1], 'volcano-2': ['volcano', 1, 1.06],
+    'tundra-1': ['tundra', 0, 1],
+    'sky-1': ['sky', 0, 1], 'sky-2': ['sky', 2, 1.05],
+    'rift-1': ['rift', 0, 1],
+};
+const NUMERALS = { i: 0, ii: 2, iii: 4, iv: 5, v: 7, vi: 9, vii: 11 };
+function parseChord(sym) {
+    const m = /^(b|#)?(vii|vi|v|iv|iii|ii|i|VII|VI|V|IV|III|II|I)(o|\+)?(maj7|7|sus4|sus2|add9|6)?$/.exec(sym);
+    if (!m)
+        throw new Error('bad chord ' + sym);
+    const acc = m[1] === 'b' ? -1 : m[1] === '#' ? 1 : 0;
+    const root = NUMERALS[m[2].toLowerCase()] + acc;
+    const minor = m[2] === m[2].toLowerCase();
+    let tones = m[3] === 'o' ? [0, 3, 6] : m[3] === '+' ? [0, 4, 8] : minor ? [0, 3, 7] : [0, 4, 7];
+    switch (m[4]) {
+        case 'maj7':
+            tones = [...tones, 11];
+            break;
+        case '7':
+            tones = [...tones, 10];
+            break;
+        case 'sus4':
+            tones = [0, 5, 7];
+            break;
+        case 'sus2':
+            tones = [0, 2, 7];
+            break;
+        case 'add9':
+            tones = [...tones, 14];
+            break;
+        case '6':
+            tones = [...tones, 9];
+            break;
+    }
+    return { root, tones };
+}
+function parseNote(tok, scale) {
+    const [head, lenS] = tok.split(':');
+    const len = parseInt(lenS, 10);
+    if (head === 'r')
+        return { semi: null, len };
+    const m = /^(#|b)?([1-7])([',]*)$/.exec(head);
+    if (!m)
+        throw new Error('bad note ' + tok);
+    const acc = m[1] === '#' ? 1 : m[1] === 'b' ? -1 : 0;
+    let oct = 0;
+    for (const ch of m[3])
+        oct += ch === "'" ? 1 : -1;
+    return { semi: scale[parseInt(m[2], 10) - 1] + acc + oct * 12, len };
+}
+function compileTrack(def) {
+    const barLen = def.meter === 4 ? 8 : 6;
+    const section = (sec) => {
+        const cb = sec.chords.split('|').map((b) => b.trim().split(/\s+/));
+        const mb = sec.melody.split('|').map((b) => b.trim().split(/\s+/));
+        return cb.map((chs, i) => {
+            const per = barLen / chs.length;
+            const chords = chs.map((c, k) => ({ at: k * per, len: per, ...parseChord(c) }));
+            const notes = [];
+            let at = 0;
+            for (const tok of mb[i] || []) {
+                const n = parseNote(tok, def.scale);
+                notes.push({ at, len: n.len, semi: n.semi });
+                at += n.len;
+            }
+            return { chords, notes };
+        });
+    };
+    return { def, barLen, sections: [section(def.A), section(def.B)] };
+}
+const COMPILED = {};
+for (const id of Object.keys(TRACKS))
+    COMPILED[id] = compileTrack(TRACKS[id]);
+function midiHz(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+/* --------------------------------------------------------------- engine */
+// Arpeggio shapes: chord-tone index per eighth (3 = root an octave up),
+// -1 is silence, 9 strikes the whole chord.
+const ARPS = {
+    flow: [0, 1, 2, 3, 2, 1, 2, 1],
+    waltz: [-1, -1, 9, -1, 9, -1],
+    roll68: [0, 1, 2, 3, 2, 1],
+    slow: [0, -1, 1, -1, 2, -1, 1, -1],
+    ostinato: [0, 0, 1, 0, 2, 0, 1, 0],
+    low: [0, 2, 1, 3, 0, 2, 1, 3],
+};
+// Combat drums per meter, one slot per eighth.
+const DRUMS = {
+    '4': { kick: [1, 0, 0, 0, 1, 0, 0, 1], snare: [0, 0, 1, 0, 0, 0, 1, 0], hat: [1, 1, 1, 1, 1, 1, 1, 1] },
+    '3': { kick: [1, 0, 0, 0, 0, 0], snare: [0, 0, 1, 0, 1, 0], hat: [1, 1, 1, 1, 1, 1] },
+    '6': { kick: [1, 0, 0, 0, 0, 0], snare: [0, 0, 0, 1, 0, 0], hat: [1, 1, 1, 1, 1, 1] },
+    'boss': { kick: [1, 0, 0, 1, 1, 0, 0, 0], snare: [0, 0, 1, 0, 0, 0, 1, 0], hat: [1, 1, 1, 1, 1, 1, 1, 1] },
+};
+// Where the brass stabs land in a bar, in eighths.
+const STABS = { 4: [0, 3, 6], 3: [0], 6: [0, 3] };
 class Music {
     constructor() {
         this.ctx = null;
         this.started = false;
-        this.muted = false;
-        this.volume = 0.3;
-        this.bpm = 132;
-        this.step = 0;
-        this.nextTime = 0;
         this.timer = null;
-        this.target = 1; // requested intensity 0-4
-        this.level = 1; // applied at bar boundaries
-        this.order = [];
-        this.orderIdx = 0;
-        this.phraseIdx = 0;
+        this.muted = false;
+        this.volume = 0.2;
+        this.ducked = false;
+        /** 0-4 as requested by the game; 2 and up brings in the combat layer. */
+        this.target = 0;
+        this.combat = false;
+        this.combatTail = 0; // bars left to keep scheduling the combat layer as it fades
+        this.track = COMPILED.title;
+        this.transpose = 0;
+        this.tempo = 1;
+        this.trackKey = 'title:0:1';
+        this.pending = null;
+        this.sec = 0;
+        this.bar = 0;
+        this.eighth = 0;
+        this.loop = 0;
+        this.nextTime = 0;
     }
-    get sectionId() { return this.order[this.orderIdx] || 'A'; }
-    get intensity() { return this.level; }
     get running() { return this.started && !this.muted; }
+    get trackName() { return this.track.def.name; }
     /* ---------------------------------------------------------- lifecycle */
     start() {
         if (this.started)
@@ -2123,11 +2457,9 @@ class Music {
         const ctx = sharedAudio();
         if (!ctx)
             return;
-        this.ctx = ctx;
         this.build(ctx);
-        this.reshuffle();
         this.started = true;
-        this.nextTime = ctx.currentTime + 0.1;
+        this.nextTime = ctx.currentTime + 0.12;
         this.timer = window.setInterval(() => this.pump(), 25);
     }
     stop() {
@@ -2139,401 +2471,471 @@ class Music {
         if (this.master)
             this.master.gain.value = 0;
     }
-    setMuted(m) {
-        this.muted = m;
-        if (this.master && this.ctx) {
-            this.master.gain.setTargetAtTime(m ? 0 : this.volume, this.ctx.currentTime, 0.05);
-        }
+    setMuted(m) { this.muted = m; this.applyVolume(); }
+    setVolume(v) { this.volume = clamp(v, 0, 1); this.applyVolume(); }
+    /** Pull the music down while a full-screen menu is up. */
+    duck(on) { if (on !== this.ducked) {
+        this.ducked = on;
+        this.applyVolume();
+    } }
+    applyVolume() {
+        if (!this.master || !this.ctx)
+            return;
+        const v = this.muted ? 0 : this.volume * MUSIC_MASTER * (this.ducked ? 0.55 : 1);
+        this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.08);
     }
-    setVolume(v) {
-        this.volume = clamp(v, 0, 1);
-        if (this.master && this.ctx && !this.muted) {
-            this.master.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.05);
+    /** Change theme. The old one fades out and the new one starts on a fresh bar. */
+    setTrack(id, transpose = 0, tempo = 1) {
+        if (!COMPILED[id])
+            return;
+        const key = `${id}:${transpose}:${tempo}`;
+        if (key === this.trackKey || (this.pending && `${this.pending.id}:${this.pending.transpose}:${this.pending.tempo}` === key))
+            return;
+        this.trackKey = key;
+        if (!this.started || !this.ctx) {
+            this.useTrack(id, transpose, tempo);
+            return;
         }
+        const now = this.ctx.currentTime;
+        this.trackGain.gain.cancelScheduledValues(now);
+        this.trackGain.gain.setTargetAtTime(0, now, 0.35);
+        this.pending = { id, transpose, tempo, at: now + 1.3 };
+    }
+    useTrack(id, transpose, tempo) {
+        this.track = COMPILED[id];
+        this.transpose = transpose;
+        this.tempo = tempo;
+        this.sec = 0;
+        this.bar = 0;
+        this.eighth = 0;
+        this.loop = 0;
     }
     /* --------------------------------------------------------------- graph */
-    drive(amount) {
-        const ws = this.ctx.createWaveShaper();
-        const n = 1024;
-        const curve = new Float32Array(n);
-        const k = amount;
-        for (let i = 0; i < n; i++) {
-            const x = (i / (n - 1)) * 2 - 1;
-            curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
-        }
-        ws.curve = curve;
-        ws.oversample = '2x';
-        return ws;
-    }
-    /** Cabinet sim: roll off the fizz up top and the mud down low. */
-    cab(lo, hi) {
-        const hp = this.ctx.createBiquadFilter();
-        hp.type = 'highpass';
-        hp.frequency.value = lo;
-        const lp = this.ctx.createBiquadFilter();
-        lp.type = 'lowpass';
-        lp.frequency.value = hi;
-        lp.Q.value = 0.7;
-        hp.connect(lp);
-        return [hp, lp];
-    }
-    makeVoice(bus, type, detune) {
-        const ctx = this.ctx;
-        const g = ctx.createGain();
-        g.gain.value = 0;
-        const a = ctx.createOscillator();
-        const b = ctx.createOscillator();
-        a.type = type;
-        b.type = type;
-        a.detune.value = -detune;
-        b.detune.value = detune;
-        a.frequency.value = 110;
-        b.frequency.value = 110;
-        a.connect(g);
-        b.connect(g);
-        g.connect(bus);
-        a.start();
-        b.start();
-        return { a, b, g };
-    }
     build(ctx) {
-        this.master = ctx.createGain();
-        this.master.gain.value = this.muted ? 0 : this.volume;
+        this.ctx = ctx;
         const comp = ctx.createDynamicsCompressor();
-        comp.threshold.value = -18;
-        comp.ratio.value = 4;
-        comp.attack.value = 0.004;
-        comp.release.value = 0.2;
-        this.master.connect(comp);
-        comp.connect(ctx.destination);
-        // rhythm guitar — moderate drive, it is accompaniment not the hook
-        this.busGtr = ctx.createGain();
-        this.busGtr.gain.value = 0;
-        const gDrive = this.drive(26);
-        const [gHp, gLp] = this.cab(100, 2800);
-        this.busGtr.connect(gDrive);
-        gDrive.connect(gHp);
-        gLp.connect(this.master);
-        this.gRoot = this.makeVoice(this.busGtr, 'sawtooth', 7);
-        this.gFifth = this.makeVoice(this.busGtr, 'sawtooth', 10);
-        // lead — the melody. Light drive, generous echo, sits on top of the mix.
-        this.busLead = ctx.createGain();
-        this.busLead.gain.value = 0;
-        const lDrive = this.drive(14);
-        const [lHp, lLp] = this.cab(200, 5000);
-        const delay = ctx.createDelay(1);
-        delay.delayTime.value = (60 / this.bpm) * 0.75; // dotted eighth
-        const fb = ctx.createGain();
-        fb.gain.value = 0.28;
-        const wet = ctx.createGain();
-        wet.gain.value = 0.34;
-        this.busLead.connect(lDrive);
-        lDrive.connect(lHp);
-        lLp.connect(this.master);
-        lLp.connect(delay);
-        delay.connect(fb);
-        fb.connect(delay);
-        delay.connect(wet);
-        wet.connect(this.master);
-        this.lead1 = this.makeVoice(this.busLead, 'square', 3);
-        this.lead2 = this.makeVoice(this.busLead, 'square', 8);
-        // bass
-        this.busBass = ctx.createGain();
-        this.busBass.gain.value = 0;
-        const bDrive = this.drive(7);
-        const [bHp, bLp] = this.cab(38, 1500);
-        this.busBass.connect(bDrive);
-        bDrive.connect(bHp);
-        bLp.connect(this.master);
-        this.bass = this.makeVoice(this.busBass, 'sawtooth', 3);
-        // keys — harpsichord plucks and a string pad
-        this.busKeys = ctx.createGain();
-        this.busKeys.gain.value = 0;
-        const kLp = ctx.createBiquadFilter();
-        kLp.type = 'lowpass';
-        kLp.frequency.value = 5000;
-        this.busKeys.connect(kLp);
-        kLp.connect(this.master);
-        // drums
-        this.busDrum = ctx.createGain();
-        this.busDrum.gain.value = 0;
-        this.busDrum.connect(this.master);
-        const len = Math.floor(ctx.sampleRate * 1);
-        this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
-        const d = this.noise.getChannelData(0);
-        for (let i = 0; i < len; i++)
-            d[i] = Math.random() * 2 - 1;
-    }
-    /* ------------------------------------------------------------ schedule */
-    reshuffle() {
-        // Melodic sections dominate the pool; the sweep section appears once.
-        const pool = ['A', 'B', 'D', 'A', 'C', 'B', 'E', 'D', 'A', 'F'];
-        for (let i = pool.length - 1; i > 0; i--) {
-            const j = 1 + Math.floor(Math.random() * i);
-            const t = pool[i];
-            pool[i] = pool[j];
-            pool[j] = t;
+        comp.threshold.value = -20;
+        comp.knee.value = 12;
+        comp.ratio.value = 3;
+        comp.attack.value = 0.01;
+        comp.release.value = 0.3;
+        this.master = ctx.createGain();
+        this.master.gain.value = 0;
+        comp.connect(this.master);
+        this.master.connect(ctx.destination);
+        this.trackGain = ctx.createGain();
+        this.trackGain.gain.value = 1;
+        this.trackGain.connect(comp);
+        // A generated hall: decaying stereo noise as the impulse response.
+        const rev = ctx.createConvolver();
+        const len = Math.floor(ctx.sampleRate * 2.6);
+        const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+        for (let ch = 0; ch < 2; ch++) {
+            const d = ir.getChannelData(ch);
+            for (let i = 0; i < len; i++)
+                d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.4);
         }
-        pool.unshift('A');
-        this.order = pool.filter((s, i) => i === 0 || s !== pool[i - 1]);
-        this.orderIdx = 0;
+        rev.buffer = ir;
+        const revOut = ctx.createGain();
+        revOut.gain.value = 0.55;
+        rev.connect(revOut);
+        revOut.connect(this.trackGain);
+        const bus = (dry, send) => {
+            const g = ctx.createGain();
+            g.gain.value = dry;
+            g.connect(this.trackGain);
+            const s = ctx.createGain();
+            s.gain.value = send;
+            g.connect(s);
+            s.connect(rev);
+            return g;
+        };
+        this.busMel = bus(1, 0.38);
+        this.busHarm = bus(0.85, 0.5);
+        this.busBass = bus(0.9, 0.12);
+        this.busCombat = bus(0, 0.22);
+        this.busPerc = bus(1, 0.18);
+        this.noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+        const nd = this.noise.getChannelData(0);
+        for (let i = 0; i < nd.length; i++)
+            nd[i] = Math.random() * 2 - 1;
+        this.applyVolume();
     }
+    /* ---------------------------------------------------------- scheduling */
+    eighthDur() { return 60 / (this.track.def.bpm * this.tempo) / 2; }
     pump() {
-        const ctx = this.ctx;
-        if (!ctx || !this.started)
+        if (!this.ctx)
             return;
-        if (ctx.state === 'suspended') {
-            ctx.resume().catch(() => { });
-            return;
-        }
-        const stepDur = 60 / this.bpm / 4;
-        let guard = 0;
-        while (this.nextTime < ctx.currentTime + 0.2 && guard++ < 64) {
-            this.scheduleStep(this.step, this.nextTime, stepDur);
-            this.nextTime += stepDur;
-            this.step++;
-        }
+        this.scheduleUntil(this.ctx.currentTime + 0.2);
     }
-    scheduleStep(step, t, stepDur) {
-        const inBar = step % 16;
-        const bar = Math.floor(step / 16) % 4;
-        if (step % 16 === 0 && bar === 0) {
-            if (step > 0) {
-                this.orderIdx++;
-                if (this.orderIdx >= this.order.length)
-                    this.reshuffle();
+    /** Schedule every eighth note that starts before `until`. */
+    scheduleUntil(until) {
+        while (this.nextTime < until) {
+            if (this.pending && this.nextTime >= this.pending.at) {
+                const p = this.pending;
+                this.pending = null;
+                this.useTrack(p.id, p.transpose, p.tempo);
+                this.trackGain.gain.cancelScheduledValues(this.nextTime);
+                this.trackGain.gain.setValueAtTime(0.0001, this.nextTime);
+                this.trackGain.gain.linearRampToValueAtTime(1, this.nextTime + 1.4);
             }
-            this.phraseIdx = (this.phraseIdx + 1) % PHRASES.length;
-        }
-        if (inBar === 0)
-            this.applyLevel(t);
-        const sec = SECTIONS[this.sectionId] || SECTIONS.A;
-        const chord = sec.chords[bar];
-        const L = this.level;
-        this.scheduleGuitar(sec, chord, bar, inBar, t, stepDur, L);
-        this.scheduleBass(sec, chord, inBar, t, stepDur, L);
-        this.scheduleDrums(sec, inBar, t, L);
-        this.scheduleKeys(sec, chord, inBar, t, stepDur, L);
-        if (L >= 2 || sec.lead)
-            this.scheduleLead(sec, chord, bar, inBar, t, stepDur, L);
-    }
-    /**
-     * Layer gains, set on bar lines only. The guitar tops out well below the
-     * lead — melody first was the brief, so the mix enforces it.
-     */
-    applyLevel(t) {
-        this.level = Math.round(clamp(this.target, 0, 4));
-        const L = this.level;
-        const set = (n, v) => n.gain.setTargetAtTime(v, t, 0.12);
-        set(this.busGtr, L <= 0 ? 0 : L === 1 ? 0.10 : L === 2 ? 0.15 : L === 3 ? 0.19 : 0.21);
-        set(this.busBass, L <= 0 ? 0.05 : 0.24);
-        set(this.busDrum, L <= 0 ? 0 : L === 1 ? 0.24 : L === 2 ? 0.36 : 0.42);
-        set(this.busKeys, L <= 0 ? 0.40 : L === 1 ? 0.30 : L === 2 ? 0.24 : 0.18);
-        set(this.busLead, L <= 0 ? 0.10 : L === 1 ? 0.16 : L === 2 ? 0.22 : 0.26);
-    }
-    note(v, freq, t, dur, peak, mute) {
-        v.a.frequency.setValueAtTime(freq, t);
-        v.b.frequency.setValueAtTime(freq, t);
-        const g = v.g.gain;
-        g.cancelScheduledValues(t);
-        g.setValueAtTime(Math.max(0.0001, g.value), t);
-        g.linearRampToValueAtTime(peak, t + 0.006);
-        if (mute) {
-            g.exponentialRampToValueAtTime(Math.max(0.0001, peak * 0.25), t + 0.035);
-            g.exponentialRampToValueAtTime(0.0001, t + Math.min(dur, 0.085));
-        }
-        else {
-            g.setValueAtTime(peak, t + Math.max(0.01, dur * 0.6));
-            g.exponentialRampToValueAtTime(0.0001, t + dur);
+            if (this.pending) {
+                this.nextTime += 0.05;
+                continue;
+            } // the gap while one fades out
+            this.scheduleEighth(this.nextTime);
+            this.nextTime += this.eighthDur();
         }
     }
-    scheduleGuitar(sec, chord, bar, inBar, t, stepDur, L) {
-        if (L <= 0)
-            return;
-        let pat = RIFFS[sec.riff[bar]];
-        // Tremolo is the most aggressive thing the guitar does — only at the top.
-        if (L < 3 && pat === RIFFS[2])
-            pat = RIFFS[5];
-        const v = pat[inBar];
-        if (!v)
-            return;
-        if (L === 1 && v === 1 && inBar % 4 !== 0)
-            return; // thin the mutes out when calm
-        const rootF = semiHz(chord, 1);
-        const fifthF = semiHz(chord + 7, 1);
-        const sustained = v === 2;
-        const dur = sustained ? stepDur * 6 : v === 4 ? stepDur * 0.9 : stepDur * 0.8;
-        const mute = v === 1;
-        const peak = sustained ? 0.30 : v === 3 ? 0.24 : 0.22;
-        this.note(this.gRoot, v === 3 ? rootF * 2 : rootF, t, dur, peak, mute);
-        this.note(this.gFifth, v === 3 ? fifthF * 2 : fifthF, t, dur, peak * 0.7, mute);
+    scheduleEighth(t) {
+        const tr = this.track;
+        const def = tr.def;
+        const bar = tr.sections[this.sec][this.bar];
+        const e = this.eighth;
+        const ed = this.eighthDur();
+        const key = def.tonic + this.transpose;
+        if (e === 0) {
+            // Layers change on bar lines only, so nothing lurches mid-phrase.
+            const want = !!def.alwaysCombat || this.target >= 2;
+            this.combatTail = want ? 2 : Math.max(0, this.combatTail - 1);
+            if (want !== this.combat || this.bar === 0) {
+                this.combat = want;
+                this.busCombat.gain.setTargetAtTime(want ? 1 : 0, t, ed * 2);
+                this.busHarm.gain.setTargetAtTime(want ? 0.7 : 0.85, t, ed * 2);
+            }
+        }
+        // harmony: pad on each chord change, then the arpeggio and bass
+        const chord = bar.chords.find((c) => e >= c.at && e < c.at + c.len);
+        const pitches = this.voice(chord, key - 12);
+        const rootLow = this.low(chord.root, key - 24);
+        if (e === chord.at) {
+            if (def.pad)
+                for (const m of pitches)
+                    this.play(def.pad, midiHz(m), t, chord.len * ed, 0.032, this.busHarm);
+            if (def.arpStyle === 'waltz')
+                this.play('pizz', midiHz(rootLow), t, ed * 2, 0.16, this.busBass);
+            else if (def.meter === 6)
+                this.play('bass', midiHz(rootLow), t, ed * 2.8, 0.12, this.busBass);
+            else
+                this.play('bass', midiHz(rootLow), t, chord.len * ed * 0.95, 0.11, this.busBass);
+        }
+        if (def.meter === 6 && e === 3 && chord.at === 0 && chord.len === 6) {
+            this.play('bass', midiHz(rootLow + 7), t, ed * 2.8, 0.1, this.busBass);
+        }
+        const arpIx = ARPS[def.arpStyle][e % ARPS[def.arpStyle].length];
+        if (arpIx === 9) {
+            for (const m of pitches)
+                this.play(def.arp, midiHz(m + 12), t, ed * 1.5, 0.045, this.busHarm);
+        }
+        else if (arpIx >= 0) {
+            const tones = [...pitches].sort((a, b) => a - b);
+            const m = arpIx === 3 ? tones[0] + 12 : tones[Math.min(arpIx, tones.length - 1)];
+            const oct = def.arpStyle === 'low' ? -12 : def.arpStyle === 'ostinato' ? 0 : 12;
+            this.play(def.arp, midiHz(m + oct), t, ed * 1.8, def.arpStyle === 'ostinato' ? 0.05 : 0.065, this.busHarm);
+        }
+        // the tune
+        const breather = !this.combat && this.sec === 0 && this.loop % 3 === 2; // every third pass, A rests
+        for (const n of bar.notes) {
+            if (n.at !== e || n.semi === null || breather)
+                continue;
+            const inst = this.combat ? def.lead : def.melody;
+            const f = midiHz(key + n.semi);
+            this.play(inst, f, t, n.len * ed * 0.96, LEVELS[inst], this.busMel);
+            if (def.double && this.loop % 2 === 1)
+                this.play(def.double, f / 2, t, n.len * ed * 0.96, LEVELS[def.double] * 0.55, this.busMel);
+        }
+        // combat layer: drums, a driving bass and brass stabs (always scheduled,
+        // heard only while its bus is up)
+        if (this.combatTail > 0)
+            this.scheduleCombat(t, e, ed, pitches, rootLow);
+        if (def.shaker)
+            this.shaker(t, e % 2 === 0 ? 0.03 : 0.018);
+        // advance
+        this.eighth++;
+        if (this.eighth >= tr.barLen) {
+            this.eighth = 0;
+            this.bar++;
+            if (this.bar >= tr.sections[this.sec].length) {
+                this.bar = 0;
+                this.sec++;
+                if (this.sec >= tr.sections.length) {
+                    this.sec = 0;
+                    this.loop++;
+                }
+            }
+        }
     }
-    scheduleBass(sec, chord, inBar, t, stepDur, L) {
-        if (L <= 0 && inBar % 8 !== 0)
-            return;
-        if (inBar % 2 !== 0)
-            return; // straight eighths, no 16th runs
-        if (sec.half && inBar % 4 !== 0)
-            return;
-        const f = semiHz(chord, 0);
-        this.note(this.bass, f, t, stepDur * 1.7, 0.5, false);
+    scheduleCombat(t, e, ed, pitches, rootLow) {
+        const def = this.track.def;
+        const dr = DRUMS[def.alwaysCombat ? 'boss' : String(def.meter)];
+        const slot = e % dr.kick.length;
+        if (dr.kick[slot])
+            this.kick(t, 0.32);
+        if (dr.snare[slot])
+            this.snare(t, 0.13);
+        if (dr.hat[slot])
+            this.hat(t, e % 2 === 0 ? 0.035 : 0.022);
+        this.play('bass', midiHz(rootLow + (e % 4 === 2 ? 12 : 0)), t, ed * 0.8, 0.09, this.busCombat);
+        if (STABS[def.meter].includes(e)) {
+            for (const m of pitches)
+                this.play('brass', midiHz(m), t, ed * 1.2, 0.03, this.busCombat);
+        }
+        if (def.alwaysCombat && e === 0)
+            this.timpani(midiHz(rootLow), t, 0.3);
     }
-    hit(bufGain, t, dur, hp, lp) {
-        const ctx = this.ctx;
-        const src = ctx.createBufferSource();
-        src.buffer = this.noise;
-        const f1 = ctx.createBiquadFilter();
-        f1.type = 'highpass';
-        f1.frequency.value = hp;
-        const f2 = ctx.createBiquadFilter();
-        f2.type = 'lowpass';
-        f2.frequency.value = lp;
-        const g = ctx.createGain();
-        g.gain.setValueAtTime(bufGain, t);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-        src.connect(f1);
-        f1.connect(f2);
-        f2.connect(g);
-        g.connect(this.busDrum);
-        src.start(t, Math.random() * 0.5);
-        src.stop(t + dur + 0.02);
+    /** Close-voiced chord tones around `center`, as MIDI notes. */
+    voice(ch, center) {
+        return ch.tones.map((tone) => {
+            let m = center + ((ch.root + tone) % 12 + 12) % 12;
+            while (m > center + 7)
+                m -= 12;
+            while (m < center - 5)
+                m += 12;
+            return m;
+        });
     }
-    kick(t) {
-        const ctx = this.ctx;
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.type = 'sine';
-        o.frequency.setValueAtTime(145, t);
-        o.frequency.exponentialRampToValueAtTime(46, t + 0.08);
-        g.gain.setValueAtTime(0.9, t);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
-        o.connect(g);
-        g.connect(this.busDrum);
+    low(root, base) {
+        let m = base + ((root % 12) + 12) % 12;
+        if (m > base + 7)
+            m -= 12;
+        return m;
+    }
+    /* ---------------------------------------------------------- instruments */
+    play(inst, f, t, d, v, out) {
+        switch (inst) {
+            case 'piano': return this.piano(f, t, d, v, out);
+            case 'bell': return this.bell(f, t, v, out);
+            case 'flute': return this.flute(f, t, d, v, out);
+            case 'strings': return this.bowed(f, t, d, v, out, 'sawtooth', 2100, 0.1);
+            case 'pad': return this.bowed(f, t, d, v, out, 'sawtooth', 1100, 0.45);
+            case 'choir': return this.bowed(f, t, d, v, out, 'triangle', 1500, 0.6);
+            case 'brass': return this.brass(f, t, d, v, out);
+            case 'harp': return this.pluck(f, t, v, out, 'triangle', 0.7, 3400);
+            case 'pizz': return this.pluck(f, t, v, out, 'triangle', 0.14, 1800);
+            case 'marimba': return this.marimba(f, t, v, out);
+            case 'oud': return this.oud(f, t, v, out);
+            case 'bass': return this.bass(f, t, d, v, out);
+        }
+    }
+    osc(type, f, t, stop, dest, detune = 0) {
+        const o = this.ctx.createOscillator();
+        o.type = type;
+        o.frequency.setValueAtTime(f, t);
+        if (detune)
+            o.detune.setValueAtTime(detune, t);
+        o.connect(dest);
         o.start(t);
-        o.stop(t + 0.16);
+        o.stop(stop);
+        return o;
     }
-    snare(t, ghost) {
-        const ctx = this.ctx;
-        this.hit(ghost ? 0.10 : 0.44, t, ghost ? 0.04 : 0.15, 1400, 8500);
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.type = 'triangle';
-        o.frequency.setValueAtTime(195, t);
-        o.frequency.exponentialRampToValueAtTime(150, t + 0.07);
-        g.gain.setValueAtTime(ghost ? 0.05 : 0.18, t);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
-        o.connect(g);
-        g.connect(this.busDrum);
-        o.start(t);
-        o.stop(t + 0.1);
+    gain(v, dest) {
+        const g = this.ctx.createGain();
+        g.gain.value = v;
+        g.connect(dest);
+        return g;
     }
-    /** A groove at every level. No blast beats — the top of the ladder drives. */
-    scheduleDrums(sec, inBar, t, L) {
-        if (L <= 0)
-            return;
-        if (sec.half) {
-            if (inBar === 0 || inBar === 6)
-                this.kick(t);
-            if (inBar === 8)
-                this.snare(t, false);
-            if (inBar % 4 === 0)
-                this.hit(0.09, t, 0.2, 4000, 14000);
-            return;
-        }
-        if (L === 1) {
-            if (inBar === 0 || inBar === 8)
-                this.kick(t);
-            if (inBar === 8)
-                this.snare(t, false);
-            if (inBar % 4 === 0)
-                this.hit(0.06, t, 0.05, 7000, 15000);
-            if (inBar === 0)
-                this.hit(0.10, t, 0.4, 3500, 13000);
-            return;
-        }
-        // backbeat on 2 and 4, ride on eighths
-        if (inBar === 4 || inBar === 12)
-            this.snare(t, false);
-        else if (L >= 3 && (inBar === 7 || inBar === 15))
-            this.snare(t, true);
-        let kickHere = inBar === 0 || inBar === 6 || inBar === 8 || inBar === 14;
-        if (L >= 3 && (inBar === 2 || inBar === 10))
-            kickHere = true;
-        if (L >= 4 && (inBar === 3 || inBar === 11))
-            kickHere = true; // double-kick fill, not a blast
-        if (kickHere)
-            this.kick(t);
-        if (inBar % 2 === 0)
-            this.hit(L >= 3 ? 0.07 : 0.055, t, 0.05, 7000, 15000);
-        if (inBar === 0)
-            this.hit(L >= 3 ? 0.15 : 0.11, t, 0.45, 3400, 13000);
+    lowpass(f, dest, q = 0.7) {
+        const b = this.ctx.createBiquadFilter();
+        b.type = 'lowpass';
+        b.frequency.value = f;
+        b.Q.value = q;
+        b.connect(dest);
+        return b;
     }
-    scheduleKeys(sec, chord, inBar, t, stepDur, L) {
-        const ctx = this.ctx;
-        if (L <= 2) {
-            // harpsichord: broken chord in eighths — the baroque half of the brief,
-            // and it stays audible well into combat now rather than only at rest.
-            if (inBar % 2 === 0) {
-                const tones = [0, 3, 7, 12, 7, 3];
-                const semi = chord + tones[(inBar / 2) % tones.length];
-                const o = ctx.createOscillator();
-                const g = ctx.createGain();
-                o.type = 'square';
-                o.frequency.value = semiHz(semi, 3);
-                g.gain.setValueAtTime(0.0001, t);
-                g.gain.linearRampToValueAtTime(0.09, t + 0.005);
-                g.gain.exponentialRampToValueAtTime(0.0001, t + stepDur * 3);
-                o.connect(g);
-                g.connect(this.busKeys);
-                o.start(t);
-                o.stop(t + stepDur * 3.2);
-            }
-        }
-        if (inBar === 0) {
-            // string pad holding the chord underneath everything
-            for (const semi of [chord, chord + 7, chord + 12]) {
-                const o = ctx.createOscillator();
-                const g = ctx.createGain();
-                o.type = 'sawtooth';
-                o.frequency.value = semiHz(semi, 2);
-                o.detune.value = rnd(-6, 6);
-                const bar = stepDur * 16;
-                g.gain.setValueAtTime(0.0001, t);
-                g.gain.linearRampToValueAtTime(0.06, t + bar * 0.35);
-                g.gain.linearRampToValueAtTime(0.0001, t + bar * 1.05);
-                o.connect(g);
-                g.connect(this.busKeys);
-                o.start(t);
-                o.stop(t + bar * 1.1);
-            }
+    piano(f, t, d, v, out) {
+        const g = this.gain(0, out);
+        const lp = this.lowpass(2600, g);
+        lp.frequency.setTargetAtTime(900, t + 0.05, 0.8);
+        const end = t + d + 1.4;
+        this.osc('triangle', f, t, end, lp);
+        this.osc('sine', f * 2, t, end, this.gain(0.28, lp), 3);
+        this.osc('sine', f * 3, t, end, this.gain(0.08, lp), -4);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(v, t + 0.004);
+        g.gain.setTargetAtTime(v * 0.25, t + 0.004, 0.45);
+        g.gain.setTargetAtTime(0, t + Math.max(d, 0.25), 0.28);
+    }
+    bell(f, t, v, out) {
+        const parts = [[1, 1, 1.3], [2.76, 0.32, 0.45], [5.4, 0.1, 0.18]];
+        for (const [ratio, amp, tau] of parts) {
+            const g = this.gain(0, out);
+            this.osc('sine', f * ratio, t, t + tau * 6, g);
+            g.gain.setValueAtTime(0, t);
+            g.gain.linearRampToValueAtTime(v * amp, t + 0.003);
+            g.gain.setTargetAtTime(0, t + 0.003, tau);
         }
     }
-    scheduleLead(sec, chord, bar, inBar, t, stepDur, L) {
-        if (sec.sweep && L >= 3) {
-            // Neoclassical run — eighths with rests, not a wall of sixteenths.
-            if (inBar % 2 !== 0)
-                return;
-            const shape = [0, 3, 7, 12, 15, 12, 7, 3];
-            const semi = chord + shape[(inBar / 2) % shape.length];
-            this.note(this.lead1, semiHz(semi, 3), t, stepDur * 1.8, 0.26, false);
-            this.note(this.lead2, semiHz(semi + 3, 3), t, stepDur * 1.8, 0.15, false);
-            return;
-        }
-        // The tune, harmonised a third above.
-        const phrase = PHRASES[(this.phraseIdx + bar) % PHRASES.length];
-        let cursor = 0;
-        for (const [deg, len] of phrase) {
-            if (cursor === inBar) {
-                this.note(this.lead1, scaleHz(deg, 2), t, stepDur * len * 0.95, 0.30, false);
-                this.note(this.lead2, scaleHz(deg + 2, 2), t, stepDur * len * 0.95, L >= 3 ? 0.19 : 0.14, false);
-                return;
-            }
-            cursor += len;
-            if (cursor > inBar)
-                return;
-        }
+    flute(f, t, d, v, out) {
+        const g = this.gain(0, out);
+        const lp = this.lowpass(3000, g);
+        const end = t + d + 0.5;
+        const o1 = this.osc('sine', f, t, end, lp);
+        const o2 = this.osc('triangle', f, t, end, this.gain(0.22, lp));
+        this.vibrato([o1, o2], f, t + 0.22, end, 5.2, 0.006);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(v, t + 0.07);
+        g.gain.setTargetAtTime(v * 0.82, t + 0.07, 0.2);
+        g.gain.setTargetAtTime(0, t + d, 0.09);
+        // a breath at the start of each note
+        const n = this.ctx.createBufferSource();
+        n.buffer = this.noise;
+        const bp = this.ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = f * 2;
+        bp.Q.value = 2;
+        const ng = this.gain(0, out);
+        n.connect(bp);
+        bp.connect(ng);
+        ng.gain.setValueAtTime(v * 0.35, t);
+        ng.gain.setTargetAtTime(0, t, 0.025);
+        n.start(t);
+        n.stop(t + 0.15);
+    }
+    bowed(f, t, d, v, out, type, cutoff, attack) {
+        const g = this.gain(0, out);
+        const lp = this.lowpass(cutoff, g);
+        const end = t + d + attack * 2 + 0.6;
+        const a = this.osc(type, f, t, end, lp, -7);
+        const b = this.osc(type, f, t, end, lp, 7);
+        const c = this.osc('triangle', f / 2, t, end, this.gain(0.3, lp));
+        this.vibrato([a, b, c], f, t + 0.3, end, 5.4, 0.004);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(v, t + attack);
+        g.gain.setValueAtTime(v, t + Math.max(attack, d));
+        g.gain.setTargetAtTime(0, t + Math.max(attack, d), attack * 0.8 + 0.12);
+    }
+    brass(f, t, d, v, out) {
+        const g = this.gain(0, out);
+        const lp = this.lowpass(500, g, 1.1);
+        lp.frequency.setValueAtTime(500, t);
+        lp.frequency.linearRampToValueAtTime(2300, t + 0.07);
+        lp.frequency.setTargetAtTime(1300, t + 0.07, 0.2);
+        const end = t + d + 0.5;
+        const a = this.osc('sawtooth', f, t, end, lp);
+        const b = this.osc('square', f, t, end, this.gain(0.2, lp), 5);
+        this.vibrato([a, b], f, t + 0.25, end, 5, 0.004);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(v, t + 0.05);
+        g.gain.setTargetAtTime(v * 0.78, t + 0.05, 0.15);
+        g.gain.setTargetAtTime(0, t + d, 0.1);
+    }
+    pluck(f, t, v, out, type, tau, cutoff) {
+        const g = this.gain(0, out);
+        const lp = this.lowpass(cutoff, g);
+        lp.frequency.setTargetAtTime(cutoff * 0.4, t, tau);
+        this.osc(type, f, t, t + tau * 6, lp);
+        this.osc('sine', f * 2, t, t + tau * 3, this.gain(0.18, lp));
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(v, t + 0.003);
+        g.gain.setTargetAtTime(0, t + 0.003, tau);
+    }
+    marimba(f, t, v, out) {
+        const g = this.gain(0, out);
+        this.osc('sine', f, t, t + 1.4, g);
+        const hg = this.gain(0, out);
+        this.osc('sine', f * 4, t, t + 0.3, hg);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(v, t + 0.003);
+        g.gain.setTargetAtTime(0, t + 0.003, 0.28);
+        hg.gain.setValueAtTime(v * 0.2, t);
+        hg.gain.setTargetAtTime(0, t, 0.04);
+    }
+    oud(f, t, v, out) {
+        const g = this.gain(0, out);
+        const lp = this.lowpass(2400, g, 1.2);
+        lp.frequency.setTargetAtTime(800, t, 0.25);
+        const o = this.osc('sawtooth', f * 0.985, t, t + 2, lp);
+        o.frequency.linearRampToValueAtTime(f, t + 0.035);
+        this.osc('triangle', f * 2, t, t + 1, this.gain(0.15, lp));
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(v, t + 0.004);
+        g.gain.setTargetAtTime(0, t + 0.004, 0.38);
+    }
+    bass(f, t, d, v, out) {
+        const g = this.gain(0, out);
+        const lp = this.lowpass(520, g);
+        const end = t + d + 0.4;
+        this.osc('sine', f, t, end, lp);
+        this.osc('triangle', f, t, end, this.gain(0.45, lp));
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(v, t + 0.012);
+        g.gain.setTargetAtTime(v * 0.7, t + 0.012, 0.25);
+        g.gain.setTargetAtTime(0, t + d, 0.07);
+    }
+    vibrato(oscs, f, t, end, rate, depth) {
+        const lfo = this.ctx.createOscillator();
+        lfo.frequency.value = rate;
+        const lg = this.ctx.createGain();
+        lg.gain.setValueAtTime(0, t);
+        lg.gain.linearRampToValueAtTime(f * depth, t + 0.3);
+        lfo.connect(lg);
+        for (const o of oscs)
+            lg.connect(o.frequency);
+        lfo.start(t);
+        lfo.stop(end);
+    }
+    /* ------------------------------------------------------------- drums */
+    noiseHit(t, v, type, freq, q, tau, out) {
+        const n = this.ctx.createBufferSource();
+        n.buffer = this.noise;
+        const f = this.ctx.createBiquadFilter();
+        f.type = type;
+        f.frequency.value = freq;
+        f.Q.value = q;
+        const g = this.gain(0, out);
+        n.connect(f);
+        f.connect(g);
+        g.gain.setValueAtTime(v, t);
+        g.gain.setTargetAtTime(0, t, tau);
+        n.start(t, Math.random() * 0.5);
+        n.stop(t + tau * 8);
+    }
+    kick(t, v) {
+        const g = this.gain(0, this.busCombat);
+        const o = this.osc('sine', 110, t, t + 0.5, g);
+        o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+        g.gain.setValueAtTime(v, t);
+        g.gain.setTargetAtTime(0, t, 0.09);
+    }
+    snare(t, v) {
+        this.noiseHit(t, v, 'bandpass', 1900, 0.8, 0.06, this.busCombat);
+        const g = this.gain(0, this.busCombat);
+        this.osc('triangle', 190, t, t + 0.25, g);
+        g.gain.setValueAtTime(v * 0.6, t);
+        g.gain.setTargetAtTime(0, t, 0.04);
+    }
+    hat(t, v) { this.noiseHit(t, v, 'highpass', 7500, 0.7, 0.018, this.busCombat); }
+    shaker(t, v) { this.noiseHit(t, v, 'bandpass', 6200, 1.4, 0.03, this.busPerc); }
+    timpani(f, t, v) {
+        const g = this.gain(0, this.busCombat);
+        const o = this.osc('sine', f * 1.12, t, t + 2, g);
+        o.frequency.exponentialRampToValueAtTime(f, t + 0.25);
+        g.gain.setValueAtTime(v, t);
+        g.gain.setTargetAtTime(0, t, 0.45);
+        this.noiseHit(t, v * 0.4, 'lowpass', 300, 0.7, 0.05, this.busCombat);
+    }
+    /* ------------------------------------------------------------ preview */
+    /** Render a theme offline (for testing and previews): returns the audio. */
+    static async render(id, seconds, combat, volume = 1) {
+        const sr = 32000;
+        const ctx = new OfflineAudioContext(2, Math.floor(sr * seconds), sr);
+        const m = new Music();
+        m.volume = volume;
+        m.build(ctx);
+        m.useTrack(id, 0, 1);
+        m.target = combat ? 3 : 0;
+        m.nextTime = 0.05;
+        m.scheduleUntil(seconds);
+        return ctx.startRendering();
     }
 }
+/** Peak note levels per instrument, so every theme's tune sits at the same height. */
+const LEVELS = {
+    piano: 0.2, bell: 0.16, flute: 0.17, strings: 0.11, brass: 0.1, harp: 0.14,
+    marimba: 0.16, oud: 0.15, choir: 0.08, pad: 0.05, pizz: 0.14, bass: 0.12,
+};
+/** Output trim: the volume slider is multiplied by this. */
+const MUSIC_MASTER = 1.0;
 /* =========================================================================
  * entities.ts — player, enemies, projectiles, and damage resolution.
  * The world is 2.5D: x/y is the ground plane, z is height above it.
@@ -3226,6 +3628,7 @@ class Enemy {
         // overworld: enemies idle near home until you come close, and give up
         // the chase if you drag them too far from it
         this.aggro = true;
+        this.elite = false; // a rare, tougher variant with better loot
         this.homeX = 0;
         this.homeY = 0;
         this.wanderX = 0;
@@ -3959,6 +4362,7 @@ function sy(y, z) { return y - z * Z_SCALE; }
 class Renderer {
     constructor(canvas) {
         this.dpr = 1;
+        this.miniCache = {};
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
         this.resize();
@@ -4044,10 +4448,45 @@ class Renderer {
                 this.drawTile(c, g, tx, ty);
         for (const b of WORLD_MAP.buildings) {
             const bx = b.tx * TILE, by = b.ty * TILE;
-            if (bx > cam.x + VIEW_W + 100 || bx + b.tw * TILE < cam.x - 100 || by > cam.y + VIEW_H + 100 || by + b.th * TILE < cam.y - 140)
+            if (bx > cam.x + VIEW_W + 200 || bx + b.tw * TILE < cam.x - 200 || by > cam.y + VIEW_H + 200 || by + b.th * TILE < cam.y - 200)
                 continue;
             this.drawBuilding(c, g, b);
         }
+        for (const ch of WORLD_MAP.chests) {
+            if (ch.x < cam.x - 40 || ch.x > cam.x + VIEW_W + 40 || ch.y < cam.y - 40 || ch.y > cam.y + VIEW_H + 40)
+                continue;
+            this.drawChest(c, g, ch);
+        }
+    }
+    drawChest(c, g, ch) {
+        const open = g.world.openedChests.has(ch.id);
+        const x = ch.x, y = ch.y;
+        c.save();
+        c.fillStyle = 'rgba(0,0,0,0.35)';
+        c.beginPath();
+        c.ellipse(x, y + 10, 16, 5, 0, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = '#6a4424';
+        c.fillRect(x - 14, y - 6, 28, 16);
+        c.fillStyle = '#d8a84a';
+        c.fillRect(x - 14, y - 1, 28, 3);
+        c.fillRect(x - 2, y - 4, 4, 8);
+        if (open) {
+            c.fillStyle = '#4a2e18';
+            c.fillRect(x - 14, y - 16, 28, 8);
+        }
+        else {
+            c.fillStyle = '#7a5030';
+            c.fillRect(x - 14, y - 12, 28, 7);
+            c.fillStyle = '#d8a84a';
+            c.fillRect(x - 14, y - 12, 28, 2);
+            c.globalAlpha = 0.35 + Math.sin(g.time * 3 + x) * 0.25;
+            c.fillStyle = '#fff3b0';
+            c.beginPath();
+            c.arc(x, y - 18 + Math.sin(g.time * 2 + y) * 2, 2.5, 0, Math.PI * 2);
+            c.fill();
+        }
+        c.restore();
     }
     drawTile(c, g, tx, ty) {
         const i = ty * WORLD_TW + tx;
@@ -4319,7 +4758,7 @@ class Renderer {
             c.lineTo(dx + 22, y + h);
             c.stroke();
             c.globalAlpha = 1;
-            this.worldLabel(c, `${loc.name} dungeon${cleared ? '  ✓' : ''}`, dx, y - 8, accent);
+            this.worldLabel(c, `${b.name}${cleared ? '  ✓' : ''}`, dx, y - 8, accent);
         }
         else if (b.kind === 'forge') {
             c.fillStyle = '#3a2e28';
@@ -4351,7 +4790,37 @@ class Renderer {
             c.globalAlpha = 1;
             c.fillStyle = '#120c0a';
             c.fillRect(x + w / 2 - 14, y + 22, 28, 30);
-            this.worldLabel(c, `⚒ ${loc.stationName || 'Forge'}`, x + w / 2, y - 22, accent);
+            this.worldLabel(c, `⚒ ${b.name}`, x + w / 2, y - 22, accent);
+        }
+        else if (b.kind === 'town') {
+            // a couple of cottages around a campfire
+            for (const [hx, hw] of [[x, w * 0.42], [x + w * 0.55, w * 0.45]]) {
+                c.fillStyle = '#4a3a30';
+                c.fillRect(hx, y + 26, hw, h - 26);
+                c.fillStyle = this.mix(accent, '#3a2a2a', 0.65);
+                c.beginPath();
+                c.moveTo(hx - 6, y + 30);
+                c.lineTo(hx + hw / 2, y + 2);
+                c.lineTo(hx + hw + 6, y + 30);
+                c.fill();
+                c.fillStyle = '#ffd98a';
+                c.globalAlpha = 0.7;
+                c.fillRect(hx + hw / 2 - 6, y + 46, 12, 10);
+                c.globalAlpha = 1;
+            }
+            const fx = b.doorX, fy = b.doorY - 8;
+            const fl = Math.sin(g.time * 11) * 2;
+            c.fillStyle = '#ff9d4a';
+            c.beginPath();
+            c.moveTo(fx - 7, fy + 6);
+            c.quadraticCurveTo(fx, fy - 14 - fl, fx + 7, fy + 6);
+            c.fill();
+            c.fillStyle = '#5a3a24';
+            c.fillRect(fx - 9, fy + 4, 18, 4);
+            this.worldLabel(c, `⌂ ${b.name}`, x + w / 2, y - 8, accent);
+        }
+        else if (b.kind === 'landmark') {
+            this.drawLandmark(c, g, b, loc);
         }
         else {
             // the colosseum: a ring of arches
@@ -4373,6 +4842,128 @@ class Renderer {
             this.worldLabel(c, 'Colosseum  ·  Wave Trials', x + w / 2, y - 8, PAL.mpCharge);
         }
         c.restore();
+    }
+    /** Each biome's set piece. Lakes are tiles; this adds the dressing and the name. */
+    drawLandmark(c, g, b, loc) {
+        const x = b.tx * TILE, y = b.ty * TILE, w = b.tw * TILE, h = b.th * TILE;
+        const cx = x + w / 2, cy = y + h / 2;
+        const accent = loc.look.accent;
+        c.save();
+        switch (loc.theme) {
+            case 'Haven': {
+                c.fillStyle = '#3a4058';
+                c.beginPath();
+                c.ellipse(cx, cy, w / 2, h / 2, 0, 0, Math.PI * 2);
+                c.fill();
+                c.fillStyle = '#2a5a80';
+                c.beginPath();
+                c.ellipse(cx, cy, w / 2 - 12, h / 2 - 10, 0, 0, Math.PI * 2);
+                c.fill();
+                c.fillStyle = '#5a6488';
+                c.fillRect(cx - 8, cy - 40, 16, 40);
+                c.fillStyle = accent;
+                c.globalAlpha = 0.7 + Math.sin(g.time * 2) * 0.2;
+                c.beginPath();
+                c.arc(cx, cy - 46, 8, 0, Math.PI * 2);
+                c.fill();
+                break;
+            }
+            case 'Forest': {
+                c.fillStyle = '#3a2a1e';
+                c.fillRect(cx - 22, cy - 10, 44, h / 2 + 10);
+                c.fillStyle = '#16402a';
+                c.beginPath();
+                c.arc(cx, cy - 30, w * 0.62, 0, Math.PI * 2);
+                c.fill();
+                c.fillStyle = '#1f5a34';
+                c.beginPath();
+                c.arc(cx - 30, cy - 50, w * 0.36, 0, Math.PI * 2);
+                c.fill();
+                c.fillStyle = 'rgba(200,255,200,0.18)';
+                for (let k = 0; k < 8; k++) {
+                    c.beginPath();
+                    c.arc(cx + Math.cos(g.time * 0.5 + k) * 70, cy - 40 + Math.sin(g.time * 0.7 + k * 2) * 40, 3, 0, Math.PI * 2);
+                    c.fill();
+                }
+                break;
+            }
+            case 'Coast': {
+                c.fillStyle = '#4a3222';
+                c.beginPath();
+                c.moveTo(x, cy);
+                c.lineTo(x + w * 0.2, y + h);
+                c.lineTo(x + w * 0.9, y + h);
+                c.lineTo(x + w, cy - 10);
+                c.closePath();
+                c.fill();
+                c.fillStyle = '#5e4230';
+                c.fillRect(x + w * 0.2, cy - 6, w * 0.7, 8);
+                c.strokeStyle = '#3a2a1e';
+                c.lineWidth = 6;
+                c.beginPath();
+                c.moveTo(cx, cy);
+                c.lineTo(cx + 20, y - 60);
+                c.stroke();
+                c.fillStyle = 'rgba(220,220,200,0.5)';
+                c.beginPath();
+                c.moveTo(cx + 20, y - 56);
+                c.lineTo(cx + 60, y - 30);
+                c.lineTo(cx + 18, y - 10);
+                c.fill();
+                break;
+            }
+            case 'Ruins': {
+                c.fillStyle = '#4a4450';
+                c.beginPath();
+                c.ellipse(cx, cy + 10, w / 2, h / 3, -0.2, 0, Math.PI * 2);
+                c.fill();
+                c.fillStyle = '#5e5866';
+                c.beginPath();
+                c.arc(cx - w / 2 + 20, cy - 4, 30, 0, Math.PI * 2);
+                c.fill();
+                c.fillStyle = accent;
+                c.globalAlpha = 0.6;
+                c.fillRect(cx - w / 2 + 10, cy - 10, 8, 4);
+                c.fillRect(cx - w / 2 + 24, cy - 10, 8, 4);
+                break;
+            }
+            case 'Sky': {
+                for (let k = 0; k < 6; k++) {
+                    const a = (k / 6) * Math.PI * 2 + g.time * 0.2;
+                    const px = cx + Math.cos(a) * w * 0.45, py = cy + Math.sin(a) * h * 0.4 + Math.sin(g.time + k) * 4;
+                    c.fillStyle = '#d8e0f4';
+                    c.fillRect(px - 6, py - 40, 12, 40);
+                }
+                c.fillStyle = accent;
+                c.globalAlpha = 0.5 + Math.sin(g.time * 3) * 0.3;
+                c.beginPath();
+                c.arc(cx, cy - 20, 12, 0, Math.PI * 2);
+                c.fill();
+                break;
+            }
+            case 'Rift': {
+                c.fillStyle = '#1a0e2a';
+                c.beginPath();
+                c.moveTo(cx, y - 90);
+                c.lineTo(cx + 34, y + h);
+                c.lineTo(cx - 34, y + h);
+                c.closePath();
+                c.fill();
+                c.strokeStyle = accent;
+                c.lineWidth = 2;
+                c.globalAlpha = 0.5 + Math.sin(g.time * 2) * 0.3;
+                c.beginPath();
+                c.moveTo(cx, y - 80);
+                c.lineTo(cx + 6, y);
+                c.lineTo(cx - 4, y + 40);
+                c.lineTo(cx + 3, y + h - 10);
+                c.stroke();
+                break;
+            }
+            default: break; // lakes: the water / lava / ice is the landmark
+        }
+        c.restore();
+        this.worldLabel(c, `✶ ${b.name}`, b.tw ? cx : b.doorX, (b.tw ? y : b.doorY) - (loc.theme === 'Rift' ? 100 : 30), accent);
     }
     worldLabel(c, text, x, y, color) {
         c.save();
@@ -4816,6 +5407,14 @@ class Renderer {
         const flash = e.flash > 0;
         const telegraphing = e.state === 'telegraph';
         const body = flash ? '#ffffff' : (telegraphing ? this.mix(d.color, d.accent, 0.45 + Math.sin(g.time * 26) * 0.25) : d.color);
+        if (e.elite && !dying) {
+            c.fillStyle = 'rgba(255,213,74,0.22)';
+            c.globalAlpha = fade * (0.6 + Math.sin(g.time * 5) * 0.3);
+            c.beginPath();
+            c.ellipse(0, -2, d.radius * 1.9, d.radius * 0.9, 0, 0, Math.PI * 2);
+            c.fill();
+            c.globalAlpha = fade;
+        }
         if (e.boss && !dying) {
             // a slow-pulsing aura so a boss reads at a glance in a crowd
             const ag = c.createRadialGradient(0, -d.height * 0.5, 4, 0, -d.height * 0.5, d.radius * 2.2);
@@ -4879,6 +5478,14 @@ class Renderer {
         c.restore();
         if (!dying && !e.boss)
             this.drawEnemyBar(c, e, ex, ey);
+        if (e.elite && !dying) {
+            c.save();
+            c.font = '800 9px ui-monospace, Menlo, Consolas, monospace';
+            c.textAlign = 'center';
+            c.fillStyle = PAL.mpCharge;
+            c.fillText('ELITE', ex, ey - d.height - 26);
+            c.restore();
+        }
     }
     drawGrunt(c, e, body, accent, g) {
         const r = e.radius, h = e.def.height;
@@ -4989,7 +5596,7 @@ class Renderer {
         c.fill();
     }
     drawEnemyBar(c, e, ex, ey) {
-        if (e.hp >= e.maxHp && e.state !== 'stagger')
+        if (e.hp >= e.maxHp && e.state !== 'stagger' && !e.elite)
             return;
         const w = Math.max(26, e.radius * 2.4);
         const top = ey - e.def.height - 20;
@@ -5278,7 +5885,7 @@ class Renderer {
             c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
             c.fillStyle = PAL.dim;
             c.fillText(scene.tier ? `tier ${scene.tier}  ·  recommended Lv ${recommendedLevel(scene)}` : 'safe ground', VIEW_W - 18, 48);
-            this.drawMinimap(c, g, VIEW_W - 18 - 110, 58, 110);
+            this.drawMinimap(c, g, VIEW_W - 18 - REG_W, 58);
         }
         c.restore();
         // equipped gear, small, under the bars
@@ -5361,27 +5968,62 @@ class Renderer {
         if (g.menuOpen)
             this.drawBigMenu(c, g);
     }
-    /** The minimap: the region grid, what you have found, and where you are. */
-    drawMinimap(c, g, x, y, w) {
-        const cw = w / GRID_W, ch = cw * (REG_H / REG_W);
-        c.save();
-        c.fillStyle = 'rgba(6,8,14,0.7)';
-        this.roundRect(c, x - 4, y - 4, w + 8, ch * GRID_H + 8, 5);
-        c.fill();
-        for (let ry = 0; ry < GRID_H; ry++)
-            for (let rx = 0; rx < GRID_W; rx++) {
-                const id = REGION_GRID[ry][rx];
-                if (!id)
-                    continue;
-                const known = g.world.discoveredLocations.has(id);
-                const open = g.world.unlockedAreas.has(id);
-                c.fillStyle = !open ? '#262a38' : known ? this.alpha(locById(id).look.accent, 0.55) : 'rgba(120,130,160,0.25)';
-                c.fillRect(x + rx * cw + 1, y + ry * ch + 1, cw - 2, ch - 2);
+    /** The region's terrain at one pixel per tile, drawn once and cached. */
+    regionMini(id) {
+        if (this.miniCache[id])
+            return this.miniCache[id];
+        const cv = document.createElement('canvas');
+        cv.width = REG_W;
+        cv.height = REG_H;
+        const cx = cv.getContext('2d');
+        const img = cx.createImageData(REG_W, REG_H);
+        const { rx, ry } = regionCell(id);
+        const look = locById(id).look;
+        const ground = this.hex(look.floorAlt), path = this.hex(look.motif), liquid = this.hex(look.accent);
+        const solid = [12, 14, 20];
+        for (let y = 0; y < REG_H; y++)
+            for (let x = 0; x < REG_W; x++) {
+                const t = tileAt(rx * REG_W + x, ry * REG_H + y);
+                const col = t === T_PATH ? path.map((v, i) => (v + ground[i]) / 2) : t === T_GROUND ? ground
+                    : t === T_LIQUID ? liquid.map((v) => v * 0.45) : t === T_BUILD ? [230, 230, 240] : solid;
+                const o = (y * REG_W + x) * 4;
+                img.data[o] = col[0];
+                img.data[o + 1] = col[1];
+                img.data[o + 2] = col[2];
+                img.data[o + 3] = 255;
             }
-        c.fillStyle = '#ffffff';
-        const px = x + (g.player.x / WORLD_PW) * w, py = y + (g.player.y / WORLD_PH) * ch * GRID_H;
+        cx.putImageData(img, 0, 0);
+        this.miniCache[id] = cv;
+        return cv;
+    }
+    /** The minimap: this region's terrain, its towns, dungeon and chests, and you. */
+    drawMinimap(c, g, x, y) {
+        const id = g.world.currentLocation;
+        const { rx, ry } = regionCell(id);
+        const ox = rx * REG_W * TILE, oy = ry * REG_H * TILE;
+        const sc = 1 / TILE;
+        c.save();
+        c.fillStyle = 'rgba(6,8,14,0.75)';
+        this.roundRect(c, x - 4, y - 4, REG_W + 8, REG_H + 8, 5);
+        c.fill();
+        c.globalAlpha = 0.9;
+        c.drawImage(this.regionMini(id), x, y);
+        c.globalAlpha = 1;
+        for (const ch of WORLD_MAP.chests) {
+            if (ch.region !== id || g.world.openedChests.has(ch.id))
+                continue;
+            c.fillStyle = PAL.mpCharge;
+            c.fillRect(x + (ch.x - ox) * sc - 1, y + (ch.y - oy) * sc - 1, 2, 2);
+        }
+        for (const b of WORLD_MAP.buildings) {
+            if (b.region !== id || b.kind === 'landmark')
+                continue;
+            c.fillStyle = b.kind === 'dungeon' ? '#ff6b6b' : '#ffffff';
+            c.fillRect(x + (b.doorX - ox) * sc - 2, y + (b.doorY - oy) * sc - 2, 4, 4);
+        }
+        c.fillStyle = '#7fe8ff';
         c.beginPath();
-        c.arc(px, py, 2.5 + Math.sin(g.time * 6) * 0.6, 0, Math.PI * 2);
+        c.arc(x + (g.player.x - ox) * sc, y + (g.player.y - oy) * sc, 2.5 + Math.sin(g.time * 6) * 0.6, 0, Math.PI * 2);
         c.fill();
         c.restore();
     }
@@ -5630,7 +6272,7 @@ class Renderer {
         c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
         c.fillText(IS_TOUCH
             ? 'tap a tab  ·  tap a row to select, tap again to confirm  ·  \u2715 to close'
-            : g.menuTab === 4 ? '1-5 tabs  ·  arrows move between regions  ·  TAB or ESC close'
+            : g.menuTab === 4 ? '1-5 tabs  ·  arrows pick a waypoint  ·  ENTER warp  ·  TAB or ESC close'
                 : '1-5 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close', 26, VIEW_H - 18);
         void p;
         c.restore();
@@ -5920,8 +6562,9 @@ class Renderer {
             c.fillStyle = !open ? '#1c1f2c' : this.alpha(l.look.accent, known ? 0.28 : 0.1);
             this.roundRect(c, r.x, r.y, r.w, r.h, 6);
             c.fill();
-            c.strokeStyle = i === g.mapIndex ? '#ffffff' : open ? this.alpha(l.look.accent, 0.6) : 'rgba(90,100,140,0.3)';
-            c.lineWidth = i === g.mapIndex ? 2.5 : 1.2;
+            const selRegion = WORLD_MAP.buildings[g.mapIndex]?.region === id;
+            c.strokeStyle = selRegion ? '#ffffff' : open ? this.alpha(l.look.accent, 0.6) : 'rgba(90,100,140,0.3)';
+            c.lineWidth = selRegion ? 2.5 : 1.2;
             if (!open)
                 c.setLineDash([4, 5]);
             this.roundRect(c, r.x, r.y, r.w, r.h, 6);
@@ -5943,18 +6586,43 @@ class Renderer {
             c.fillText(tags.join('  '), r.x + r.w / 2, r.y + r.h / 2 + 10);
             c.restore();
         }
+        // waypoints you have found; the cursor walks between them
+        w.waypoints.forEach((i) => {
+            const b = WORLD_MAP.buildings[i];
+            const p = mapPointPx(b.doorX, b.doorY);
+            const sel = i === g.mapIndex;
+            c.fillStyle = b.kind === 'dungeon' ? '#ff8b8b' : b.kind === 'colosseum' ? PAL.mpCharge : '#ffffff';
+            c.beginPath();
+            if (b.kind === 'dungeon') {
+                c.moveTo(p.x, p.y - 6);
+                c.lineTo(p.x + 6, p.y + 5);
+                c.lineTo(p.x - 6, p.y + 5);
+                c.closePath();
+            }
+            else
+                c.rect(p.x - 4, p.y - 4, 8, 8);
+            c.fill();
+            if (sel) {
+                c.strokeStyle = '#ffffff';
+                c.lineWidth = 2;
+                c.beginPath();
+                c.arc(p.x, p.y, 10, 0, Math.PI * 2);
+                c.stroke();
+            }
+        });
         // you are here
         const gx = M.x + 12, gy = M.y + 12, gw = M.w - 24, gh = M.h - 24;
         const px = gx + (g.player.x / WORLD_PW) * gw, py = gy + (g.player.y / WORLD_PH) * gh;
-        c.fillStyle = PAL.mpCharge;
+        c.fillStyle = '#7fe8ff';
         c.beginPath();
-        c.arc(px, py, 5 + Math.sin(g.time * 5), 0, Math.PI * 2);
+        c.arc(px, py, 4 + Math.sin(g.time * 5), 0, Math.PI * 2);
         c.fill();
         // detail panel
         const dx = M.x + M.w + 14;
         const dw = VIEW_W - dx - 26;
         this.listBox(c, dx, M.y, dw, M.h);
-        const l = locById(REGION_IDS[g.mapIndex]);
+        const wp = WORLD_MAP.buildings[g.mapIndex];
+        const l = locById(wp ? wp.region : w.currentLocation);
         const open = w.unlockedAreas.has(l.id);
         const known = w.discoveredLocations.has(l.id);
         let y = M.y + 26;
@@ -5981,6 +6649,8 @@ class Renderer {
             rows.push(['Foes', l.enemyTypes.map((id) => ENEMIES[id].name).join(', ')]);
         if (l.tier === 0)
             rows.push(['Colosseum', 'Wave Trials']);
+        const chests = WORLD_MAP.chests.filter((x) => x.region === l.id);
+        rows.push(['Chests', `${chests.filter((x) => w.openedChests.has(x.id)).length}/${chests.length} opened`]);
         c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
         for (const [k, v] of rows) {
             c.fillStyle = PAL.dim;
@@ -6006,7 +6676,8 @@ class Renderer {
         }
         c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
-        c.fillText(l.id === w.currentLocation ? 'You are here' : !open ? 'Sealed by a barrier' : 'Walk there', dx + 16, M.y + M.h - 14);
+        c.fillStyle = wp ? PAL.mpCharge : PAL.dim;
+        c.fillText(this.clip(c, wp ? `${IS_TOUCH ? 'Tap again' : 'ENTER'}: warp to ${wp.name}` : 'Find towns and dungeons to warp', dw - 32), dx + 16, M.y + M.h - 14);
     }
     /** Greedy word wrap to `w` pixels in the current font. */
     wrap(c, text, w) {
@@ -6246,12 +6917,12 @@ class Renderer {
                 ['Tuning panel', '` opens every combat constant as a live slider'],
             ];
         const rules = [
-            'Walk the open world. Enemies roam each region and chase you when you',
-            'get close. Glowing barriers seal regions you have not opened yet.',
-            'Each region has a dungeon: rooms lock until you clear them, and its',
-            'bosses wait in order. Its last boss breaks the barrier to the next region.',
-            'Towns have forges (heal, restock, craft any recipe). Towns and dungeon',
-            'doors are checkpoints. The Haven colosseum runs endless Wave Trials.',
+            'Explore the open world. Enemies roam each region and chase you when you get',
+            'close; glowing ELITES hit harder and drop far better loot. Chests hide supplies.',
+            'Each region has a dungeon: rooms lock until cleared, bosses wait in order, and',
+            'the last one breaks the barrier sealing the next region.',
+            'Towns heal you and are checkpoints and waypoints: warp between any you have',
+            'found from the MAP tab. Forge gear in towns with a forge.',
             'Dying loses nothing. Stand at a door and press ENTER to go in; B leaves.',
         ];
         c.textAlign = 'left';
@@ -6476,7 +7147,7 @@ class Game {
         this.world = worldFromSave(save.world);
         this.player.x = this.world.pos.x;
         this.player.y = this.world.pos.y;
-        this.mapIndex = REGION_IDS.indexOf(this.world.currentLocation);
+        this.mapIndex = this.nearestWaypoint();
         this.trialTier = maxWaveTier(this.world);
         this.bannerT = 0;
         this.follow(true);
@@ -6492,10 +7163,31 @@ class Game {
     inRoom() { return this.screen === 'dungeon' || this.screen === 'trial'; }
     /** The forge you are standing at, if any. */
     nearForge() {
+        const t = this.nearTown();
+        return t && t.kind === 'forge' ? t : null;
+    }
+    /** The town (with or without a forge) you are standing in, if any. */
+    nearTown() {
         if (this.screen !== 'world')
             return null;
-        const f = buildingOf('forge', this.world.currentLocation);
-        return f && dist(this.player.x, this.player.y, f.doorX, f.doorY) < 150 ? f : null;
+        for (const b of WORLD_MAP.buildings) {
+            if (isTown(b) && dist(this.player.x, this.player.y, b.doorX, b.doorY) < 170)
+                return b;
+        }
+        return null;
+    }
+    /** The discovered waypoint closest to you, as a building index. */
+    nearestWaypoint() {
+        let best = -1, bd = Infinity;
+        this.world.waypoints.forEach((i) => {
+            const b = WORLD_MAP.buildings[i];
+            const d = dist(this.world.pos.x, this.world.pos.y, b.doorX, b.doorY);
+            if (d < bd) {
+                bd = d;
+                best = i;
+            }
+        });
+        return best;
     }
     atStation() { return !!this.nearForge(); }
     hasSave() {
@@ -6654,7 +7346,7 @@ class Game {
             if (this.bannerT > 0)
                 this.bannerT -= dt;
             this.updateVfx(dt);
-            this.music.target = 0;
+            this.syncMusic();
             this.handleTitle();
             this.input.endTick();
             return;
@@ -6818,27 +7510,29 @@ class Game {
         this.pickups = this.pickups.filter((p) => !p.collected && p.life > 0);
     }
     /** Intensity for the score, resolved from what is actually happening. */
+    /** Pick the theme for where you are, and whether the combat layer is up. */
     syncMusic() {
-        let want;
-        const alive = this.enemies.filter((e) => e.alive && e.aggro).length;
-        if (this.menuOpen || this.restPoint || this.battleOver > 0)
-            want = 0;
-        else if (!this.player.alive)
-            want = 1;
-        else if (this.screen === 'world' && alive === 0)
-            want = 0;
-        else {
-            if (alive <= 2)
-                want = 1;
-            else
-                want = 2;
-            if (alive >= 6 || this.comboCount >= 12)
-                want = 3;
-            const bossUp = !!this.battle?.bossEnemy?.alive;
-            if (bossUp || this.player.hp < this.player.stats.maxHp * 0.25)
-                want = 4;
+        const [id, transpose, tempo] = this.musicFor();
+        this.music.setTrack(id, transpose, tempo);
+        this.music.duck(this.menuOpen || this.paused);
+        const p = this.player;
+        const fighting = p.alive && this.enemies.some((e) => e.alive && e.aggro
+            && (this.screen !== 'world' || dist(e.x, e.y, p.x, p.y) < 700));
+        this.music.target = fighting && !this.restPoint && this.battleOver <= 0 ? 3 : 0;
+    }
+    /** [theme, transpose, tempo] for the current screen and place. */
+    musicFor() {
+        if (this.screen === 'title')
+            return ['title', 0, 1];
+        if (this.screen === 'trial')
+            return ['boss', -2, 0.95];
+        if (this.screen === 'dungeon' && this.dungeon) {
+            const shift = (REGION_IDS.indexOf(this.dungeon.region) % 5) - 2;
+            if (this.battle?.kind === 'boss' && this.battle.bossEnemy?.alive)
+                return ['boss', shift, 1];
+            return ['dungeon', shift, 1];
         }
-        this.music.target = want;
+        return ZONE_MUSIC[this.world.currentLocation] || ZONE_MUSIC.hub;
     }
     updateVfx(dt) {
         for (const p of this.particles) {
@@ -6884,31 +7578,37 @@ class Game {
             this.mapIndex = REGION_IDS.indexOf(r);
             this.save();
         }
-        // towns and dungeon doors are checkpoints: that is where you wake after a defeat
-        for (const b of WORLD_MAP.buildings) {
-            if (b.region !== w.currentLocation || dist(p.x, p.y, b.doorX, b.doorY) > 90)
-                continue;
+        // towns and dungeon doors are checkpoints (where you wake after a defeat)
+        // and waypoints (where the map can warp you)
+        WORLD_MAP.buildings.forEach((b, i) => {
+            if (!isWaypoint(b) || b.region !== w.currentLocation || dist(p.x, p.y, b.doorX, b.doorY) > 110)
+                return;
+            if (!w.waypoints.has(i)) {
+                w.waypoints.add(i);
+                this.banner('WAYPOINT', `${b.name} — warp here from the MAP`, locById(b.region).look.accent);
+            }
             if (Math.hypot(w.checkpoint.x - b.doorX, w.checkpoint.y - b.doorY) > 1) {
                 w.checkpoint = { x: b.doorX, y: b.doorY };
                 this.toast('CHECKPOINT');
                 this.save();
             }
-        }
-        // a town's forge is a rest stop: whole again, pack topped up, once per visit
-        const f = this.nearForge();
-        if (f && this.rested !== f.region) {
-            this.rested = f.region;
+        });
+        // towns are rest stops: whole again, pack topped up, once per visit
+        const town = this.nearTown();
+        const townKey = town ? String(WORLD_MAP.buildings.indexOf(town)) : '';
+        if (town && this.rested !== townKey) {
+            this.rested = townKey;
             p.hp = p.stats.maxHp;
             p.mp = p.stats.maxMp;
             p.charging = false;
             p.potions = Math.max(p.potions, 3);
             p.ethers = Math.max(p.ethers, 2);
-            this.toast(`RESTED AT ${(locById(f.region).stationName || 'THE FORGE').toUpperCase()}`);
+            this.toast(`RESTED AT ${town.name.toUpperCase()}`);
             this.ring(p.x, p.y, 0, 10, 80, PAL.hp);
         }
-        else if (!f && this.rested) {
-            const rf = buildingOf('forge', this.rested);
-            if (!rf || dist(p.x, p.y, rf.doorX, rf.doorY) > 400)
+        else if (!town && this.rested) {
+            const rb = WORLD_MAP.buildings[+this.rested];
+            if (!rb || dist(p.x, p.y, rb.doorX, rb.doorY) > 450)
                 this.rested = '';
         }
         // bumping into a sealed passage says what opens it
@@ -6935,8 +7635,15 @@ class Game {
     /** The door, forge or arena you are standing at, if any. */
     worldPrompt() {
         const p = this.player;
+        for (const c of WORLD_MAP.chests) {
+            if (this.world.openedChests.has(c.id) || dist(p.x, p.y, c.x, c.y) > 52)
+                continue;
+            return { label: 'Open the chest', act: () => this.openChest(c), color: PAL.mpCharge };
+        }
         let best = null;
         for (const b of WORLD_MAP.buildings) {
+            if (b.kind === 'town' || b.kind === 'landmark')
+                continue;
             if (dist(p.x, p.y, b.doorX, b.doorY) > 62)
                 continue;
             if (!best || dist(p.x, p.y, b.doorX, b.doorY) < dist(p.x, p.y, best.doorX, best.doorY))
@@ -6962,6 +7669,52 @@ class Game {
             sub: `best wave ${this.world.trialBest[this.trialTier] || 0}  ·  ${IS_TOUCH ? 'tap the arrows' : '← →'} to change tier`,
             act: () => this.startTrial(this.trialTier), nudge: (d) => this.nudgeTrial(d), color: PAL.mpCharge,
         };
+    }
+    /** Loot a chest: materials for the region's tier, supplies, sometimes a boss material. */
+    openChest(c) {
+        if (this.world.openedChests.has(c.id))
+            return;
+        this.world.openedChests.add(c.id);
+        const loc = locById(c.region);
+        const tier = Math.max(1, loc.tier);
+        for (let k = 0; k < 3; k++) {
+            for (const d of rollDrops(pick(loc.enemyTypes), tier + 1, 3))
+                this.pickups.push(new Pickup(c.x, c.y, 20, d.kind, d.id, d.count));
+        }
+        if (loc.bosses.length && Math.random() < 0.2) {
+            this.pickups.push(new Pickup(c.x, c.y, 20, 'mat', loc.bosses[0].uniqueMaterials[0], rndInt(1, 2)));
+        }
+        if (Math.random() < 0.5)
+            this.pickups.push(new Pickup(c.x, c.y, 20, Math.random() < 0.6 ? 'potion' : 'ether', null, 1));
+        this.sfx.levelUp();
+        this.ring(c.x, c.y, 0, 8, 70, PAL.mpCharge);
+        this.burst(c.x, c.y, 16, 14, PAL.mpCharge);
+        const left = WORLD_MAP.chests.filter((x) => x.region === c.region && !this.world.openedChests.has(x.id)).length;
+        this.toast(`CHEST OPENED  ·  ${left} LEFT IN ${loc.name.toUpperCase()}`);
+        this.save();
+    }
+    /** Warp to a discovered waypoint from the MAP tab. Not while something is chasing you. */
+    warpTo(i) {
+        const b = WORLD_MAP.buildings[i];
+        if (!b || !this.world.waypoints.has(i)) {
+            this.toast('NOT DISCOVERED YET');
+            return;
+        }
+        if (this.screen !== 'world') {
+            this.toast('WARP FROM THE OPEN WORLD');
+            return;
+        }
+        const p = this.player;
+        if (this.enemies.some((e) => e.alive && e.aggro && dist(e.x, e.y, p.x, p.y) < 700)) {
+            this.toast('CAN’T WARP MID-FIGHT');
+            return;
+        }
+        this.closeMenu();
+        this.toWorld(b.doorX, b.doorY + (b.kind === 'forge' || b.kind === 'town' ? -TILE : TILE / 2));
+        this.ring(this.player.x, this.player.y, 0, 10, 120, locById(b.region).look.accent);
+        this.sfx.cast(640);
+        const l = locById(b.region);
+        this.banner(b.name.toUpperCase(), l.name, l.look.accent);
     }
     nudgeTrial(d) {
         const tiers = [...this.world.unlockedWaveTiers].sort((a, b) => a - b);
@@ -7010,7 +7763,7 @@ class Game {
         this.menuTab = tab;
         this.menuIndex = 0;
         if (tab === 4)
-            this.mapIndex = REGION_IDS.indexOf(this.world.currentLocation);
+            this.mapIndex = this.nearestWaypoint();
         this.input.clearBuffer();
     }
     closeMenu() {
@@ -7671,7 +8424,7 @@ class Game {
             return;
         }
         if (this.menuTab === 4) {
-            // the world map: arrows move the cursor between regions
+            // the world map: arrows move between waypoints, ENTER warps
             if (inp.wasPressed('left'))
                 this.moveMapCursor(-1, 0);
             if (inp.wasPressed('right'))
@@ -7680,6 +8433,8 @@ class Game {
                 this.moveMapCursor(0, -1);
             if (inp.wasPressed('down'))
                 this.moveMapCursor(0, 1);
+            if (inp.wasPressed('confirm'))
+                this.warpTo(this.mapIndex);
             return;
         }
         if (inp.wasPressed('left')) {
@@ -7723,18 +8478,34 @@ class Game {
             }
         }
     }
-    /** Step the map cursor to the next region in a direction, skipping mountains. */
+    /** Step the map cursor to the nearest discovered waypoint roughly in a direction. */
     moveMapCursor(dx, dy) {
-        const { rx, ry } = regionCell(REGION_IDS[this.mapIndex]);
-        for (let k = 1; k < GRID_W; k++) {
-            const id = REGION_GRID[ry + dy * k]?.[rx + dx * k];
-            if (id === undefined)
+        const cur = WORLD_MAP.buildings[this.mapIndex];
+        if (!cur) {
+            this.mapIndex = this.nearestWaypoint();
+            return;
+        }
+        const from = mapPointPx(cur.doorX, cur.doorY);
+        let best = -1, bestScore = Infinity;
+        this.world.waypoints.forEach((i) => {
+            if (i === this.mapIndex)
                 return;
-            if (id) {
-                this.mapIndex = REGION_IDS.indexOf(id);
-                this.sfx.guard();
+            const b = WORLD_MAP.buildings[i];
+            const p = mapPointPx(b.doorX, b.doorY);
+            const vx = p.x - from.x, vy = p.y - from.y;
+            const d = Math.hypot(vx, vy) || 1;
+            const along = (vx * dx + vy * dy) / d;
+            if (along < 0.3)
                 return;
+            const score = d / along;
+            if (score < bestScore) {
+                bestScore = score;
+                best = i;
             }
+        });
+        if (best >= 0) {
+            this.mapIndex = best;
+            this.sfx.guard();
         }
     }
     equip(e) {
@@ -7885,7 +8656,14 @@ class Game {
         this.hitstop(4 * TUNING.hitstopScale);
         if (this.player.lock === e)
             this.player.lock = null;
-        const luck = TUNING.dropRate * (this.player.hasT('scavenger') ? 1.55 : 1);
+        const luck = TUNING.dropRate * (this.player.hasT('scavenger') ? 1.55 : 1) * (e.elite ? 3 : 1);
+        if (e.elite) {
+            const loc = locById(regionAtPx(e.x, e.y) || HUB_ID);
+            if (loc.bosses.length && Math.random() < 0.3)
+                this.pickups.push(new Pickup(e.x, e.y, e.z + 12, 'mat', loc.bosses[0].uniqueMaterials[0], 1));
+            this.pickups.push(new Pickup(e.x, e.y, e.z + 12, 'potion', null, 1));
+            this.banner('ELITE FELLED', '', PAL.mpCharge);
+        }
         for (const d of rollDrops(e.def.id, e.tier, luck)) {
             this.pickups.push(new Pickup(e.x, e.y, e.z + 12, d.kind, d.id, d.count));
         }
@@ -7989,14 +8767,22 @@ class Game {
             }
         }
         if (this.menuTab === 4) {
-            // tap a region to read about it
-            for (let i = 0; i < REGION_IDS.length; i++) {
-                const r = mapRect(REGION_IDS[i]);
-                if (tap.x >= r.x && tap.x <= r.x + r.w && tap.y >= r.y && tap.y <= r.y + r.h) {
-                    this.mapIndex = i;
+            // tap a waypoint to select it, tap it again to warp there
+            let hit = -1;
+            this.world.waypoints.forEach((i) => {
+                const b = WORLD_MAP.buildings[i];
+                const p = mapPointPx(b.doorX, b.doorY);
+                if (Math.hypot(tap.x - p.x, tap.y - p.y) < 14)
+                    hit = i;
+            });
+            if (hit >= 0) {
+                if (this.mapIndex === hit)
+                    this.warpTo(hit);
+                else {
+                    this.mapIndex = hit;
                     this.sfx.guard();
-                    return true;
                 }
+                return true;
             }
         }
         if (this.menuTab === 2) {
@@ -8131,6 +8917,11 @@ class Game {
     ring(x, y, z, r, maxR, color) {
         this.rings.push({ x, y, z, r, maxR, life: 0.4, maxLife: 0.4, color });
     }
+}
+/** A world pixel position on the MAP tab. */
+function mapPointPx(x, y) {
+    const gx = MAP_BOX.x + 12, gy = MAP_BOX.y + 12, gw = MAP_BOX.w - 24, gh = MAP_BOX.h - 24;
+    return { x: gx + (x / WORLD_PW) * gw, y: gy + (y / WORLD_PH) * gh };
 }
 /** Screen rectangle of a region on the MAP tab. */
 function mapRect(id) {
