@@ -209,3 +209,107 @@ the apple-mobile-web-app meta tags make Add to Home Screen a fullscreen app.
 Known: the canvas letterboxes on a 19.5:9 phone (960x540 fitted by height).
 Widening `VIEW_W` on mobile would fill it, but every layout constant is written
 against 960x540, so that is a deliberate later job.
+
+---
+
+# rev 5 - open world
+
+The wave arena is now one part of an open world: a hub, twelve areas on a
+road graph, 30 bosses, 30 optional Ascendant superbosses, and forges
+scattered across the map. Levels run 1-100.
+
+## New files
+
+| file | what lives there |
+|---|---|
+| `src/world.ts` | `WorldLocation`, `BossDefinition`, `WorldState`; save (de)serialisation, road lookups, unlock rules, the quest hint |
+| `src/location.ts` | the hub and 12 areas, 30 bosses, `ROADS`, tier level bands, station flavour — all data |
+| `src/superboss.ts` | Ascendant variants: availability, stat scaling, Star Fragment spoils |
+| `src/travel.ts` | `TravelState`: the road clock, roadside spawns, ambushes, turning back |
+
+Build order: config, core, items, talents, world, location, superboss,
+music, entities, travel, render, main.
+
+## The loop
+
+`Game.screen` is `'title' | 'location' | 'travel' | 'battle'`.
+
+- **location** - safe. The panel lists the area's bosses (and their
+  Ascendants once beaten), the Wave Trial, the forge if there is one,
+  Travel (opens the MAP tab), the road home, gear, and Save. A "Next:" line
+  points at the cheapest boss that opens something.
+- **travel** - pick a neighbour on the map. Roads take `roadTime` seconds,
+  and every area also has a direct road home (`hubDistance`) so you can
+  never get stuck. Roads use the harder end's look and enemies. Enemies
+  arrive at `spawnRate` per minute forever until you arrive; 0-3 ambushes
+  of 1-5 enemies stop the clock until cleared. B (or the button) turns you
+  around from where you are. Arriving pays EXP for the distance.
+- **battle** - a boss fight is two waves of the area's enemies then the
+  boss; a Wave Trial is the old endless mode at any unlocked tier. B
+  retreats at any time and you keep what you picked up.
+
+Dying loses nothing: you wake at the last safe place (where the road began,
+or the area the battle was in).
+
+## Tiers and scaling
+
+`TIER_SCALING` (config.ts) multiplies HP/attack/defence/EXP by tier;
+`LEVEL_SCALING` adds a little per enemy level inside the tier's band
+(`TIER_LEVELS`: tier 1 is Lv 1-8, tier 10 is Lv 87-100). Enemy attack
+grows slowly on purpose - strength counts twice in `physDamage`.
+
+The spec's prose says "5x stats per tier" but its formulas give 1.8x hp
+per tier step (tier 3 = 2.6x tier 1). The formulas are implemented as
+written; tune them in config.ts.
+
+Measured with on-level gear: ordinary enemies take ~4 hits to kill and ~8
+to kill you at every tier. Boss slams go from ~16% of your HP at tier 1 to
+~50% at tier 10 (always telegraphed; jump or dash out). 1.45M EXP to reach
+level 100, about 20 on-tier kills per level at the top.
+
+## Bosses
+
+Four patterns, each a base AI plus signature moves (`runMove` in
+entities.ts): **slam** (ground ring - be airborne), **fan** (bolt spread),
+**rush** (a string of lunges), **dive** (rises, tracks, lands on a marked
+spot). Enrage under 50% HP; no stagger mid-move. `bossEnemyDef` turns a
+`BossDefinition` into a fightable enemy (`BOSS_HP_SCALE`, `SHOCK_MULT`).
+
+Each area's bosses unlock the next area and one Wave Trial tier, and drop
+that region's boss-only material (Heartwood, Tidepearl, Relic Gear,
+Sunglass, Magma Heart, Rimeshard, Stormfeather, Crownshard).
+
+**Ascendants** appear once the boss is beaten: x1.5 stats, x2 spoils and
+EXP, plus Star Fragments - the only way to forge Starforged / Starwoven.
+They are tracked separately and unlock nothing.
+
+## Forges
+
+The Haven and six areas have a station. Forging only works there (the tab
+reads FORGE; elsewhere it is a read-only RECIPES list). Every recipe is
+available at every station and none is gated on level or on owning the
+previous tier. Arriving at a station restores HP/MP and restocks items.
+
+## Save
+
+`aerial-finisher-save-v2` gains `world` (current location, discovered,
+completedBosses, completedSuperbosses, unlockedAreas, unlockedWaveTiers,
+trialBest). `worldFromSave` re-derives unlocks from defeated bosses, so a
+save can never hold a kill without the door it opened. Saves from before
+the open world keep level, gear and materials and start at the Haven.
+
+## Decisions taken on the spec's open questions
+
+1. Music: the existing score, with intensity driven by the world state
+   (calm in locations, peak during a boss). No per-area themes yet.
+2. Onboarding: rewritten How to Play, plus the "Next:" hint.
+3. Fast travel: none, but every area has a direct road home.
+4. Recommended level: shown on the HUD, the panel and the map.
+5. Quest markers: the "Next:" hint line.
+
+Not done from the spec: area music themes (stretch), and bosses as random
+road encounters (the `TravelEncounter.boss` case) - bosses live at their
+areas.
+
+Debug panel: **Unlock all areas + tiers**; "Skip to wave +5" only works in
+a Wave Trial.

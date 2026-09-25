@@ -42,6 +42,14 @@ function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+function pickWeighted<T extends { weight: number }>(arr: T[]): T {
+  let total = 0;
+  for (const a of arr) total += a.weight;
+  let r = Math.random() * total;
+  for (const a of arr) { r -= a.weight; if (r < 0) return a; }
+  return arr[arr.length - 1];
+}
+
 /* ----------------------------------------------------------------- input */
 
 // Coarse pointer means a phone or tablet: the game switches to touch controls,
@@ -56,16 +64,16 @@ type Action =
   | 'attack' | 'jump' | 'lock' | 'dash' | 'menu' | 'magic'
   | 'up' | 'down' | 'left' | 'right'
   | 'confirm' | 'cancel'
-  | 'spell1' | 'spell2' | 'spell3' | 'spell4'
-  | 'item' | 'pause' | 'debug' | 'restart' | 'mute';
+  | 'spell1' | 'spell2' | 'spell3' | 'spell4' | 'spell5'
+  | 'item' | 'pause' | 'debug' | 'restart' | 'mute' | 'back';
 
 const KEYMAP: Record<string, Action> = {
   KeyJ: 'attack', Space: 'jump', KeyK: 'jump', KeyL: 'lock',
   ShiftLeft: 'dash', ShiftRight: 'dash', Tab: 'menu',
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
   Enter: 'confirm', Escape: 'cancel', Backspace: 'cancel',
-  Digit1: 'spell1', Digit2: 'spell2', Digit3: 'spell3', Digit4: 'spell4',
-  KeyQ: 'item', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute',
+  Digit1: 'spell1', Digit2: 'spell2', Digit3: 'spell3', Digit4: 'spell4', Digit5: 'spell5',
+  KeyQ: 'item', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back',
 };
 
 // Movement is read separately so WASD can coexist with the arrow-key menu.
