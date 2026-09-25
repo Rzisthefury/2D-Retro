@@ -261,7 +261,7 @@ const TUNING = {
     enemyHpMult: 1.0,
     enemySpeedMult: 1.0,
     enemyAggression: 1.0,
-    waveScaling: 0.17,
+    waveScaling: 0.05,
     // dash
     dashSpeed: 760,
     dashFrames: 13,
@@ -275,6 +275,7 @@ const TUNING = {
     musicVolume: 0.3,
     sfxVolume: 0.7,
     waveIntro: 1.6,
+    travelSpawnMult: 1.0,
 };
 const TUNABLES = [
     { key: 'moveSpeed', label: 'Move speed', min: 60, max: 420, step: 5, group: 'Movement' },
@@ -310,6 +311,7 @@ const TUNABLES = [
     { key: 'expMult', label: 'EXP rate', min: 0.1, max: 10, step: 0.1, group: 'Progression' },
     { key: 'dropRate', label: 'Drop rate', min: 0.1, max: 8, step: 0.1, group: 'Progression' },
     { key: 'waveIntro', label: 'Wave grace (s)', min: 0, max: 6, step: 0.1, group: 'Progression' },
+    { key: 'travelSpawnMult', label: 'Road spawn rate', min: 0, max: 4, step: 0.1, group: 'Progression' },
     { key: 'musicVolume', label: 'Music volume', min: 0, max: 1, step: 0.02, group: 'Audio' },
     { key: 'sfxVolume', label: 'SFX volume', min: 0, max: 1, step: 0.02, group: 'Audio' },
 ];
@@ -412,7 +414,24 @@ function statsForLevel(level) {
 function expToNext(level) {
     return Math.floor(14 * Math.pow(level, 1.72) + 10 * level);
 }
-const MAX_LEVEL = 60;
+const MAX_LEVEL = 100;
+/* ------------------------------------------------------ tier scaling */
+// Every location has a tier (1-10). Its enemies' stats are multiplied by
+// these, then nudged by their individual level. Superbosses multiply on top.
+const TIER_SCALING = {
+    hpMultiplier: (tier) => 1 + (tier - 1) * 0.8,
+    attackMultiplier: (tier) => 1 + (tier - 1) * 0.9,
+    defenseMultiplier: (tier) => 1 + (tier - 1) * 0.7,
+    xpMultiplier: (tier) => 1 + (tier - 1) * 1.2,
+};
+// Within a tier, an enemy's level adds a little more on top. Attack grows
+// slowly because it counts twice in the damage formula (as a power ratio and
+// as the strength term).
+const LEVEL_SCALING = {
+    hp: (level) => 1 + (level - 1) * 0.03,
+    attack: (level) => 1 + (level - 1) * 0.005,
+    xp: (level) => 1 + (level - 1) * 0.06,
+};
 const TOUCH_STICK = { x: 118, y: 424, r: 64, knob: 30, dead: 0.17 };
 const TOUCH_BTNS = [
     { id: 'attack', x: 866, y: 448, r: 42, label: 'ATK', color: '#ff9d5c' },
@@ -425,6 +444,10 @@ const TOUCH_CHIPS = { x: 920, y: 186, dy: 38, r: 16 };
 // layer hit-tests against it — one source of truth or taps land in the wrong row.
 const MENU_TAB = { x: 26, y: 18, w: 116, h: 28, gap: 8 };
 const MENU_TABS = 5; // gear · synth · talents · status · map
+const SYNTH_ROW_H = 20; // the recipe list is long now, so its rows are tighter
+const MAP_BOX = { x: 26, y: 62, w: 590, h: 432 }; // world map area in the MAP tab
+const PLACE_PANEL = { x: 18, y: 104, w: 300, rowH: 26 }; // the location action list
+const BACK_BTN = { x: 405, y: 70, w: 150, h: 26 }; // turn back / retreat
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
@@ -511,7 +534,7 @@ const KEYMAP = {
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     Enter: 'confirm', Escape: 'cancel', Backspace: 'cancel',
     Digit1: 'spell1', Digit2: 'spell2', Digit3: 'spell3', Digit4: 'spell4', Digit5: 'spell5',
-    KeyQ: 'item', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute',
+    KeyQ: 'item', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back',
 };
 // Movement is read separately so WASD can coexist with the arrow-key menu.
 const MOVE_KEYS = { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'] };
@@ -863,8 +886,22 @@ const MATS = {
     iron: { id: 'iron', name: 'Dark Iron', color: '#c9d2e8', rank: 3 },
     crystal: { id: 'crystal', name: 'Radiant Crystal', color: '#ffe27a', rank: 4 },
     core: { id: 'core', name: 'Void Core', color: '#ff5fd2', rank: 5 },
+    heartwood: { id: 'heartwood', name: 'Heartwood', color: '#7fe0a0', rank: 6 },
+    tidepearl: { id: 'tidepearl', name: 'Tidepearl', color: '#7fd8ff', rank: 6 },
+    relic: { id: 'relic', name: 'Relic Gear', color: '#d0b090', rank: 6 },
+    sunglass: { id: 'sunglass', name: 'Sunglass', color: '#ffd27a', rank: 7 },
+    magma: { id: 'magma', name: 'Magma Heart', color: '#ff6a3d', rank: 7 },
+    rime: { id: 'rime', name: 'Rimeshard', color: '#d8f0ff', rank: 8 },
+    storm: { id: 'storm', name: 'Stormfeather', color: '#fff08a', rank: 8 },
+    voidcrown: { id: 'voidcrown', name: 'Crownshard', color: '#c070ff', rank: 9 },
+    star: { id: 'star', name: 'Star Fragment', color: '#ffffff', rank: 10 },
 };
-const MAT_ORDER = ['shard', 'plate', 'sigil', 'ember', 'iron', 'crystal', 'core'];
+const MAT_ORDER = [
+    'shard', 'plate', 'sigil', 'ember', 'iron', 'crystal', 'core',
+    'heartwood', 'tidepearl', 'relic', 'sunglass', 'magma', 'rime', 'storm', 'voidcrown', 'star',
+];
+/** Boss materials never come from ordinary enemies. */
+const BOSS_MATS = ['heartwood', 'tidepearl', 'relic', 'sunglass', 'magma', 'rime', 'storm', 'voidcrown', 'star'];
 const WEAPONS = [
     {
         id: 'w1', name: 'Worn Edge', tier: 1,
@@ -876,36 +913,71 @@ const WEAPONS = [
         id: 'w2', name: 'Iron Fang', tier: 2,
         powerMult: 1.18, rangeBonus: 4, critBonus: 0.02, magBonus: 0, poiseMult: 1.1,
         blade: { color: '#9fb0cc', edge: '#f2f7ff', glow: 0.1, length: 1.06, width: 7, teeth: true, flame: false },
-        recipe: { requires: 'w1', needs: { shard: 8, iron: 2 } },
+        recipe: { needs: { shard: 8, iron: 2 } },
         desc: 'Heavier steel. A little more reach, a little more bite.',
     },
     {
         id: 'w3', name: 'Shadowsteel', tier: 3,
         powerMult: 1.38, rangeBonus: 8, critBonus: 0.04, magBonus: 1, poiseMult: 1.2,
         blade: { color: '#6c5fa8', edge: '#c6b4ff', glow: 0.35, length: 1.12, width: 7, teeth: true, flame: false },
-        recipe: { requires: 'w2', needs: { shard: 18, sigil: 8, iron: 6 } },
+        recipe: { needs: { shard: 18, sigil: 8, iron: 6 } },
         desc: 'Quenched in shade. Staggers heavier things than it should.',
     },
     {
         id: 'w4', name: 'Emberfang', tier: 4,
         powerMult: 1.62, rangeBonus: 12, critBonus: 0.07, magBonus: 2, poiseMult: 1.35,
         blade: { color: '#a34a2a', edge: '#ffb066', glow: 0.6, length: 1.18, width: 8, teeth: true, flame: true },
-        recipe: { requires: 'w3', needs: { ember: 16, plate: 10, iron: 12, crystal: 2 } },
+        recipe: { needs: { ember: 16, plate: 10, iron: 12, crystal: 2 } },
         desc: 'Burns on the swing. Crits far more often.',
     },
     {
         id: 'w5', name: 'Stormcaller', tier: 5,
         powerMult: 1.90, rangeBonus: 16, critBonus: 0.09, magBonus: 5, poiseMult: 1.5,
         blade: { color: '#3e6fa8', edge: '#8fe4ff', glow: 0.8, length: 1.24, width: 9, teeth: true, flame: true },
-        recipe: { requires: 'w4', needs: { sigil: 24, crystal: 8, iron: 20, core: 1 } },
+        recipe: { needs: { sigil: 24, crystal: 8, iron: 20, core: 1 } },
         desc: 'Long reach and real magic behind it.',
     },
     {
         id: 'w6', name: 'Oblivion Fang', tier: 6,
         powerMult: 2.25, rangeBonus: 21, critBonus: 0.12, magBonus: 8, poiseMult: 1.75,
         blade: { color: '#5a1f4e', edge: '#ff7ae0', glow: 1, length: 1.32, width: 10, teeth: true, flame: true },
-        recipe: { requires: 'w5', needs: { core: 5, crystal: 20, iron: 40, ember: 30 } },
-        desc: 'The end of the ladder. Nothing guards against it for long.',
+        recipe: { needs: { core: 5, crystal: 20, iron: 40, ember: 30 } },
+        desc: 'Nothing guards against it for long.',
+    },
+    {
+        id: 'w7', name: 'Tidebreaker', tier: 7,
+        powerMult: 2.60, rangeBonus: 24, critBonus: 0.13, magBonus: 10, poiseMult: 1.9,
+        blade: { color: '#2a6a8a', edge: '#7fd8ff', glow: 0.8, length: 1.36, width: 10, teeth: true, flame: false },
+        recipe: { needs: { tidepearl: 8, heartwood: 8, iron: 40, core: 4 } },
+        desc: 'Forest and sea, bound in one edge. Heavy as a wave.',
+    },
+    {
+        id: 'w8', name: 'Magmaheart', tier: 8,
+        powerMult: 3.00, rangeBonus: 27, critBonus: 0.15, magBonus: 12, poiseMult: 2.05,
+        blade: { color: '#8a2a1a', edge: '#ff9a5c', glow: 1, length: 1.40, width: 11, teeth: true, flame: true },
+        recipe: { needs: { magma: 10, sunglass: 10, relic: 8, core: 6 } },
+        desc: 'Still molten at the core. It never quite cools.',
+    },
+    {
+        id: 'w9', name: 'Rimestorm', tier: 9,
+        powerMult: 3.45, rangeBonus: 30, critBonus: 0.17, magBonus: 15, poiseMult: 2.2,
+        blade: { color: '#6a8ab0', edge: '#e8f8ff', glow: 1, length: 1.44, width: 11, teeth: true, flame: false },
+        recipe: { needs: { rime: 12, storm: 12, crystal: 30, core: 8 } },
+        desc: 'Frost on the blade, thunder in the swing.',
+    },
+    {
+        id: 'w10', name: 'Hollow Crown', tier: 10,
+        powerMult: 4.00, rangeBonus: 34, critBonus: 0.20, magBonus: 18, poiseMult: 2.5,
+        blade: { color: '#3a1060', edge: '#d890ff', glow: 1, length: 1.50, width: 12, teeth: true, flame: true },
+        recipe: { needs: { voidcrown: 14, storm: 10, magma: 10, core: 12 } },
+        desc: 'Taken from the Rift itself. The end of the main road.',
+    },
+    {
+        id: 'w11', name: 'Starforged', tier: 11,
+        powerMult: 4.60, rangeBonus: 38, critBonus: 0.25, magBonus: 22, poiseMult: 2.8,
+        blade: { color: '#c8c8f0', edge: '#ffffff', glow: 1, length: 1.55, width: 12, teeth: true, flame: true },
+        recipe: { needs: { star: 12, voidcrown: 10, core: 15 } },
+        desc: 'Only Ascendant bosses drop what this is made of.',
     },
 ];
 const ARMORS = [
@@ -919,36 +991,71 @@ const ARMORS = [
         id: 'a2', name: 'Iron Cuirass', tier: 2,
         dr: 0.06, hpBonus: 16, mresBonus: 1,
         look: { plate: '#42507e', trim: '#b3c4ec', cape: '#ad2a3c', shoulder: 12, spikes: 0, capeLen: 27, crest: 2 },
-        recipe: { requires: 'a1', needs: { plate: 8, shard: 6 } },
+        recipe: { needs: { plate: 8, shard: 6 } },
         desc: 'Proper plate. Takes the edge off everything.',
     },
     {
         id: 'a3', name: 'Shadowmail', tier: 3,
         dr: 0.12, hpBonus: 38, mresBonus: 3,
         look: { plate: '#332b57', trim: '#c4adff', cape: '#8a2359', shoulder: 15, spikes: 2, capeLen: 33, crest: 5 },
-        recipe: { requires: 'a2', needs: { plate: 16, shard: 20, iron: 8 } },
+        recipe: { needs: { plate: 16, shard: 20, iron: 8 } },
         desc: 'Shoulders start getting in the way of doorframes.',
     },
     {
         id: 'a4', name: 'Emberplate', tier: 4,
         dr: 0.18, hpBonus: 66, mresBonus: 5,
         look: { plate: '#331d22', trim: '#ffab5e', cape: '#9c2418', shoulder: 17, spikes: 3, capeLen: 38, crest: 7 },
-        recipe: { requires: 'a3', needs: { ember: 18, plate: 22, iron: 14, crystal: 3 } },
+        recipe: { needs: { ember: 18, plate: 22, iron: 14, crystal: 3 } },
         desc: 'Forge-blackened, gold-veined, faintly warm.',
     },
     {
         id: 'a5', name: 'Stormward', tier: 5,
         dr: 0.24, hpBonus: 100, mresBonus: 9,
         look: { plate: '#1d2c44', trim: '#8fe4ff', cape: '#123a5c', shoulder: 20, spikes: 4, capeLen: 44, crest: 10 },
-        recipe: { requires: 'a4', needs: { sigil: 26, crystal: 10, iron: 24, core: 1 } },
+        recipe: { needs: { sigil: 26, crystal: 10, iron: 24, core: 1 } },
         desc: 'Turns magic aside as easily as steel.',
     },
     {
         id: 'a6', name: 'Oblivion Aegis', tier: 6,
         dr: 0.30, hpBonus: 145, mresBonus: 14,
         look: { plate: '#1a1024', trim: '#ff7ae0', cape: '#3d0b2e', shoulder: 24, spikes: 5, capeLen: 52, crest: 14 },
-        recipe: { requires: 'a5', needs: { core: 5, crystal: 24, plate: 40, iron: 44 } },
-        desc: 'A walking wall. Nothing about the silhouette is subtle.',
+        recipe: { needs: { core: 5, crystal: 24, plate: 40, iron: 44 } },
+        desc: 'Nothing about the silhouette is subtle.',
+    },
+    {
+        id: 'a7', name: 'Tidewall', tier: 7,
+        dr: 0.33, hpBonus: 200, mresBonus: 18,
+        look: { plate: '#1a3a4a', trim: '#7fd8ff', cape: '#0e3a52', shoulder: 25, spikes: 5, capeLen: 54, crest: 15 },
+        recipe: { needs: { tidepearl: 8, heartwood: 8, plate: 50, core: 4 } },
+        desc: 'Scaled like a sea wall, grown like bark.',
+    },
+    {
+        id: 'a8', name: 'Magmaforged', tier: 8,
+        dr: 0.36, hpBonus: 260, mresBonus: 22,
+        look: { plate: '#3a1410', trim: '#ff8a4a', cape: '#6a1a0e', shoulder: 26, spikes: 6, capeLen: 56, crest: 17 },
+        recipe: { needs: { magma: 10, sunglass: 10, relic: 8, core: 6 } },
+        desc: 'Cooled obsidian over a glowing seam.',
+    },
+    {
+        id: 'a9', name: 'Rimeguard', tier: 9,
+        dr: 0.39, hpBonus: 330, mresBonus: 27,
+        look: { plate: '#2a3a4e', trim: '#e8f8ff', cape: '#3a5a7a', shoulder: 27, spikes: 6, capeLen: 58, crest: 19 },
+        recipe: { needs: { rime: 12, storm: 12, crystal: 30, core: 8 } },
+        desc: 'Frost-hardened plate that sheds lightning.',
+    },
+    {
+        id: 'a10', name: 'Hollow Regalia', tier: 10,
+        dr: 0.42, hpBonus: 410, mresBonus: 32,
+        look: { plate: '#1e0e30', trim: '#d890ff', cape: '#4a1060', shoulder: 28, spikes: 7, capeLen: 60, crest: 22 },
+        recipe: { needs: { voidcrown: 14, rime: 10, sunglass: 10, core: 12 } },
+        desc: 'A king\'s armour, from a king who is no longer there.',
+    },
+    {
+        id: 'a11', name: 'Starwoven', tier: 11,
+        dr: 0.46, hpBonus: 520, mresBonus: 40,
+        look: { plate: '#d8d8ec', trim: '#ffffff', cape: '#8a8ad0', shoulder: 29, spikes: 7, capeLen: 62, crest: 24 },
+        recipe: { needs: { star: 12, voidcrown: 10, core: 15 } },
+        desc: 'Woven from Ascendant spoils. Faintly warm, faintly humming.',
     },
 ];
 function weaponById(id) { return WEAPONS.find((w) => w.id === id) || WEAPONS[0]; }
@@ -986,23 +1093,22 @@ const DROPS = {
         potion: 0.13, ether: 0.16,
     },
 };
-/** Void Cores only start appearing deep in a run — the late-tier gate. */
-function coreChance(wave) {
-    if (wave < 10)
+/** Void Cores only drop from tier 5 up — the late-tier gate is depth, not luck. */
+function coreChance(tier) {
+    if (tier < 5)
         return 0;
-    return Math.min(0.10, 0.02 + (wave - 10) * 0.004);
+    return Math.min(0.12, 0.02 + (tier - 5) * 0.018);
 }
-/** `bias` is the current location's per-material multiplier (see locations.ts). */
-function rollDrops(enemyId, wave, luck, bias = {}) {
+function rollDrops(enemyId, tier, luck) {
     const t = DROPS[enemyId] || DROPS.shade;
     const out = [];
-    const waveBonus = 1 + Math.min(0.6, wave * 0.012);
+    const tierBonus = 1 + Math.min(0.6, tier * 0.06);
     for (const m of t.mats) {
-        if (Math.random() < m.chance * luck * waveBonus * (bias[m.id] || 1)) {
+        if (Math.random() < m.chance * luck * tierBonus) {
             out.push({ kind: 'mat', id: m.id, count: rndInt(m.min, m.max) });
         }
     }
-    if (Math.random() < coreChance(wave) * luck * (bias.core || 1))
+    if (Math.random() < coreChance(tier) * luck)
         out.push({ kind: 'mat', id: 'core', count: 1 });
     if (Math.random() < t.potion)
         out.push({ kind: 'potion', id: null, count: 1 });
@@ -1092,83 +1198,430 @@ function canLearn(set, t, apFree) {
     return apFree >= t.cost;
 }
 /* =========================================================================
- * locations.ts — the places you fight. Each location is pure data: a look,
- * an enemy mix, a difficulty depth and a material bias. Clearing enough
- * waves in one location opens the next, and you travel from the MAP tab.
+ * world.ts — the shape of the open world: what a location and a boss are,
+ * the player's WorldState, the road graph, and every unlock rule.
+ * The actual places and bosses are data in location.ts.
  * ========================================================================= */
-const LOCATIONS = [
+const HUB_ID = 'hub';
+const START_AREAS = ['hub', 'forest-1', 'coast-1'];
+function freshWorld() {
+    return {
+        currentLocation: HUB_ID,
+        discoveredLocations: new Set([HUB_ID]),
+        completedBosses: new Map(),
+        completedSuperbosses: new Map(),
+        unlockedAreas: new Set(START_AREAS),
+        unlockedWaveTiers: new Set([1]),
+        trialBest: {},
+    };
+}
+function worldToSave(w) {
+    const flat = (m) => {
+        const o = {};
+        m.forEach((v, k) => { if (v)
+            o[k] = true; });
+        return o;
+    };
+    const tb = {};
+    for (const k of Object.keys(w.trialBest))
+        tb[k] = w.trialBest[+k];
+    return {
+        currentLocation: w.currentLocation,
+        discoveredLocations: [...w.discoveredLocations],
+        completedBosses: flat(w.completedBosses),
+        completedSuperbosses: flat(w.completedSuperbosses),
+        unlockedAreas: [...w.unlockedAreas],
+        unlockedWaveTiers: [...w.unlockedWaveTiers].sort((a, b) => a - b),
+        trialBest: tb,
+    };
+}
+/** Rebuild a WorldState from a save, dropping anything that no longer exists. */
+function worldFromSave(j) {
+    const w = freshWorld();
+    if (!j || typeof j !== 'object')
+        return w;
+    const isLoc = (id) => typeof id === 'string' && !!LOCATION_MAP[id];
+    const isBoss = (id) => typeof id === 'string' && !!BOSS_MAP[id];
+    if (Array.isArray(j.discoveredLocations))
+        for (const id of j.discoveredLocations)
+            if (isLoc(id))
+                w.discoveredLocations.add(id);
+    if (Array.isArray(j.unlockedAreas))
+        for (const id of j.unlockedAreas)
+            if (isLoc(id))
+                w.unlockedAreas.add(id);
+    if (Array.isArray(j.unlockedWaveTiers)) {
+        for (const t of j.unlockedWaveTiers)
+            if (t >= 1 && t <= 10)
+                w.unlockedWaveTiers.add(t | 0);
+    }
+    if (j.completedBosses)
+        for (const id of Object.keys(j.completedBosses))
+            if (isBoss(id) && j.completedBosses[id])
+                w.completedBosses.set(id, true);
+    if (j.completedSuperbosses)
+        for (const id of Object.keys(j.completedSuperbosses))
+            if (isBoss(id) && j.completedSuperbosses[id])
+                w.completedSuperbosses.set(id, true);
+    if (j.trialBest)
+        for (const k of Object.keys(j.trialBest))
+            if (+k >= 1 && +k <= 10)
+                w.trialBest[+k] = Math.max(1, j.trialBest[k] | 0);
+    // Re-derive unlocks from defeated bosses, so a save can never hold a boss
+    // kill without the door it opened.
+    w.completedBosses.forEach((_, id) => applyBossUnlocks(w, BOSS_MAP[id]));
+    if (isLoc(j.currentLocation) && w.unlockedAreas.has(j.currentLocation))
+        w.currentLocation = j.currentLocation;
+    w.discoveredLocations.add(w.currentLocation);
+    return w;
+}
+/* ------------------------------------------------------------- queries */
+function locById(id) { return LOCATION_MAP[id] || LOCATION_MAP[HUB_ID]; }
+function isAreaUnlocked(w, id) { return w.unlockedAreas.has(id); }
+function bossDefeated(w, id) { return !!w.completedBosses.get(id); }
+function superDefeated(w, id) { return !!w.completedSuperbosses.get(id); }
+/** Seconds on the road from `a` to `b`, or 0 if there is no road. */
+function roadTime(a, b) {
+    if (a === b)
+        return 0;
+    const la = locById(a);
+    if (la.roadTime[b])
+        return la.roadTime[b];
+    if (b === HUB_ID)
+        return la.hubDistance; // every place has a road home
+    if (a === HUB_ID)
+        return locById(b).hubDistance;
+    return 0;
+}
+/** The boss whose defeat opens `areaId`, for "defeat X to unlock" messages. */
+function unlockerOf(areaId) {
+    for (const b of ALL_BOSSES)
+        if (b.unlocksArea === areaId)
+            return b;
+    return null;
+}
+function waveTierUnlocker(tier) {
+    for (const b of ALL_BOSSES)
+        if (b.unlocksWaveTier === tier)
+            return b;
+    return null;
+}
+function lockedAreaText(areaId) {
+    const b = unlockerOf(areaId);
+    return b ? `Defeat ${b.name} in ${locById(bossHome(b.id)).name} to unlock` : 'This area is locked';
+}
+function lockedTierText(tier) {
+    const b = waveTierUnlocker(tier);
+    return b ? `Defeat ${b.name} to unlock Wave Tier ${tier}` : `Wave Tier ${tier} is locked`;
+}
+function bossHome(bossId) { return BOSS_HOME[bossId] || HUB_ID; }
+/** Mark a boss defeated. Returns the names of anything it opened. */
+function defeatBoss(w, b) {
+    w.completedBosses.set(b.id, true);
+    return applyBossUnlocks(w, b);
+}
+function applyBossUnlocks(w, b) {
+    const out = [];
+    if (!b)
+        return out;
+    if (b.unlocksArea && !w.unlockedAreas.has(b.unlocksArea)) {
+        w.unlockedAreas.add(b.unlocksArea);
+        out.push(locById(b.unlocksArea).name);
+    }
+    if (b.unlocksWaveTier && !w.unlockedWaveTiers.has(b.unlocksWaveTier)) {
+        w.unlockedWaveTiers.add(b.unlocksWaveTier);
+        out.push(`Wave Tier ${b.unlocksWaveTier}`);
+    }
+    return out;
+}
+function maxWaveTier(w) {
+    let m = 1;
+    w.unlockedWaveTiers.forEach((t) => { if (t > m)
+        m = t; });
+    return m;
+}
+/** A nudge toward the next thing that opens the map up. */
+function nextObjective(w) {
+    // Cheapest open gate: the lowest-tier undefeated boss that unlocks an area
+    // in a place you can already reach.
+    let best = null;
+    for (const b of ALL_BOSSES) {
+        if (bossDefeated(w, b.id) || !b.unlocksArea)
+            continue;
+        if (w.unlockedAreas.has(b.unlocksArea))
+            continue;
+        if (!w.unlockedAreas.has(bossHome(b.id)))
+            continue;
+        if (!best || b.tier < best.tier)
+            best = b;
+    }
+    if (best)
+        return `Next: defeat ${best.name} in ${locById(bossHome(best.id)).name}`;
+    const left = ALL_BOSSES.filter((b) => !bossDefeated(w, b.id));
+    if (left.length)
+        return `Next: ${left.length} boss${left.length > 1 ? 'es' : ''} still stand — try ${left[0].name}`;
+    const sLeft = ALL_BOSSES.filter((b) => !superDefeated(w, b.id)).length;
+    return sLeft ? `Every boss is down. ${sLeft} Ascendant superbosses remain.` : 'You have conquered everything. Well fought.';
+}
+/* =========================================================================
+ * location.ts — every place in the world and every boss in it. Pure data:
+ * the rules that read it live in world.ts, travel.ts and superboss.ts.
+ *
+ * The world is a hub and twelve areas across tiers 1-10. Each area has
+ * 2-3 bosses; one opens the next area, one opens a new Wave Trial tier,
+ * and every one drops that region's boss-only material.
+ * ========================================================================= */
+/** Tier -> the level band enemies there are drawn from. */
+const TIER_LEVELS = [
+    [1, 1],
+    [1, 8], [8, 16], [16, 25], [25, 34], [34, 44],
+    [44, 54], [54, 64], [64, 75], [75, 87], [87, 100],
+];
+const SUPER = { statMultiplier: 1.5, dropMultiplier: 2 };
+function mkBoss(id, name, title, pattern, moves, hp, attack, defense, mats, color, accent, unlock = {}) {
+    return {
+        id, name, title, tier: 0, pattern, moves,
+        stats: { hp, attack, defense },
+        unlocksArea: unlock.area, unlocksWaveTier: unlock.tier,
+        uniqueMaterials: mats, superboss: { ...SUPER }, color, accent,
+    };
+}
+const LOCATION_SEEDS = [
     {
-        id: 'plaza', name: 'Twilight Plaza', sub: 'where every blade starts',
-        desc: 'A quiet square at the edge of the dark. Balanced foes, no surprises.',
-        depth: 0,
-        weights: { shade: 1, caster: 1, flyer: 1, bruiser: 1 },
-        matBias: {},
-        unlock: null,
-        look: {
-            sky: '#12151f', floor: '#171a26', floorAlt: '#1c2031', grid: '#242a3d',
-            motif: '#4a5aa0', wall: '#39406090', accent: '#8fb4ff', deco: 'plaza',
-        },
+        id: 'hub', name: 'Haven Crossroads', theme: 'Haven', tier: 0,
+        description: 'The last lit square before the dark. Safe ground, a forge, and roads everywhere.',
+        enemyTypes: ['shade'], spawnRate: 0, bosses: [],
+        hasCraftingStation: true, stationName: 'Haven Forge',
+        map: { x: 0.08, y: 0.52 },
+        look: { sky: '#12151f', floor: '#171a26', floorAlt: '#1c2031', grid: '#242a3d', motif: '#4a5aa0', wall: '#39406090', accent: '#8fb4ff' },
     },
     {
-        id: 'bastion', name: 'Sunken Bastion', sub: 'the walls still hold',
-        desc: 'A drowned fortress full of Bulwarks. Break guards, harvest plate and iron.',
-        depth: 4,
-        weights: { shade: 1, caster: 0.6, flyer: 0.5, bruiser: 2.4 },
-        matBias: { plate: 1.8, iron: 1.5 },
-        unlock: { from: 'plaza', wave: 5 },
-        look: {
-            sky: '#141312', floor: '#1b1816', floorAlt: '#221e1b', grid: '#332c27',
-            motif: '#a05a4a', wall: '#6a4a3a99', accent: '#ff8b6b', deco: 'bastion',
-        },
+        id: 'forest-1', name: 'Whispering Wood', theme: 'Forest', tier: 1,
+        description: 'Old trees that lean in to listen. Shades and Wisps nest in the canopy.',
+        enemyTypes: ['shade', 'flyer'], spawnRate: 10,
+        bosses: [
+            mkBoss('f1-hulk', 'Mossback Hulk', 'the wood that walks', 'brute', ['slam'], 800, 12, 8, ['heartwood'], '#3a5a3a', '#b6f06a', { area: 'forest-2' }),
+            mkBoss('f1-stag', 'Gloomstag', 'antlers like a thornbush', 'stalker', ['rush'], 650, 13, 6, ['heartwood'], '#2a3a2e', '#7fe0a0', { tier: 2 }),
+        ],
+        hasCraftingStation: false, map: { x: 0.24, y: 0.26 },
+        look: { sky: '#0e1612', floor: '#121c16', floorAlt: '#16221a', grid: '#223428', motif: '#4a9a60', wall: '#3a6a4a99', accent: '#7fe0a0' },
     },
     {
-        id: 'spire', name: "Chanter's Spire", sub: 'the air hums with verses',
-        desc: 'Chanters and Wisps rain magic from range. Close the gap; sigils fall here.',
-        depth: 6,
-        weights: { shade: 0.8, caster: 2.2, flyer: 1.6, bruiser: 0.5 },
-        matBias: { sigil: 1.8, ember: 1.4, crystal: 1.4 },
-        unlock: { from: 'bastion', wave: 5 },
-        look: {
-            sky: '#0f1224', floor: '#141833', floorAlt: '#191e3d', grid: '#262d57',
-            motif: '#6f7dff', wall: '#5a64b099', accent: '#8fd0ff', deco: 'spire',
-        },
+        id: 'coast-1', name: 'Saltglass Shore', theme: 'Coast', tier: 1,
+        description: 'A beach of green glass. Chanters sing to the tide; the tide sings back.',
+        enemyTypes: ['shade', 'caster'], spawnRate: 10,
+        bosses: [
+            mkBoss('c1-tide', 'Tidecaller', 'she speaks and the sea obeys', 'sorcerer', ['fan'], 700, 12, 6, ['tidepearl'], '#1e3e5a', '#7fd8ff', { area: 'ruins-1' }),
+            mkBoss('c1-brine', 'Brinewing', 'a gull the size of a boat', 'skylord', ['dive'], 650, 13, 6, ['tidepearl'], '#2e4a5e', '#e0f4ff'),
+        ],
+        hasCraftingStation: false, map: { x: 0.24, y: 0.8 },
+        look: { sky: '#0e151c', floor: '#121c26', floorAlt: '#16222e', grid: '#223446', motif: '#4a8ab0', wall: '#3a6a8a99', accent: '#7fd8ff' },
     },
     {
-        id: 'wastes', name: 'Ember Wastes', sub: 'nothing grows, everything burns',
-        desc: 'Swarms of Shades and Wisps across scorched ground. Embers and iron.',
-        depth: 9,
-        weights: { shade: 1.7, caster: 0.8, flyer: 1.8, bruiser: 1 },
-        matBias: { ember: 1.8, iron: 1.4, crystal: 1.3 },
-        unlock: { from: 'spire', wave: 5 },
-        look: {
-            sky: '#1a0f0b', floor: '#21130d', floorAlt: '#2a1810', grid: '#3d2417',
-            motif: '#ff7a3d', wall: '#8a4a2a99', accent: '#ffb35c', deco: 'wastes',
-        },
+        id: 'forest-2', name: 'Thornheart Deep', theme: 'Forest', tier: 2,
+        description: 'The forest\'s heart, grown shut. A druid loom still weaves here.',
+        enemyTypes: ['shade', 'flyer', 'bruiser'], spawnRate: 12,
+        bosses: [
+            mkBoss('f2-root', 'Rootwarden', 'older than the paths', 'brute', ['slam'], 850, 13, 9, ['heartwood'], '#2e4a26', '#c8f07a', { area: 'desert-1' }),
+            mkBoss('f2-witch', 'Nightbloom Witch', 'every petal a curse', 'sorcerer', ['fan'], 720, 13, 7, ['heartwood'], '#3a2a4a', '#f07ad8', { tier: 3 }),
+            mkBoss('f2-queen', 'Thornqueen', 'crowned in briars', 'stalker', ['rush'], 760, 14, 7, ['heartwood'], '#2a3a1e', '#ff8a8a'),
+        ],
+        hasCraftingStation: true, stationName: 'Druid Loom', map: { x: 0.4, y: 0.16 },
+        look: { sky: '#0b120e', floor: '#0f1812', floorAlt: '#131e16', grid: '#1e3024', motif: '#6ab04a', wall: '#3a6a3a99', accent: '#b6f06a' },
     },
     {
-        id: 'rift', name: 'Void Rift', sub: 'the end of the map',
-        desc: 'Everything at once, at full strength. The only place Void Cores fall early.',
-        depth: 13,
-        weights: { shade: 1, caster: 1.2, flyer: 1.2, bruiser: 1.4 },
-        matBias: { core: 2, crystal: 1.5 },
-        unlock: { from: 'wastes', wave: 10 },
-        look: {
-            sky: '#0c0712', floor: '#120a1a', floorAlt: '#170d22', grid: '#2a1740',
-            motif: '#ff5fd2', wall: '#8a3a9a99', accent: '#e79bff', deco: 'rift',
-        },
+        id: 'ruins-1', name: 'Sunken Bastion', theme: 'Ruins', tier: 2,
+        description: 'A drowned fortress full of Bulwarks. Its old smithy still has a fire.',
+        enemyTypes: ['bruiser', 'shade', 'caster'], spawnRate: 12,
+        bosses: [
+            mkBoss('r1-sentinel', 'Iron Sentinel', 'it never stopped guarding', 'brute', ['slam'], 900, 13, 11, ['relic'], '#4a4450', '#ff8b6b', { area: 'ruins-2' }),
+            mkBoss('r1-bell', 'Bellringer', 'tolls for the drowned', 'sorcerer', ['fan'], 700, 13, 7, ['relic'], '#4a3a2e', '#ffd27a'),
+        ],
+        hasCraftingStation: true, stationName: 'Bastion Smithy', map: { x: 0.4, y: 0.68 },
+        look: { sky: '#141312', floor: '#1b1816', floorAlt: '#221e1b', grid: '#332c27', motif: '#a05a4a', wall: '#6a4a3a99', accent: '#ff8b6b' },
+    },
+    {
+        id: 'desert-1', name: 'Glass Dunes', theme: 'Desert', tier: 3,
+        description: 'Sand fused to glass by something that fell here long ago.',
+        enemyTypes: ['shade', 'flyer', 'caster'], spawnRate: 14,
+        bosses: [
+            mkBoss('d1-tyrant', 'Sand Tyrant', 'the dunes move when it breathes', 'brute', ['slam', 'rush'], 900, 14, 9, ['sunglass'], '#6a5230', '#ffd27a', { area: 'volcano-1' }),
+            mkBoss('d1-mirage', 'Mirage Stalker', 'there are two of it, or none', 'stalker', ['rush'], 760, 15, 7, ['sunglass'], '#5a4a3a', '#fff0b0', { tier: 4 }),
+            mkBoss('d1-wyrm', 'Dune Wyrm', 'swims through sand like water', 'skylord', ['dive'], 820, 14, 8, ['sunglass'], '#7a5a2a', '#ffb35c'),
+        ],
+        hasCraftingStation: false, map: { x: 0.54, y: 0.42 },
+        look: { sky: '#1c170e', floor: '#241d12', floorAlt: '#2c2416', grid: '#3d3220', motif: '#d0a050', wall: '#8a6a3a99', accent: '#ffd27a' },
+    },
+    {
+        id: 'ruins-2', name: "Chanter's Spire", theme: 'Ruins', tier: 4,
+        description: 'A tower of verses. The Chanters\' scriptorium doubles as a forge.',
+        enemyTypes: ['caster', 'flyer', 'bruiser'], spawnRate: 14,
+        bosses: [
+            mkBoss('r2-arch', 'Archchanter', 'the loudest voice in the choir', 'sorcerer', ['fan'], 820, 15, 8, ['relic'], '#2f3a6b', '#8fd0ff', { area: 'tundra-1' }),
+            mkBoss('r2-gargoyle', 'Gargoyle Lord', 'wakes when the bells stop', 'skylord', ['dive', 'slam'], 880, 15, 11, ['relic'], '#4a4a5a', '#c6b4ff', { tier: 5 }),
+        ],
+        hasCraftingStation: true, stationName: 'Scriptorium Forge', map: { x: 0.6, y: 0.82 },
+        look: { sky: '#0f1224', floor: '#141833', floorAlt: '#191e3d', grid: '#262d57', motif: '#6f7dff', wall: '#5a64b099', accent: '#8fd0ff' },
+    },
+    {
+        id: 'volcano-1', name: 'Ember Wastes', theme: 'Volcano', tier: 5,
+        description: 'Scorched ground and drifting sparks. A slag-forge smokes on the ridge.',
+        enemyTypes: ['shade', 'flyer', 'bruiser'], spawnRate: 16,
+        bosses: [
+            mkBoss('v1-colossus', 'Cinder Colossus', 'a mountain with a temper', 'brute', ['slam'], 980, 15, 11, ['magma'], '#4a2418', '#ff7a3d', { area: 'volcano-2' }),
+            mkBoss('v1-ash', 'Ashwing', 'its shadow scorches', 'skylord', ['dive'], 840, 16, 8, ['magma'], '#3a2a2a', '#ffb35c', { tier: 6 }),
+            mkBoss('v1-hound', 'Magma Hound', 'the leash melted long ago', 'stalker', ['rush'], 820, 16, 8, ['magma'], '#5a2010', '#ffd24a'),
+        ],
+        hasCraftingStation: true, stationName: 'Slag Forge', map: { x: 0.7, y: 0.2 },
+        look: { sky: '#1a0f0b', floor: '#21130d', floorAlt: '#2a1810', grid: '#3d2417', motif: '#ff7a3d', wall: '#8a4a2a99', accent: '#ffb35c' },
+    },
+    {
+        id: 'tundra-1', name: 'Frostveil Pass', theme: 'Tundra', tier: 6,
+        description: 'A white pass where sound freezes in the air.',
+        enemyTypes: ['caster', 'bruiser', 'flyer'], spawnRate: 16,
+        bosses: [
+            mkBoss('t1-colossus', 'Frost Colossus', 'a glacier that learned to hate', 'brute', ['slam', 'rush'], 1000, 16, 12, ['rime'], '#3a4a5e', '#d8f0ff', { area: 'sky-1' }),
+            mkBoss('t1-sorc', 'Rime Sorceress', 'her breath is a blizzard', 'sorcerer', ['fan'], 860, 16, 9, ['rime'], '#2a3a5a', '#a0d8ff', { tier: 7 }),
+        ],
+        hasCraftingStation: false, map: { x: 0.76, y: 0.64 },
+        look: { sky: '#10161c', floor: '#16202a', floorAlt: '#1c2834', grid: '#2c3c4c', motif: '#a0d8ff', wall: '#6a8aa099', accent: '#d8f0ff' },
+    },
+    {
+        id: 'volcano-2', name: 'Caldera Throne', theme: 'Volcano', tier: 7,
+        description: 'The crater\'s rim, where fire kings hold court. Their anvil is still hot.',
+        enemyTypes: ['bruiser', 'flyer', 'caster', 'shade'], spawnRate: 18,
+        bosses: [
+            mkBoss('v2-king', 'Caldera King', 'sits on the lava, not beside it', 'brute', ['slam', 'fan'], 1050, 16, 12, ['magma'], '#5a1a10', '#ff4a2a', { area: 'sky-2' }),
+            mkBoss('v2-oracle', 'Pyre Oracle', 'sees your end in the smoke', 'sorcerer', ['fan', 'dive'], 880, 17, 9, ['magma'], '#4a1e2a', '#ff9a5c', { tier: 8 }),
+            mkBoss('v2-reaver', 'Obsidian Reaver', 'sharp enough to cut light', 'stalker', ['rush', 'slam'], 920, 17, 10, ['magma'], '#1e1418', '#ff6a8a'),
+        ],
+        hasCraftingStation: true, stationName: 'Throne Anvil', map: { x: 0.82, y: 0.08 },
+        look: { sky: '#1c0a08', floor: '#240d0a', floorAlt: '#2e100c', grid: '#461a12', motif: '#ff4a2a', wall: '#9a2a1a99', accent: '#ff7a5c' },
+    },
+    {
+        id: 'sky-1', name: 'Stormspire Heights', theme: 'Sky', tier: 8,
+        description: 'Islands of rock held up by the storm. Lightning is the weather.',
+        enemyTypes: ['flyer', 'caster', 'shade'], spawnRate: 18,
+        bosses: [
+            mkBoss('s1-roc', 'Storm Roc', 'every wingbeat a thunderclap', 'skylord', ['dive', 'fan'], 960, 17, 10, ['storm'], '#3a4a6a', '#fff08a', { area: 'sky-2' }),
+            mkBoss('s1-herald', 'Thunder Herald', 'announces the lightning', 'sorcerer', ['fan'], 900, 17, 10, ['storm'], '#2a3050', '#ffe14d', { tier: 9 }),
+        ],
+        hasCraftingStation: false, map: { x: 0.86, y: 0.56 },
+        look: { sky: '#101828', floor: '#16223a', floorAlt: '#1c2a46', grid: '#2c3e64', motif: '#ffe14d', wall: '#6a7ab099', accent: '#fff08a' },
+    },
+    {
+        id: 'sky-2', name: 'Celestial Aerie', theme: 'Sky', tier: 9,
+        description: 'Above the storm. Quiet, bright, and guarded by things with too many wings.',
+        enemyTypes: ['flyer', 'bruiser', 'caster', 'shade'], spawnRate: 20,
+        bosses: [
+            mkBoss('s2-seraph', 'Seraph of Gales', 'the wind has a face', 'skylord', ['dive', 'fan'], 1000, 18, 11, ['storm'], '#5a5a8a', '#f0e8ff', { area: 'rift-1' }),
+            mkBoss('s2-warden', 'Aerie Warden', 'the gate between sky and void', 'brute', ['slam', 'rush'], 1100, 18, 13, ['storm'], '#4a4a6a', '#ffe8a0', { tier: 10 }),
+            mkBoss('s2-zephyr', 'Zephyr Blade', 'you hear it after it hits', 'stalker', ['rush', 'dive'], 940, 19, 10, ['storm'], '#3a3a5e', '#a0f0ff'),
+        ],
+        hasCraftingStation: false, map: { x: 0.93, y: 0.3 },
+        look: { sky: '#1a1a30', floor: '#22223e', floorAlt: '#2a2a4c', grid: '#3c3c6a', motif: '#f0e8ff', wall: '#9a9ad099', accent: '#f0e8ff' },
+    },
+    {
+        id: 'rift-1', name: 'Void Rift', theme: 'Rift', tier: 10,
+        description: 'The end of the map. A forge burns here with no fuel at all.',
+        enemyTypes: ['shade', 'caster', 'flyer', 'bruiser'], spawnRate: 22,
+        bosses: [
+            mkBoss('x1-herald', 'Void Herald', 'speaks in the silence between stars', 'sorcerer', ['fan', 'dive'], 1000, 19, 11, ['voidcrown'], '#2a1040', '#ff5fd2'),
+            mkBoss('x1-knight', 'Abyssal Knight', 'sworn to a crown of nothing', 'stalker', ['rush', 'slam'], 1050, 20, 12, ['voidcrown'], '#1a0e2a', '#c070ff'),
+            mkBoss('x1-king', 'The Hollow King', 'the crown remembers a head', 'brute', ['slam', 'fan', 'rush'], 1300, 20, 14, ['voidcrown'], '#12081e', '#e79bff'),
+        ],
+        hasCraftingStation: true, stationName: 'Voidfire Forge', map: { x: 0.95, y: 0.86 },
+        look: { sky: '#0c0712', floor: '#120a1a', floorAlt: '#170d22', grid: '#2a1740', motif: '#ff5fd2', wall: '#8a3a9a99', accent: '#e79bff' },
     },
 ];
-function locationById(id) {
-    return LOCATIONS.find((l) => l.id === id) || LOCATIONS[0];
+/** Roads as [a, b, seconds]. Kept symmetric; the hub road is separate. */
+const ROADS = [
+    ['hub', 'forest-1', 16], ['hub', 'coast-1', 16], ['forest-1', 'coast-1', 18],
+    ['forest-1', 'forest-2', 20], ['coast-1', 'ruins-1', 20], ['forest-2', 'ruins-1', 20],
+    ['forest-2', 'desert-1', 22], ['ruins-1', 'ruins-2', 22], ['desert-1', 'ruins-2', 22],
+    ['desert-1', 'volcano-1', 24], ['ruins-2', 'tundra-1', 24], ['volcano-1', 'volcano-2', 26],
+    ['tundra-1', 'sky-1', 26], ['volcano-2', 'sky-2', 28], ['sky-1', 'sky-2', 26],
+    ['sky-2', 'rift-1', 30],
+];
+function buildWorld() {
+    const out = {};
+    for (const s of LOCATION_SEEDS) {
+        out[s.id] = {
+            ...s,
+            enemyLevelRange: TIER_LEVELS[s.tier],
+            connectedLocations: [],
+            roadTime: {},
+            hubDistance: s.tier === 0 ? 0 : 12 + s.tier * 5,
+        };
+        for (const b of s.bosses)
+            b.tier = s.tier;
+    }
+    for (const [a, b, t] of ROADS) {
+        out[a].connectedLocations.push(b);
+        out[a].roadTime[b] = t;
+        out[b].connectedLocations.push(a);
+        out[b].roadTime[a] = t;
+    }
+    return out;
 }
-/** `cleared` maps location id -> highest wave cleared there. */
-function locationUnlocked(loc, cleared) {
-    return !loc.unlock || (cleared[loc.unlock.from] || 0) >= loc.unlock.wave;
+const LOCATION_MAP = buildWorld();
+const LOCATION_LIST = LOCATION_SEEDS.map((s) => LOCATION_MAP[s.id]);
+const ALL_BOSSES = LOCATION_LIST.flatMap((l) => l.bosses);
+const BOSS_MAP = {};
+const BOSS_HOME = {};
+for (const l of LOCATION_LIST)
+    for (const b of l.bosses) {
+        BOSS_MAP[b.id] = b;
+        BOSS_HOME[b.id] = l.id;
+    }
+/** What each forge says about itself, shown on the forge screen. */
+const STATION_FLAVOR = {
+    'hub': 'A plain anvil and an honest fire. Everything starts here.',
+    'forest-2': 'Druids weave metal like thread. The loom hums when you work.',
+    'ruins-1': 'The Bastion\'s old smithy. Its bellows still breathe on their own.',
+    'ruins-2': 'Verses are etched into every blade forged here.',
+    'volcano-1': 'Slag runs like water. Nothing cools slowly on this ridge.',
+    'volcano-2': 'The fire kings\' anvil. It has never once gone cold.',
+    'rift-1': 'A forge with no fuel, burning anyway. Best not to ask.',
+};
+/** Recommended level for an area: the bottom of its enemy level band. */
+function recommendedLevel(l) { return l.enemyLevelRange[0]; }
+/** An enemy level drawn from the location's band. */
+function rollEnemyLevel(l) {
+    return rndInt(l.enemyLevelRange[0], l.enemyLevelRange[1]);
 }
-function unlockText(loc) {
-    if (!loc.unlock)
-        return 'Open from the start';
-    return `Clear wave ${loc.unlock.wave} in ${locationById(loc.unlock.from).name}`;
+/* =========================================================================
+ * superboss.ts — Ascendant bosses: hard-mode variants of every boss.
+ * Optional by design: they open nothing, but pay double and drop Star
+ * Fragments, the only source of the Starforged / Starwoven recipes.
+ * ========================================================================= */
+/** Ascendants unlock once the ordinary boss has been beaten. */
+function ascendantAvailable(w, b) {
+    return bossDefeated(w, b.id);
+}
+function ascendantName(b) { return `${b.name}, Ascendant`; }
+/** Turn a freshly spawned boss into its Ascendant form. */
+function makeAscendant(e, b) {
+    const m = b.superboss.statMultiplier;
+    e.superboss = true;
+    e.maxHp = Math.round(e.maxHp * m);
+    e.hp = e.maxHp;
+    e.str *= m;
+    e.edef *= m;
+    e.mres *= m;
+    e.exp = Math.round(e.exp * b.superboss.dropMultiplier);
+    e.speed *= 1.12;
+    e.maxPoise = Math.round(e.maxPoise * m);
+    e.poise = e.maxPoise;
+    e.specialCd = 90; // it opens with a signature move
+}
+/** Record the kill and drop the Ascendant-only spoils on top of the normal ones. */
+function winAscendant(g, b, e) {
+    const first = !superDefeated(g.world, b.id);
+    g.world.completedSuperbosses.set(b.id, true);
+    const stars = first ? 3 : rndInt(1, 2);
+    g.pickups.push(new Pickup(e.x, e.y, 30, 'mat', 'star', stars));
+    g.pickups.push(new Pickup(e.x, e.y, 30, 'ether', null, 1));
 }
 /* =========================================================================
  * music.ts — melodic neoclassical metal, synthesised live.
@@ -2316,7 +2769,12 @@ class Player {
     }
 }
 class Enemy {
-    constructor(def, x, y, waveScale) {
+    /**
+     * `level` comes from the location's level band, `tier` from the location
+     * (or the Wave Trial tier). `extra` is any further multiplier on top — a
+     * wave's own escalation, or a superboss.
+     */
+    constructor(def, x, y, level, tier, extra = 1) {
         this.vx = 0;
         this.vy = 0;
         this.vz = 0;
@@ -2331,20 +2789,43 @@ class Enemy {
         this.slow = 0;
         this.deathT = 0;
         this.wobble = Math.random() * Math.PI * 2;
+        // bosses only: the signature-move state machine layered on the base AI
+        this.boss = null;
+        this.superboss = false;
+        this.move = null;
+        this.moveFrame = 0;
+        this.moveStep = 0;
+        this.moveX = 0;
+        this.moveY = 0; // where the move lands
+        this.specialCd = 150;
+        this.enraged = false;
         this.def = def;
         this.x = x;
         this.y = y;
         this.z = def.hover;
         this.radius = def.radius;
-        this.maxHp = Math.round(def.hp * waveScale * TUNING.enemyHpMult);
+        this.level = level;
+        this.tier = tier;
+        this.maxHp = Math.round(def.hp * LEVEL_SCALING.hp(level) * extra * TUNING.enemyHpMult);
         this.hp = this.maxHp;
-        this.str = def.str * (1 + (waveScale - 1) * 0.55);
-        this.edef = def.def * (1 + (waveScale - 1) * 0.45);
-        this.mres = def.mres * (1 + (waveScale - 1) * 0.45);
-        this.exp = Math.round(def.exp * (1 + (waveScale - 1) * 0.8) * TUNING.expMult);
+        this.str = def.str * LEVEL_SCALING.attack(level) * (1 + (extra - 1) * 0.55);
+        this.edef = def.def * (1 + (extra - 1) * 0.45);
+        this.mres = def.mres * (1 + (extra - 1) * 0.45);
+        this.exp = Math.round(def.exp * LEVEL_SCALING.xp(level) * extra * TUNING.expMult);
         this.speed = def.speed;
         this.maxPoise = def.poise;
         this.poise = def.poise;
+        this.scale(tier);
+    }
+    /** Location tier on top of level: see TIER_SCALING in config.ts. */
+    scale(tier) {
+        const t = Math.max(1, tier);
+        this.maxHp = Math.round(this.maxHp * TIER_SCALING.hpMultiplier(t));
+        this.hp = this.maxHp;
+        this.str *= TIER_SCALING.attackMultiplier(t);
+        this.edef *= TIER_SCALING.defenseMultiplier(t);
+        this.mres *= TIER_SCALING.defenseMultiplier(t);
+        this.exp = Math.round(this.exp * TIER_SCALING.xpMultiplier(t));
     }
     get alive() { return this.state !== 'dead'; }
     update(g, dt) {
@@ -2367,6 +2848,10 @@ class Enemy {
         }
         if (this.cooldown > 0)
             this.cooldown--;
+        if (this.boss && this.updateBoss(g, dt)) {
+            this.physics(g, dt);
+            return;
+        }
         switch (this.def.ai) {
             case 'grunt':
                 this.aiGrunt(g, dt);
@@ -2670,6 +3155,143 @@ class Enemy {
         else if (this.cooldown <= 0 && p.alive)
             this.beginTelegraph(g);
     }
+    /* ------------------------------------------------------------- bosses */
+    /** Frames between signature moves; faster once enraged or Ascendant. */
+    moveCooldown() {
+        return Math.round(230 * (this.enraged ? 0.7 : 1) * (this.superboss ? 0.8 : 1) / TUNING.enemyAggression);
+    }
+    /**
+     * Runs the boss's signature moves. Returns true while a move owns the
+     * boss this frame; otherwise the base AI (bruiser/caster/grunt/flyer) runs.
+     */
+    updateBoss(g, dt) {
+        const b = this.boss;
+        const p = g.player;
+        if (!this.enraged && this.hp < this.maxHp * 0.5) {
+            this.enraged = true;
+            g.banner('ENRAGED', b.name, b.accent);
+            g.shake(8);
+            g.ring(this.x, this.y, this.z, 10, 140, b.accent);
+        }
+        if (this.state === 'special') {
+            this.runMove(g, dt);
+            return true;
+        }
+        if (this.state === 'stagger' || this.state === 'spawn')
+            return false;
+        if (this.specialCd > 0) {
+            this.specialCd--;
+            return false;
+        }
+        if (this.state !== 'chase' || !p.alive)
+            return false;
+        this.move = pick(b.moves);
+        this.state = 'special';
+        this.moveFrame = 0;
+        this.moveStep = 0;
+        this.hasHitThisSwing = false;
+        this.moveX = this.x;
+        this.moveY = this.y;
+        return true;
+    }
+    endMove() {
+        this.state = 'chase';
+        this.move = null;
+        this.specialCd = this.moveCooldown();
+        this.cooldown = Math.max(this.cooldown, 30);
+    }
+    /** Telegraph length for the current move: shorter when enraged. */
+    tell(base) { return Math.round(base * (this.enraged ? 0.75 : 1)); }
+    runMove(g, dt) {
+        const p = g.player;
+        const f = ++this.moveFrame;
+        this.vx *= 0.85;
+        this.vy *= 0.85;
+        switch (this.move) {
+            case 'slam': {
+                // Winds up, then shocks the ground in a ring. Jump or dash out.
+                const t = this.tell(52);
+                this.moveX = this.x;
+                this.moveY = this.y;
+                if (f === t) {
+                    g.bossShock(this, this.x, this.y, SLAM_RADIUS, SHOCK_MULT);
+                    g.shake(12);
+                    g.ring(this.x, this.y, 0, 20, SLAM_RADIUS, this.def.accent);
+                    g.burst(this.x, this.y, 0, 24, this.def.accent);
+                }
+                if (f >= t + 34)
+                    this.endMove();
+                break;
+            }
+            case 'fan': {
+                // A spread of bolts. Gaps between them are the way through.
+                const t = this.tell(34);
+                this.faceTarget(p, dt, 6);
+                if (f === t) {
+                    const n = this.enraged || this.superboss ? 7 : 5;
+                    for (let i = 0; i < n; i++)
+                        g.spawnEnemyBolt(this, (i - (n - 1) / 2) * 0.22);
+                }
+                if (f >= t + 26)
+                    this.endMove();
+                break;
+            }
+            case 'rush': {
+                // A string of lunges, each with its own short tell.
+                const lunges = this.enraged ? 4 : 3;
+                const wind = this.tell(18), go = 11;
+                const local = f - this.moveStep * (wind + go);
+                if (local <= wind) {
+                    this.faceTarget(p, dt, 10);
+                    if (local === 1)
+                        this.hasHitThisSwing = false;
+                }
+                else if (local <= wind + go) {
+                    this.vx = Math.cos(this.facing) * 560;
+                    this.vy = Math.sin(this.facing) * 560;
+                    if (!this.hasHitThisSwing)
+                        g.enemyStrike(this, this.def.reach + this.radius, 1.1);
+                }
+                else {
+                    this.moveStep++;
+                    if (this.moveStep >= lunges)
+                        this.endMove();
+                }
+                break;
+            }
+            case 'dive': {
+                // Rises out of reach, tracks you, then drops onto the marked spot.
+                const rise = 30, track = this.tell(46), fall = 12;
+                if (f <= rise) {
+                    this.z = lerp(this.z, DIVE_HEIGHT, clamp(6 * dt, 0, 1));
+                }
+                else if (f <= rise + track) {
+                    this.z = DIVE_HEIGHT;
+                    this.moveX = lerp(this.moveX, p.x, clamp(5 * dt, 0, 1));
+                    this.moveY = lerp(this.moveY, p.y, clamp(5 * dt, 0, 1));
+                    this.x = lerp(this.x, this.moveX, clamp(4 * dt, 0, 1));
+                    this.y = lerp(this.y, this.moveY, clamp(4 * dt, 0, 1));
+                }
+                else if (f <= rise + track + fall) {
+                    const k = (f - rise - track) / fall;
+                    this.x = lerp(this.x, this.moveX, k);
+                    this.y = lerp(this.y, this.moveY, k);
+                    this.z = DIVE_HEIGHT * (1 - k) + this.def.hover * k;
+                    if (f === rise + track + fall) {
+                        this.z = this.def.hover;
+                        g.bossShock(this, this.moveX, this.moveY, DIVE_RADIUS, SHOCK_MULT * 0.9);
+                        g.shake(10);
+                        g.ring(this.moveX, this.moveY, 0, 10, DIVE_RADIUS, this.def.accent);
+                        g.burst(this.moveX, this.moveY, 0, 18, this.def.accent);
+                    }
+                }
+                else if (f >= rise + track + fall + 28)
+                    this.endMove();
+                break;
+            }
+            default: this.endMove();
+        }
+    }
     /* -------------------------------------------------------------- damage */
     applyDamage(g, dmg, poiseDmg, angle, knockback, launch) {
         this.hp -= dmg;
@@ -2682,8 +3304,11 @@ class Enemy {
             g.onEnemyDeath(this);
             return;
         }
+        // A boss mid-move is committed: it takes the damage but not the stagger.
+        if (this.state === 'special')
+            return;
         this.poise -= poiseDmg;
-        const launched = launch !== 0;
+        const launched = launch !== 0 && !this.boss;
         if (this.poise <= 0 || launched) {
             this.stagger(Math.max(18, Math.round(poiseDmg * 0.9)));
             this.vx = Math.cos(angle) * knockback;
@@ -2704,8 +3329,10 @@ class Projectile {
         this.target = null;
         this.hits = new Set();
         this.slowOnHit = false;
+        this.mag = 8; // caster strength behind an enemy bolt
         this.trail = 0;
         this.dead = false;
+        this.mag = o.mag ?? 8;
         this.x = o.x;
         this.y = o.y;
         this.z = o.z;
@@ -2807,6 +3434,132 @@ class Pickup {
         g.clampToArena(this);
     }
 }
+/* ----------------------------------------------------------- boss bodies */
+const SLAM_RADIUS = 150;
+const SHOCK_MULT = 1.5; // slam / dive damage relative to a normal swing
+const BOSS_HP_SCALE = 0.75; // boss data HP -> fight HP, tuned so fights last ~40-90 hits
+const DIVE_RADIUS = 96;
+const DIVE_HEIGHT = 190;
+/** Build a fightable EnemyDef from a boss: its pattern picks the base AI and body. */
+function bossEnemyDef(b) {
+    const base = {
+        brute: { ai: 'bruiser', radius: 36, height: 66, speed: 72, reach: 70, telegraph: 30, active: 7, recovery: 32, cooldown: 70, poise: 260, hover: 0 },
+        sorcerer: { ai: 'caster', radius: 24, height: 58, speed: 96, reach: 380, telegraph: 26, active: 4, recovery: 22, cooldown: 70, poise: 190, hover: 0 },
+        stalker: { ai: 'grunt', radius: 24, height: 52, speed: 150, reach: 52, telegraph: 18, active: 6, recovery: 20, cooldown: 46, poise: 210, hover: 0 },
+        skylord: { ai: 'flyer', radius: 28, height: 46, speed: 140, reach: 58, telegraph: 24, active: 6, recovery: 22, cooldown: 60, poise: 180, hover: 82 },
+    };
+    return {
+        id: b.id, name: b.name,
+        // `attack` is fed in gently: strength counts twice in physDamage (as a
+        // power ratio and as the strength term), so a raw 20 would snowball
+        // with tier and one-shot you late on.
+        hp: Math.round(b.stats.hp * BOSS_HP_SCALE),
+        str: 8 + (b.stats.attack - 12) * 0.25, def: b.stats.defense, mres: Math.round(b.stats.defense * 0.8),
+        color: b.color, accent: b.accent, exp: 420, power: 12 + (b.stats.attack - 12) * 0.5,
+        guard: false,
+        ...base[b.pattern],
+    };
+}
+/* =========================================================================
+ * travel.ts — being on the road between two locations.
+ *
+ * Progress runs on a clock. While you travel, the destination's native
+ * enemies keep arriving (spawnRate per minute, forever, until you get
+ * there), and 0-3 ambushes of 1-5 enemies are placed along the road. An
+ * ambush holds you in place until it is cleared. Turn back at any point
+ * and the trip reverses — the ambushes ahead of you are left behind.
+ * ========================================================================= */
+function newTravel(from, to) {
+    const n = rndInt(0, 3);
+    const ambushes = [];
+    for (let i = 0; i < n; i++)
+        ambushes.push(rnd(0.18, 0.86));
+    ambushes.sort((a, b) => a - b);
+    return {
+        from, to, progress: 0, duration: Math.max(4, roadTime(from, to)), elapsed: 0,
+        ambushes, ambush: [], spawnTimer: 2.5, enemyWave: 0, kills: 0,
+    };
+}
+/** The place whose enemies and look the road takes: the harder end of it. */
+function roadScene(t) {
+    const a = locById(t.from), b = locById(t.to);
+    return b.tier >= a.tier ? b : a;
+}
+/** Turn around: same road, the other way, from wherever you are on it. */
+function reverseTravel(t) {
+    const f = t.from;
+    t.from = t.to;
+    t.to = f;
+    t.progress = 1 - t.progress;
+    t.ambushes = []; // what lay ahead is behind you now
+}
+function secondsLeft(t) {
+    return Math.max(0, (1 - t.progress) * t.duration);
+}
+function inAmbush(t) { return t.ambush.some((e) => e.alive); }
+/** Most roadside enemies alive at once; deeper roads crowd you harder. */
+function roadCap(tier) { return 3 + Math.floor(tier / 3); }
+/** Spawn one of the scene's native enemies at an arena edge, ahead of you by preference. */
+function spawnRoadEnemy(g, scene) {
+    const a = g.arena;
+    const side = Math.random() < 0.6 ? 'ahead' : pick(['top', 'bottom', 'behind']);
+    let x, y;
+    if (side === 'ahead') {
+        x = a.x + a.w - 30;
+        y = rnd(a.y + 30, a.y + a.h - 30);
+    }
+    else if (side === 'behind') {
+        x = a.x + 30;
+        y = rnd(a.y + 30, a.y + a.h - 30);
+    }
+    else {
+        x = rnd(a.x + 60, a.x + a.w - 60);
+        y = side === 'top' ? a.y + 30 : a.y + a.h - 30;
+    }
+    if (dist(x, y, g.player.x, g.player.y) < 120)
+        x = clamp(g.player.x + 220, a.x + 30, a.x + a.w - 30);
+    const e = new Enemy(ENEMIES[pick(scene.enemyTypes)], x, y, rollEnemyLevel(scene), Math.max(1, scene.tier));
+    g.enemies.push(e);
+    g.ring(x, y, 0, 8, 50, scene.look.accent);
+    return e;
+}
+/** One tick on the road. Returns true once you have arrived. */
+function tickTravel(g, t, dt) {
+    const scene = roadScene(t);
+    t.elapsed += dt;
+    if (inAmbush(t)) {
+        // the road is blocked until this lot is down
+    }
+    else {
+        if (t.ambush.length) {
+            t.ambush = [];
+            g.banner('AMBUSH CLEARED', 'back on the road', '#4fe08a');
+        }
+        t.progress = Math.min(1, t.progress + dt / t.duration);
+        g.scroll += dt * 90;
+        if (t.ambushes.length && t.progress >= t.ambushes[0]) {
+            t.ambushes.shift();
+            t.enemyWave++;
+            const n = rndInt(1, 5);
+            for (let i = 0; i < n; i++)
+                t.ambush.push(spawnRoadEnemy(g, scene));
+            g.banner('AMBUSH!', `${n} ${n > 1 ? 'enemies block' : 'enemy blocks'} the road`, '#ff9d5c');
+            g.sfx.wave();
+        }
+    }
+    // The roadside never runs dry: as enemies fall, more come.
+    t.spawnTimer -= dt;
+    const rate = scene.spawnRate * TUNING.travelSpawnMult;
+    if (t.spawnTimer <= 0 && rate > 0) {
+        t.spawnTimer = (60 / rate) * rnd(0.6, 1.4);
+        const alive = g.enemies.filter((e) => e.alive).length;
+        if (alive < roadCap(scene.tier) && !inAmbush(t) && t.progress < 0.97) {
+            spawnRoadEnemy(g, scene);
+            t.enemyWave++;
+        }
+    }
+    return t.progress >= 1;
+}
 /* =========================================================================
  * render.ts — arena, characters, VFX, HUD and the KH2-style command menu.
  * Programmer art, but with real animation timing driven by the frame data.
@@ -2879,22 +3632,28 @@ class Renderer {
     /* ------------------------------------------------------------- arena */
     drawArena(g) {
         const c = this.ctx;
-        const look = g.location.look;
+        const scene = g.scene();
+        const look = scene.look;
         const grad = c.createLinearGradient(0, 0, 0, VIEW_H);
         grad.addColorStop(0, look.sky);
         grad.addColorStop(1, look.floor);
         c.fillStyle = grad;
         c.fillRect(0, 0, VIEW_W, VIEW_H);
         const a = g.arena;
-        this.drawBackdrop(c, g);
+        this.drawBackdrop(c, g, scene);
         // floor plate
         c.fillStyle = look.floorAlt;
         c.fillRect(a.x, a.y, a.w, a.h);
-        // grid
+        // grid — on the road it scrolls, so the ground moves under you
+        const off = g.screen === 'travel' ? -(g.scroll % 60) : 0;
+        c.save();
+        c.beginPath();
+        c.rect(a.x, a.y, a.w, a.h);
+        c.clip();
         c.strokeStyle = look.grid;
         c.lineWidth = 1;
         c.beginPath();
-        for (let x = a.x; x <= a.x + a.w + 0.5; x += 60) {
+        for (let x = a.x + off; x <= a.x + a.w + 0.5; x += 60) {
             c.moveTo(x, a.y);
             c.lineTo(x, a.y + a.h);
         }
@@ -2903,19 +3662,31 @@ class Renderer {
             c.lineTo(a.x + a.w, y);
         }
         c.stroke();
-        // centre motif
-        c.save();
-        c.globalAlpha = 0.20;
-        c.strokeStyle = look.motif;
-        c.lineWidth = 3;
-        c.beginPath();
-        c.arc(a.x + a.w / 2, a.y + a.h / 2, 110, 0, Math.PI * 2);
-        c.stroke();
-        c.beginPath();
-        c.arc(a.x + a.w / 2, a.y + a.h / 2, 76, 0, Math.PI * 2);
-        c.stroke();
+        if (g.screen === 'travel') {
+            // a worn path down the middle of the road
+            c.globalAlpha = 0.18;
+            c.fillStyle = look.motif;
+            for (let x = a.x + (off * 2 % 80) - 80; x < a.x + a.w; x += 80)
+                c.fillRect(x, a.y + a.h / 2 - 3, 44, 6);
+        }
         c.restore();
-        this.drawFloorDeco(c, g);
+        if (g.screen !== 'travel') {
+            // centre motif
+            c.save();
+            c.globalAlpha = 0.20;
+            c.strokeStyle = look.motif;
+            c.lineWidth = 3;
+            c.beginPath();
+            c.arc(a.x + a.w / 2, a.y + a.h / 2, 110, 0, Math.PI * 2);
+            c.stroke();
+            c.beginPath();
+            c.arc(a.x + a.w / 2, a.y + a.h / 2, 76, 0, Math.PI * 2);
+            c.stroke();
+            c.restore();
+        }
+        this.drawFloorDeco(c, g, scene);
+        if (g.screen === 'location' && scene.hasCraftingStation)
+            this.drawStation(c, g, scene);
         // rest-point glow
         if (g.restPoint) {
             const pulse = 0.35 + Math.sin(g.time * 3) * 0.15;
@@ -2935,15 +3706,16 @@ class Renderer {
         c.lineWidth = 4;
         c.strokeRect(a.x, a.y, a.w, a.h);
     }
-    /** Scenery behind the arena plate, one style per location. */
-    drawBackdrop(c, g) {
-        const look = g.location.look;
+    /** Scenery behind the arena plate, one style per theme. */
+    drawBackdrop(c, g, scene) {
+        const look = scene.look;
         const a = g.arena;
         const t = g.time;
+        const drift = g.screen === 'travel' ? g.scroll * 0.4 : 0; // parallax on the road
+        const wrap = (x) => ((x % VIEW_W) + VIEW_W) % VIEW_W;
         c.save();
-        switch (look.deco) {
-            case 'plaza': {
-                // distant lamp posts along the back wall
+        switch (scene.theme) {
+            case 'Haven': {
                 for (let x = a.x + 40; x < a.x + a.w; x += 120) {
                     c.fillStyle = '#20263a';
                     c.fillRect(x - 2, a.y - 46, 4, 46);
@@ -2956,64 +3728,84 @@ class Renderer {
                 }
                 break;
             }
-            case 'bastion': {
-                // crenellated rampart across the top
+            case 'Forest': {
+                // a ragged treeline
+                for (let i = 0; i < 18; i++) {
+                    const x = wrap(i * 61 - drift);
+                    const h = 40 + ((i * 37) % 30);
+                    c.fillStyle = i % 2 ? '#0c1a10' : '#10221a';
+                    c.beginPath();
+                    c.moveTo(x - 26, a.y);
+                    c.lineTo(x, a.y - h);
+                    c.lineTo(x + 26, a.y);
+                    c.fill();
+                }
+                for (let i = 0; i < 14; i++) {
+                    c.globalAlpha = 0.25 + 0.25 * Math.abs(Math.sin(t * 1.5 + i));
+                    c.fillStyle = look.accent;
+                    c.fillRect(wrap(i * 71 + Math.sin(t + i) * 10 - drift), 20 + (i * 29) % 60, 2, 2);
+                }
+                break;
+            }
+            case 'Coast': {
+                c.fillStyle = '#16303e';
+                c.fillRect(0, 0, VIEW_W, a.y);
+                c.strokeStyle = look.accent;
+                c.globalAlpha = 0.35;
+                c.lineWidth = 1.5;
+                for (let row = 0; row < 3; row++) {
+                    c.beginPath();
+                    for (let x = 0; x <= VIEW_W; x += 8) {
+                        const y = 30 + row * 20 + Math.sin(x * 0.04 + t * 1.4 + row - drift * 0.02) * 3;
+                        if (x === 0)
+                            c.moveTo(x, y);
+                        else
+                            c.lineTo(x, y);
+                    }
+                    c.stroke();
+                }
+                break;
+            }
+            case 'Ruins': {
                 c.fillStyle = '#2a231f';
                 c.fillRect(0, a.y - 34, VIEW_W, 34);
-                for (let x = 0; x < VIEW_W; x += 48)
-                    c.fillRect(x, a.y - 52, 28, 18);
-                // floodwater lapping at the bottom edge
-                c.globalAlpha = 0.35;
-                c.fillStyle = '#2d4a5a';
-                c.fillRect(0, a.y + a.h + 6, VIEW_W, VIEW_H - (a.y + a.h + 6));
-                c.strokeStyle = '#5a8aa0';
-                c.lineWidth = 1.5;
+                for (let x = -48; x < VIEW_W + 48; x += 48)
+                    c.fillRect(wrap(x - drift), a.y - 52, 28, 18);
+                for (let i = 0; i < 5; i++) {
+                    const x = wrap(a.x + 40 + i * 190 - drift);
+                    c.fillStyle = '#3a322c';
+                    c.fillRect(x - 8, a.y - 80 + (i % 2) * 20, 16, 50 - (i % 2) * 20);
+                }
+                break;
+            }
+            case 'Desert': {
+                c.globalAlpha = 0.5;
+                c.fillStyle = look.accent;
                 c.beginPath();
-                for (let x = 0; x <= VIEW_W; x += 8) {
-                    const y = a.y + a.h + 14 + Math.sin(x * 0.05 + t * 1.6) * 2.5;
-                    if (x === 0)
-                        c.moveTo(x, y);
-                    else
-                        c.lineTo(x, y);
-                }
-                c.stroke();
+                c.arc(780, 44, 26, 0, Math.PI * 2);
+                c.fill();
+                c.globalAlpha = 1;
+                c.fillStyle = '#3a2e1c';
+                c.beginPath();
+                c.moveTo(0, a.y);
+                for (let x = 0; x <= VIEW_W; x += 20)
+                    c.lineTo(x, a.y - 16 - Math.sin((x + drift) * 0.012) * 14);
+                c.lineTo(VIEW_W, a.y);
+                c.closePath();
+                c.fill();
                 break;
             }
-            case 'spire': {
-                // tall pillars with hovering glyphs
-                for (let i = 0; i < 6; i++) {
-                    const x = a.x + 30 + i * (a.w - 60) / 5;
-                    c.fillStyle = '#1c2247';
-                    c.fillRect(x - 9, 0, 18, a.y);
-                    c.globalAlpha = 0.5 + Math.sin(t * 2.2 + i) * 0.3;
-                    c.strokeStyle = look.accent;
-                    c.lineWidth = 1.5;
-                    const gy = a.y - 30 + Math.sin(t * 1.4 + i * 1.7) * 6;
-                    c.beginPath();
-                    c.arc(x, gy, 7, 0, Math.PI * 2);
-                    c.stroke();
-                    c.beginPath();
-                    c.moveTo(x - 4, gy);
-                    c.lineTo(x + 4, gy);
-                    c.moveTo(x, gy - 4);
-                    c.lineTo(x, gy + 4);
-                    c.stroke();
-                    c.globalAlpha = 1;
-                }
-                break;
-            }
-            case 'wastes': {
-                // a jagged dune ridge and embers drifting upwards
+            case 'Volcano': {
                 c.fillStyle = '#2e1a10';
                 c.beginPath();
                 c.moveTo(0, a.y);
                 for (let x = 0; x <= VIEW_W; x += 40)
-                    c.lineTo(x, a.y - 22 - ((x * 37) % 29));
+                    c.lineTo(x, a.y - 22 - (((x + Math.floor(drift / 40) * 40) * 37) % 29));
                 c.lineTo(VIEW_W, a.y);
                 c.closePath();
                 c.fill();
                 for (let i = 0; i < 26; i++) {
-                    const x = (i * 131 + Math.sin(t + i) * 14) % VIEW_W;
+                    const x = wrap(i * 131 + Math.sin(t + i) * 14 - drift);
                     const y = VIEW_H - ((t * (18 + (i % 5) * 7) + i * 53) % VIEW_H);
                     c.globalAlpha = 0.25 + (i % 4) * 0.1;
                     c.fillStyle = i % 3 ? look.accent : look.motif;
@@ -3021,10 +3813,49 @@ class Renderer {
                 }
                 break;
             }
-            case 'rift': {
-                // star specks and slow-pulsing tears in the dark
+            case 'Tundra': {
+                c.fillStyle = '#243240';
+                c.beginPath();
+                c.moveTo(0, a.y);
+                for (let i = 0; i <= 12; i++)
+                    c.lineTo(i * 80, a.y - (i % 2 ? 50 : 18));
+                c.lineTo(VIEW_W, a.y);
+                c.closePath();
+                c.fill();
+                for (let i = 0; i < 50; i++) {
+                    c.globalAlpha = 0.45;
+                    c.fillStyle = '#ffffff';
+                    const x = wrap(i * 53 + Math.sin(t * 0.8 + i) * 12 - drift);
+                    const y = (t * (20 + (i % 4) * 8) + i * 47) % VIEW_H;
+                    c.fillRect(x, y, 2, 2);
+                }
+                break;
+            }
+            case 'Sky': {
+                for (let i = 0; i < 7; i++) {
+                    const x = wrap(i * 150 + t * (6 + i) - drift);
+                    c.globalAlpha = 0.18;
+                    c.fillStyle = '#ffffff';
+                    c.beginPath();
+                    c.ellipse(x, 24 + (i * 23) % 50, 50, 12, 0, 0, Math.PI * 2);
+                    c.fill();
+                }
+                if (Math.sin(t * 0.9) > 0.985) {
+                    c.globalAlpha = 0.6;
+                    c.strokeStyle = look.accent;
+                    c.lineWidth = 2;
+                    c.beginPath();
+                    c.moveTo(600, 0);
+                    c.lineTo(620, 30);
+                    c.lineTo(606, 44);
+                    c.lineTo(630, a.y);
+                    c.stroke();
+                }
+                break;
+            }
+            case 'Rift': {
                 for (let i = 0; i < 40; i++) {
-                    const x = (i * 97) % VIEW_W;
+                    const x = wrap(i * 97 - drift * 0.5);
                     const y = (i * 61) % VIEW_H;
                     c.globalAlpha = 0.2 + 0.25 * Math.abs(Math.sin(t * 0.8 + i));
                     c.fillStyle = i % 5 ? '#c9b8ff' : look.motif;
@@ -3047,16 +3878,20 @@ class Renderer {
         c.restore();
     }
     /** Marks on the arena plate itself; drawn under every character. */
-    drawFloorDeco(c, g) {
-        const look = g.location.look;
+    drawFloorDeco(c, g, scene) {
+        const look = scene.look;
         const a = g.arena;
+        const off = g.screen === 'travel' ? g.scroll : 0;
+        const wx = (x) => a.x + ((((x - off) - a.x) % a.w) + a.w) % a.w;
         c.save();
-        if (look.deco === 'bastion') {
-            // cracked flagstones
+        c.beginPath();
+        c.rect(a.x, a.y, a.w, a.h);
+        c.clip();
+        if (scene.theme === 'Ruins') {
             c.strokeStyle = '#3d332c';
             c.lineWidth = 2;
             for (let i = 0; i < 7; i++) {
-                const x = a.x + 70 + (i * 173) % (a.w - 140);
+                const x = wx(a.x + 70 + (i * 173) % (a.w - 140));
                 const y = a.y + 40 + (i * 97) % (a.h - 80);
                 c.beginPath();
                 c.moveTo(x, y);
@@ -3065,13 +3900,12 @@ class Renderer {
                 c.stroke();
             }
         }
-        else if (look.deco === 'wastes') {
-            // cooling lava seams
+        else if (scene.theme === 'Volcano') {
             c.globalAlpha = 0.28 + Math.sin(g.time * 1.8) * 0.08;
             c.strokeStyle = look.motif;
             c.lineWidth = 2.5;
             for (let i = 0; i < 5; i++) {
-                const x = a.x + 60 + (i * 211) % (a.w - 120);
+                const x = wx(a.x + 60 + (i * 211) % (a.w - 120));
                 const y = a.y + 30 + (i * 83) % (a.h - 60);
                 c.beginPath();
                 c.moveTo(x, y);
@@ -3080,8 +3914,28 @@ class Renderer {
                 c.stroke();
             }
         }
-        else if (look.deco === 'rift') {
-            // the floor edge crumbles into the void
+        else if (scene.theme === 'Forest') {
+            c.fillStyle = '#1e3a24';
+            for (let i = 0; i < 12; i++) {
+                const x = wx(a.x + 30 + (i * 157) % (a.w - 60));
+                const y = a.y + 20 + (i * 71) % (a.h - 40);
+                c.beginPath();
+                c.ellipse(x, y, 10, 4, 0, 0, Math.PI * 2);
+                c.fill();
+            }
+        }
+        else if (scene.theme === 'Tundra') {
+            c.globalAlpha = 0.25;
+            c.fillStyle = '#ffffff';
+            for (let i = 0; i < 8; i++) {
+                const x = wx(a.x + 50 + (i * 191) % (a.w - 100));
+                const y = a.y + 30 + (i * 67) % (a.h - 60);
+                c.beginPath();
+                c.ellipse(x, y, 34, 9, 0, 0, Math.PI * 2);
+                c.fill();
+            }
+        }
+        else if (scene.theme === 'Rift') {
             c.globalAlpha = 0.5;
             c.fillStyle = '#05030a';
             for (let x = a.x; x < a.x + a.w; x += 34) {
@@ -3092,6 +3946,41 @@ class Renderer {
                 c.fill();
             }
         }
+        c.restore();
+    }
+    /** The crafting station: an anvil and a fire, coloured by the place. */
+    drawStation(c, g, scene) {
+        const x = g.arena.x + g.arena.w - 110, y = g.arena.y + 70;
+        const accent = scene.look.accent;
+        c.save();
+        // fire
+        const flick = Math.sin(g.time * 14) * 3;
+        const fg = c.createRadialGradient(x + 44, y - 6, 2, x + 44, y - 6, 34);
+        fg.addColorStop(0, accent);
+        fg.addColorStop(1, 'rgba(0,0,0,0)');
+        c.globalAlpha = 0.55 + Math.sin(g.time * 6) * 0.1;
+        c.fillStyle = fg;
+        c.beginPath();
+        c.arc(x + 44, y - 6, 34, 0, Math.PI * 2);
+        c.fill();
+        c.globalAlpha = 1;
+        c.fillStyle = accent;
+        c.beginPath();
+        c.moveTo(x + 36, y + 4);
+        c.quadraticCurveTo(x + 44, y - 22 - flick, x + 52, y + 4);
+        c.fill();
+        // anvil
+        c.fillStyle = '#2a2e3e';
+        c.fillRect(x - 22, y - 4, 44, 10);
+        c.fillRect(x - 8, y + 6, 16, 12);
+        c.fillRect(x - 16, y + 18, 32, 6);
+        c.strokeStyle = accent;
+        c.lineWidth = 1.5;
+        c.strokeRect(x - 22, y - 4, 44, 10);
+        c.font = '700 10px ui-monospace, Menlo, Consolas, monospace';
+        c.textAlign = 'center';
+        c.fillStyle = accent;
+        c.fillText((scene.stationName || 'Forge').toUpperCase(), x + 10, y + 40);
         c.restore();
     }
     drawShadow(c, x, y, r, z) {
@@ -3392,6 +4281,18 @@ class Renderer {
         const flash = e.flash > 0;
         const telegraphing = e.state === 'telegraph';
         const body = flash ? '#ffffff' : (telegraphing ? this.mix(d.color, d.accent, 0.45 + Math.sin(g.time * 26) * 0.25) : d.color);
+        if (e.boss && !dying) {
+            // a slow-pulsing aura so a boss reads at a glance in a crowd
+            const ag = c.createRadialGradient(0, -d.height * 0.5, 4, 0, -d.height * 0.5, d.radius * 2.2);
+            ag.addColorStop(0, e.superboss ? 'rgba(255,213,74,0.45)' : this.alpha(d.accent, 0.35));
+            ag.addColorStop(1, 'rgba(0,0,0,0)');
+            c.fillStyle = ag;
+            c.globalAlpha = fade * (0.7 + Math.sin(g.time * 3) * 0.2);
+            c.beginPath();
+            c.arc(0, -d.height * 0.5, d.radius * 2.2, 0, Math.PI * 2);
+            c.fill();
+            c.globalAlpha = fade;
+        }
         switch (d.ai) {
             case 'grunt':
                 this.drawGrunt(c, e, body, flash ? '#fff' : d.accent, g);
@@ -3406,6 +4307,30 @@ class Renderer {
                 this.drawFlyer(c, e, body, flash ? '#fff' : d.accent, g);
                 break;
         }
+        if (e.boss && !dying) {
+            // the crown: three points, gold on an Ascendant
+            const h = d.height + (d.ai === 'grunt' ? 20 : 8);
+            c.fillStyle = e.superboss ? '#ffd54a' : d.accent;
+            c.beginPath();
+            c.moveTo(-12, -h);
+            c.lineTo(-12, -h - 10);
+            c.lineTo(-6, -h - 5);
+            c.lineTo(0, -h - 14);
+            c.lineTo(6, -h - 5);
+            c.lineTo(12, -h - 10);
+            c.lineTo(12, -h);
+            c.closePath();
+            c.fill();
+            if (e.enraged) {
+                c.strokeStyle = '#ff5f56';
+                c.lineWidth = 2;
+                c.globalAlpha = fade * (0.5 + Math.sin(g.time * 12) * 0.3);
+                c.beginPath();
+                c.arc(0, -d.height * 0.5, d.radius + 10, 0, Math.PI * 2);
+                c.stroke();
+                c.globalAlpha = fade;
+            }
+        }
         if (e.guardFlash > 0) {
             c.save();
             c.globalAlpha = e.guardFlash / 12;
@@ -3417,7 +4342,7 @@ class Renderer {
             c.restore();
         }
         c.restore();
-        if (!dying)
+        if (!dying && !e.boss)
             this.drawEnemyBar(c, e, ex, ey);
     }
     drawGrunt(c, e, body, accent, g) {
@@ -3545,6 +4470,10 @@ class Renderer {
     }
     /** Ground arc showing exactly where an incoming attack will land. */
     drawTelegraph(c, e) {
+        if (e.state === 'special') {
+            this.drawBossTell(c, e);
+            return;
+        }
         if (e.state !== 'telegraph')
             return;
         const t = clamp(e.stateFrame / e.def.telegraph, 0, 1);
@@ -3562,6 +4491,92 @@ class Renderer {
         c.closePath();
         c.fill();
         c.restore();
+    }
+    /** Ground markings for a boss's signature move: where it will land, and when. */
+    drawBossTell(c, e) {
+        const f = e.moveFrame;
+        const accent = e.def.accent;
+        c.save();
+        if (e.move === 'slam') {
+            const t = clamp(f / e.tell(52), 0, 1);
+            if (t < 1) {
+                c.globalAlpha = 0.12 + t * 0.25;
+                c.fillStyle = accent;
+                c.beginPath();
+                c.ellipse(e.moveX, e.moveY, SLAM_RADIUS * t, SLAM_RADIUS * 0.55 * t, 0, 0, Math.PI * 2);
+                c.fill();
+                c.globalAlpha = 0.7;
+                c.strokeStyle = accent;
+                c.lineWidth = 2;
+                c.beginPath();
+                c.ellipse(e.moveX, e.moveY, SLAM_RADIUS, SLAM_RADIUS * 0.55, 0, 0, Math.PI * 2);
+                c.stroke();
+            }
+        }
+        else if (e.move === 'dive') {
+            const track = e.tell(46);
+            if (f > 30 && f <= 30 + track + 12) {
+                const t = clamp((f - 30) / track, 0, 1);
+                c.globalAlpha = 0.25 + t * 0.4;
+                c.strokeStyle = accent;
+                c.lineWidth = 2.5;
+                c.beginPath();
+                c.ellipse(e.moveX, e.moveY, DIVE_RADIUS, DIVE_RADIUS * 0.55, 0, 0, Math.PI * 2);
+                c.stroke();
+                c.beginPath();
+                c.moveTo(e.moveX - 10, e.moveY);
+                c.lineTo(e.moveX + 10, e.moveY);
+                c.moveTo(e.moveX, e.moveY - 6);
+                c.lineTo(e.moveX, e.moveY + 6);
+                c.stroke();
+            }
+        }
+        else if (e.move === 'rush') {
+            c.globalAlpha = 0.35;
+            c.strokeStyle = accent;
+            c.lineWidth = 3;
+            c.setLineDash([8, 8]);
+            c.beginPath();
+            c.moveTo(e.x, e.y);
+            c.lineTo(e.x + Math.cos(e.facing) * 170, e.y + Math.sin(e.facing) * 170);
+            c.stroke();
+        }
+        else if (e.move === 'fan') {
+            const t = clamp(f / e.tell(34), 0, 1);
+            if (t < 1) {
+                c.globalAlpha = 0.18 + t * 0.3;
+                c.fillStyle = accent;
+                c.beginPath();
+                c.moveTo(e.x, e.y);
+                c.arc(e.x, e.y, 200 * t, e.facing - 0.7, e.facing + 0.7);
+                c.closePath();
+                c.fill();
+            }
+        }
+        c.restore();
+    }
+    /** The big bar along the bottom while a boss is up. */
+    drawBossBar(c, g) {
+        const e = g.battle?.bossEnemy;
+        if (!e || !e.alive)
+            return;
+        const b = e.boss;
+        const w = 460, x = (VIEW_W - w) / 2, y = VIEW_H - 40;
+        c.save();
+        c.textAlign = 'center';
+        c.font = '800 14px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = e.superboss ? '#ffd54a' : b.accent;
+        c.fillText((e.superboss ? ascendantName(b) : b.name).toUpperCase() + (e.enraged ? '  —  ENRAGED' : ''), VIEW_W / 2, y - 8);
+        this.bar(c, x, y, w, 12, e.hp / e.maxHp, e.enraged ? '#ff5f56' : b.accent, 'rgba(0,0,0,0.6)');
+        c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.dim;
+        c.fillText(`Lv ${e.level}  ·  ${Math.ceil(e.hp)} / ${e.maxHp}`, VIEW_W / 2, y + 26);
+        c.restore();
+    }
+    /** '#rrggbb' at an alpha. */
+    alpha(hex, a) {
+        const [r, gg, bb] = this.hex(hex);
+        return `rgba(${r},${gg},${bb},${a})`;
     }
     drawLockRing(c, g) {
         const t = g.player.lock;
@@ -3694,18 +4709,42 @@ class Renderer {
         c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
         c.fillText(p.level >= MAX_LEVEL ? 'MAX' : `EXP ${p.exp}/${need}`, x + 52 + barW * 0.8 + 8, y + 35.5);
         c.restore();
-        // ---- top-right: wave + record
+        // ---- top-right: where you are and what is happening
         c.save();
         c.textAlign = 'right';
-        c.font = '800 20px ui-monospace, Menlo, Consolas, monospace';
-        c.fillStyle = PAL.text;
-        c.fillText(`WAVE ${g.wave}`, VIEW_W - 18, 32);
-        c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
-        c.fillStyle = PAL.dim;
-        c.fillText(`best ${g.bests[g.location.id] || 1}   enemies ${g.enemies.filter((e) => e.alive).length}`, VIEW_W - 18, 50);
-        c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
-        c.fillStyle = g.location.look.accent;
-        c.fillText(g.location.name.toUpperCase(), VIEW_W - 18, 66);
+        const scene = g.scene();
+        if (g.screen === 'battle' && g.battle) {
+            const b = g.battle;
+            c.font = '800 20px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = PAL.text;
+            c.fillText(b.kind === 'boss' ? `BOSS  ${Math.min(g.wave, b.totalWaves)}/${b.totalWaves}` : `WAVE ${g.wave}`, VIEW_W - 18, 32);
+            c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = PAL.dim;
+            c.fillText(b.kind === 'boss'
+                ? `${b.superboss ? 'ASCENDANT ' : ''}${b.boss.name}   enemies ${g.enemies.filter((e) => e.alive).length}`
+                : `trial tier ${b.tier}   best ${g.world.trialBest[b.tier] || 1}   enemies ${g.enemies.filter((e) => e.alive).length}`, VIEW_W - 18, 50);
+        }
+        else if (g.screen === 'travel' && g.travel) {
+            c.font = '800 16px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = PAL.text;
+            c.fillText('ON THE ROAD', VIEW_W - 18, 30);
+            c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = PAL.dim;
+            c.fillText(`tier ${scene.tier}   enemies ${g.enemies.filter((e) => e.alive).length}   felled ${g.travel.kills}`, VIEW_W - 18, 48);
+        }
+        else {
+            c.font = '800 18px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = scene.look.accent;
+            c.fillText(scene.name.toUpperCase(), VIEW_W - 18, 30);
+            c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = PAL.dim;
+            c.fillText(scene.tier ? `tier ${scene.tier}  ·  recommended Lv ${recommendedLevel(scene)}` : 'safe ground', VIEW_W - 18, 48);
+        }
+        if (g.screen !== 'location') {
+            c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = scene.look.accent;
+            c.fillText(scene.name.toUpperCase(), VIEW_W - 18, 66);
+        }
         c.restore();
         // equipped gear, small, under the bars
         c.save();
@@ -3718,8 +4757,16 @@ class Renderer {
             c.fillText(`${g.apFree()} AP unspent — ${IS_TOUCH ? 'MENU' : 'TAB'}`, 18, 92);
         }
         c.restore();
-        if (!IS_TOUCH)
+        if (!IS_TOUCH && g.inCombat())
             this.drawCommandMenu(c, g);
+        if (g.screen === 'location' && !g.menuOpen)
+            this.drawPlacePanel(c, g);
+        if (g.screen === 'travel' && g.travel)
+            this.drawTravelBar(c, g);
+        if (g.inCombat() && p.alive)
+            this.drawBackButton(c, g);
+        if (g.screen === 'battle')
+            this.drawBossBar(c, g);
         // ---- combo counter
         if (g.comboCount > 1 && g.comboDisplay > 0) {
             c.save();
@@ -3763,9 +4810,9 @@ class Renderer {
             }
             c.restore();
         }
-        if (g.waveIntro > 0 && p.alive && g.screen === 'play')
+        if (g.waveIntro > 0 && p.alive && g.inCombat())
             this.drawGrace(c, g);
-        if (IS_TOUCH && g.screen === 'play' && !g.menuOpen && p.alive)
+        if (IS_TOUCH && g.inCombat() && !g.menuOpen && p.alive)
             this.drawTouch(c, g);
         if (!p.alive)
             this.drawGameOver(c, g);
@@ -3773,6 +4820,109 @@ class Renderer {
             this.drawPause(c);
         if (g.menuOpen)
             this.drawBigMenu(c, g);
+    }
+    /** The list of things to do while standing in a location. */
+    drawPlacePanel(c, g) {
+        const rows = g.placeRows();
+        const l = g.place;
+        const P = PLACE_PANEL;
+        const h = 52 + rows.length * P.rowH + 34;
+        c.save();
+        c.fillStyle = 'rgba(10,14,28,0.88)';
+        this.roundRect(c, P.x, P.y, P.w, h, 10);
+        c.fill();
+        c.strokeStyle = l.look.accent;
+        c.globalAlpha = 0.6;
+        c.lineWidth = 1.5;
+        this.roundRect(c, P.x, P.y, P.w, h, 10);
+        c.stroke();
+        c.globalAlpha = 1;
+        c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = l.look.accent;
+        c.textAlign = 'left';
+        c.fillText(`You are in ${l.name}`, P.x + 14, P.y + 22);
+        c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.dim;
+        c.fillText(this.clip(c, l.description, P.w - 28), P.x + 14, P.y + 40);
+        c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
+        for (let i = 0; i < rows.length; i++) {
+            const r = rows[i];
+            const y = P.y + 52 + i * P.rowH;
+            const on = i === g.placeIndex;
+            if (on)
+                this.rowHighlight(c, P.x + 6, y, P.w - 12, P.rowH - 2);
+            c.fillStyle = !r.enabled ? '#5d6480' : on ? '#ffffff' : (r.color || PAL.text);
+            c.fillText(r.label, P.x + 18, y + 17);
+            if (r.right) {
+                c.textAlign = 'right';
+                c.fillStyle = r.enabled ? (on ? PAL.mpCharge : PAL.dim) : '#4a5068';
+                c.fillText(r.right, P.x + P.w - 14, y + 17);
+                c.textAlign = 'left';
+            }
+        }
+        // quest hint
+        c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.mpCharge;
+        c.fillText(this.clip(c, nextObjective(g.world), P.w - 28), P.x + 14, P.y + h - 14);
+        c.restore();
+        c.save();
+        c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.dim;
+        c.textAlign = 'center';
+        c.fillText(IS_TOUCH ? 'tap a row to select, tap again to do it'
+            : '\u2191\u2193 choose  ·  ENTER do it  ·  WASD walk  ·  TAB menu', VIEW_W / 2 + 150, VIEW_H - 22);
+        c.restore();
+    }
+    /** "Traveling to X" and how far along the road you are. */
+    drawTravelBar(c, g) {
+        const t = g.travel;
+        const to = locById(t.to), from = locById(t.from);
+        const w = 360, x = (VIEW_W - w) / 2, y = 18;
+        c.save();
+        c.textAlign = 'center';
+        c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.text;
+        c.fillText(inAmbush(t) ? 'AMBUSH — clear the road' : `Traveling to ${to.name}...`, VIEW_W / 2, y + 10);
+        this.bar(c, x, y + 18, w, 8, t.progress, to.look.accent, 'rgba(0,0,0,0.55)');
+        c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.dim;
+        c.textAlign = 'left';
+        c.fillText(from.name, x, y + 40);
+        c.textAlign = 'right';
+        c.fillText(`${Math.ceil(secondsLeft(t))}s`, x + w, y + 40);
+        // ambush markers still ahead on the road
+        c.fillStyle = '#ff9d5c';
+        for (const a of t.ambushes)
+            c.fillRect(x + w * a - 1.5, y + 15, 3, 14);
+        c.restore();
+    }
+    /** B on the keyboard, or this button: turn back on a road, retreat from a battle. */
+    drawBackButton(c, g) {
+        if (g.screen === 'battle' && g.battleOver > 0)
+            return;
+        const B = BACK_BTN;
+        const y = B.y;
+        c.save();
+        c.fillStyle = 'rgba(20,24,44,0.8)';
+        this.roundRect(c, B.x, y, B.w, B.h, 6);
+        c.fill();
+        c.strokeStyle = 'rgba(160,190,255,0.45)';
+        c.lineWidth = 1.2;
+        this.roundRect(c, B.x, y, B.w, B.h, 6);
+        c.stroke();
+        c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+        c.textAlign = 'center';
+        c.fillStyle = '#cfe0ff';
+        c.fillText(`${IS_TOUCH ? '' : 'B  '}${g.screen === 'travel' ? 'TURN BACK' : 'RETREAT'}`, B.x + B.w / 2, y + 17);
+        c.restore();
+    }
+    /** Trim a string with an ellipsis so it fits `w` pixels in the current font. */
+    clip(c, s, w) {
+        if (c.measureText(s).width <= w)
+            return s;
+        while (s.length > 1 && c.measureText(s + '\u2026').width > w)
+            s = s.slice(0, -1);
+        return s + '\u2026';
     }
     /** KH2's bottom-left command list: Attack / Magic / Items. */
     drawCommandMenu(c, g) {
@@ -3825,10 +4975,11 @@ class Renderer {
             c.fillText('DEFEATED', VIEW_W / 2, VIEW_H / 2 - 20);
             c.font = '700 15px ui-monospace, Menlo, Consolas, monospace';
             c.fillStyle = PAL.text;
-            c.fillText(`Reached wave ${g.wave} in ${g.location.name}  ·  Level ${g.player.level}`, VIEW_W / 2, VIEW_H / 2 + 14);
+            const safe = g.screen === 'travel' && g.travel ? g.travel.from : g.world.currentLocation;
+            c.fillText(`Level ${g.player.level}  ·  you will wake in ${locById(safe).name}`, VIEW_W / 2, VIEW_H / 2 + 14);
             c.fillStyle = PAL.dim;
-            c.fillText(IS_TOUCH ? 'Tap to retry — you keep your level.'
-                : 'Press R to retry — you keep your level.', VIEW_W / 2, VIEW_H / 2 + 40);
+            c.fillText(IS_TOUCH ? 'Tap to continue — you keep everything.'
+                : 'Press R to continue — you keep everything.', VIEW_W / 2, VIEW_H / 2 + 40);
         }
         c.restore();
     }
@@ -3916,7 +5067,7 @@ class Renderer {
         c.save();
         c.fillStyle = 'rgba(6,8,14,0.975)';
         c.fillRect(0, 0, VIEW_W, VIEW_H);
-        const tabs = ['GEAR', 'SYNTH', 'TALENTS', 'STATUS', 'MAP'];
+        const tabs = ['GEAR', g.atStation() ? 'FORGE' : 'RECIPES', 'TALENTS', 'STATUS', 'MAP'];
         c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
         for (let i = 0; i < tabs.length; i++) {
             const on = i === g.menuTab;
@@ -3963,11 +5114,13 @@ class Renderer {
             this.drawStatusTab(c, g, top);
         else
             this.drawMapTab(c, g, top);
+        void g.forgeOpen;
         c.fillStyle = PAL.dim;
         c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
         c.fillText(IS_TOUCH
             ? 'tap a tab  ·  tap a row to select, tap again to confirm  ·  \u2715 to close'
-            : '1-5 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close', 26, VIEW_H - 18);
+            : g.menuTab === 4 ? '1-5 tabs  ·  arrows move between places  ·  ENTER travel there  ·  TAB or ESC close'
+                : '1-5 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close', 26, VIEW_H - 18);
         void p;
         c.restore();
     }
@@ -4054,34 +5207,48 @@ class Renderer {
     drawSynthTab(c, g, top) {
         const p = g.player;
         const entries = g.synthEntries();
-        const lw = MENU_LIST.w, rowH = MENU_LIST.rowH;
+        const lw = MENU_LIST.w, rowH = SYNTH_ROW_H;
+        const station = g.atStation();
+        const accent = station ? g.place.look.accent : 'rgba(120,150,220,0.28)';
         this.listBox(c, 26, top, lw, VIEW_H - top - 46);
+        if (station) {
+            c.strokeStyle = accent;
+            c.lineWidth = 2;
+            this.roundRect(c, 26, top, lw, VIEW_H - top - 46, 8);
+            c.stroke();
+        }
         c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
-        const stateColor = {
-            owned: '#69e29a', ready: '#ffd54a', lack: '#949dbd', locked: '#5d6480',
-        };
-        const stateLabel = {
-            owned: 'FORGED', ready: 'READY', lack: 'MATS', locked: 'LOCKED',
-        };
+        const stateColor = { owned: '#69e29a', ready: '#ffd54a', lack: '#949dbd' };
+        const stateLabel = { owned: 'FORGED', ready: 'READY', lack: 'MATS' };
         for (let i = 0; i < entries.length; i++) {
             const e = entries[i];
             const y = top + MENU_LIST.pad + i * rowH;
             if (i === g.synthIndex)
-                this.rowHighlight(c, 32, y - 3, lw - 12, rowH - 2);
-            c.fillStyle = e.state === 'locked' ? '#5d6480' : PAL.text;
-            c.fillText(`${e.kind === 'w' ? 'WPN' : 'ARM'}  ${e.name}`, 42, y + 12);
+                this.rowHighlight(c, 32, y - 3, lw - 12, rowH - 1);
+            c.fillStyle = PAL.text;
+            c.fillText(`${e.kind === 'w' ? 'WPN' : 'ARM'}  ${e.name}`, 42, y + 11);
             c.textAlign = 'right';
             c.fillStyle = stateColor[e.state];
-            c.fillText(stateLabel[e.state], 26 + lw - 12, y + 12);
+            c.fillText(stateLabel[e.state], 26 + lw - 12, y + 11);
             c.textAlign = 'left';
         }
         const dx = 26 + lw + 14;
         const dw = VIEW_W - dx - 26;
         this.listBox(c, dx, top, dw, VIEW_H - top - 46);
+        let y = top + 24;
+        // the station banner: where you are forging, or that you are not at one
+        c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = station ? accent : '#ff9d9d';
+        c.fillText(station ? `\u2692 ${(g.place.stationName || 'Forge').toUpperCase()}  ·  ${g.place.name}`
+            : 'NO FORGE HERE — recipes are read-only', dx + 16, y);
+        y += 17;
+        c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.dim;
+        c.fillText(this.clip(c, station ? (STATION_FLAVOR[g.place.id] || '') : 'Stations: ' + LOCATION_LIST.filter((l) => l.hasCraftingStation).map((l) => l.name).join(', '), dw - 32), dx + 16, y);
+        y += 26;
         const sel = entries[g.synthIndex];
         if (!sel)
             return;
-        let y = top + 26;
         c.font = '800 18px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.text;
         c.fillText(sel.name, dx + 16, y);
@@ -4089,7 +5256,7 @@ class Renderer {
         c.font = '500 12px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
         const def = sel.kind === 'w' ? weaponById(sel.id) : armorById(sel.id);
-        c.fillText(def.desc, dx + 16, y);
+        c.fillText(this.clip(c, def.desc, dw - 32), dx + 16, y);
         y += 26;
         c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
@@ -4102,22 +5269,18 @@ class Renderer {
             c.fillStyle = MATS[k].color;
             c.fillRect(dx + 16, y - 8, 8, 8);
             c.fillStyle = PAL.text;
-            c.fillText(MATS[k].name, dx + 32, y);
+            c.fillText(MATS[k].name + (BOSS_MATS.includes(k) ? (k === 'star' ? '  (superboss)' : '  (boss)') : ''), dx + 32, y);
             c.textAlign = 'right';
             c.fillStyle = has >= need ? '#69e29a' : '#ff6b6b';
             c.fillText(`${has} / ${need}`, dx + dw - 16, y);
             c.textAlign = 'left';
             y += 20;
         }
-        if (sel.recipe.requires) {
-            const req = sel.kind === 'w' ? weaponById(sel.recipe.requires) : armorById(sel.recipe.requires);
-            c.fillStyle = sel.state === 'locked' ? '#ff6b6b' : PAL.dim;
-            c.font = '500 12px ui-monospace, Menlo, Consolas, monospace';
-            c.fillText(`Requires: ${req.name}`, dx + 16, y + 8);
-        }
-        c.fillStyle = sel.state === 'ready' ? PAL.mpCharge : PAL.dim;
+        c.fillStyle = sel.state === 'ready' && station ? PAL.mpCharge : PAL.dim;
         c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
-        c.fillText(sel.state === 'ready' ? 'ENTER to forge and equip' : 'Keep farming', dx + 16, VIEW_H - 62);
+        c.fillText(!station ? 'Forge at the Haven or any station on the map'
+            : sel.state === 'ready' ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to forge and equip`
+                : sel.state === 'owned' ? 'Already yours — equip it from GEAR' : 'Keep hunting materials', dx + 16, VIEW_H - 62);
     }
     drawTalentTab(c, g, top) {
         const p = g.player;
@@ -4213,107 +5376,174 @@ class Renderer {
         c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.text;
         c.fillText('Materials', mx + 16, my);
-        my += 24;
-        c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
+        my += 20;
+        c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
         for (const k of MAT_ORDER) {
             const n = have(p.inv, k);
             c.fillStyle = MATS[k].color;
             c.fillRect(mx + 16, my - 8, 9, 9);
             c.fillStyle = n > 0 ? PAL.text : '#5d6480';
-            c.fillText(MATS[k].name, mx + 32, my);
+            c.fillText(MATS[k].name + (BOSS_MATS.includes(k) ? '  *' : ''), mx + 32, my);
             c.textAlign = 'right';
             c.fillText(String(n), mx + halfW - 16, my);
             c.textAlign = 'left';
-            my += 21;
+            my += 20;
         }
-        my += 10;
         c.fillStyle = PAL.dim;
         c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
-        c.fillText('Shades drop shards · Bulwarks drop plate', mx + 16, my);
-        c.fillText('Chanters drop sigils · Wisps drop embers', mx + 16, my + 16);
-        c.fillText('Void Cores only appear from wave 10 on', mx + 16, my + 32);
-        c.fillText('(deeper areas count as later waves)', mx + 16, my + 48);
+        c.fillText('* boss drops only', mx + 16, my + 4);
     }
     drawMapTab(c, g, top) {
-        const lw = MENU_LIST.w, rowH = MENU_LIST.rowH;
-        this.listBox(c, 26, top, lw, VIEW_H - top - 46);
-        c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
-        for (let i = 0; i < LOCATIONS.length; i++) {
-            const l = LOCATIONS[i];
-            const y = top + MENU_LIST.pad + i * rowH;
-            const open = g.isUnlocked(l);
-            const here = l === g.location;
-            if (i === g.mapIndex)
-                this.rowHighlight(c, 32, y - 4, lw - 12, rowH - 2);
-            c.fillStyle = open ? l.look.accent : '#3a4058';
-            c.fillRect(42, y + 3, 9, 9);
-            c.fillStyle = here ? PAL.mpCharge : open ? PAL.text : '#5d6480';
-            c.fillText(open ? l.name : '? ? ?', 60, y + 13);
-            c.textAlign = 'right';
-            c.fillStyle = here ? PAL.mpCharge : PAL.dim;
-            c.fillText(here ? 'HERE' : open ? `best ${g.bests[l.id] || 0}` : 'LOCKED', 26 + lw - 12, y + 13);
-            c.textAlign = 'left';
+        const w = g.world;
+        const M = MAP_BOX;
+        this.listBox(c, M.x, M.y, M.w, M.h);
+        void top;
+        const here = g.world.currentLocation;
+        const known = (id) => w.discoveredLocations.has(id) || w.unlockedAreas.has(id);
+        // roads
+        c.save();
+        c.lineWidth = 2;
+        for (const [a, b] of ROADS) {
+            const pa = mapPoint(locById(a)), pb = mapPoint(locById(b));
+            const open = w.unlockedAreas.has(a) && w.unlockedAreas.has(b);
+            const nearHere = (a === here || b === here) && open && g.screen === 'location';
+            c.strokeStyle = nearHere ? 'rgba(255,213,74,0.75)' : open ? 'rgba(143,180,255,0.4)' : 'rgba(90,100,140,0.18)';
+            c.setLineDash(open ? [] : [4, 6]);
+            c.beginPath();
+            c.moveTo(pa.x, pa.y);
+            c.lineTo(pb.x, pb.y);
+            c.stroke();
         }
-        const dx = 26 + lw + 14;
+        c.setLineDash([]);
+        c.restore();
+        // places
+        for (let i = 0; i < LOCATION_LIST.length; i++) {
+            const l = LOCATION_LIST[i];
+            const pt = mapPoint(l);
+            const open = w.unlockedAreas.has(l.id);
+            const sel = i === g.mapIndex;
+            const beaten = l.bosses.filter((b) => bossDefeated(w, b.id)).length;
+            c.save();
+            if (sel) {
+                c.strokeStyle = '#ffffff';
+                c.lineWidth = 2;
+                c.beginPath();
+                c.arc(pt.x, pt.y, 17, 0, Math.PI * 2);
+                c.stroke();
+            }
+            c.fillStyle = open ? l.look.accent : '#3a4058';
+            c.globalAlpha = open ? 1 : 0.8;
+            c.beginPath();
+            if (l.tier === 0) {
+                c.rect(pt.x - 9, pt.y - 9, 18, 18);
+            }
+            else {
+                c.arc(pt.x, pt.y, 10, 0, Math.PI * 2);
+            }
+            c.fill();
+            if (l.id === here) {
+                c.strokeStyle = PAL.mpCharge;
+                c.lineWidth = 3;
+                c.beginPath();
+                c.arc(pt.x, pt.y, 13 + Math.sin(g.time * 4) * 1.5, 0, Math.PI * 2);
+                c.stroke();
+            }
+            if (l.hasCraftingStation && open) {
+                c.fillStyle = '#ffffff';
+                c.font = '700 10px ui-monospace, Menlo, Consolas, monospace';
+                c.textAlign = 'center';
+                c.fillText('\u2692', pt.x, pt.y + 4);
+            }
+            c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+            c.textAlign = 'center';
+            c.fillStyle = open ? PAL.text : '#5d6480';
+            c.fillText(known(l.id) ? l.name : '? ? ?', pt.x, pt.y + 26);
+            if (open && l.bosses.length) {
+                c.fillStyle = beaten === l.bosses.length ? '#69e29a' : PAL.dim;
+                c.fillText(`${beaten}/${l.bosses.length}`, pt.x, pt.y - 15);
+            }
+            c.restore();
+        }
+        // detail panel
+        const dx = M.x + M.w + 14;
         const dw = VIEW_W - dx - 26;
-        this.listBox(c, dx, top, dw, VIEW_H - top - 46);
-        const l = LOCATIONS[g.mapIndex];
+        this.listBox(c, dx, M.y, dw, M.h);
+        const l = LOCATION_LIST[g.mapIndex];
         if (!l)
             return;
-        const open = g.isUnlocked(l);
-        // a swatch of the place, drawn from its own palette
-        const sw = { x: dx + 16, y: top + 14, w: dw - 32, h: 54 };
-        const sg = c.createLinearGradient(0, sw.y, 0, sw.y + sw.h);
-        sg.addColorStop(0, l.look.sky);
-        sg.addColorStop(1, l.look.floorAlt);
-        c.fillStyle = sg;
-        this.roundRect(c, sw.x, sw.y, sw.w, sw.h, 6);
-        c.fill();
-        c.strokeStyle = open ? l.look.accent : 'rgba(120,150,220,0.22)';
-        c.lineWidth = 1.5;
-        this.roundRect(c, sw.x, sw.y, sw.w, sw.h, 6);
-        c.stroke();
-        c.font = '800 20px ui-monospace, Menlo, Consolas, monospace';
+        const open = w.unlockedAreas.has(l.id);
+        let y = M.y + 26;
+        c.font = '800 16px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = open ? l.look.accent : '#5d6480';
-        c.fillText(open ? l.name.toUpperCase() : 'UNKNOWN AREA', sw.x + 14, sw.y + 26);
-        c.font = '500 12px ui-monospace, Menlo, Consolas, monospace';
+        c.fillText(this.clip(c, known(l.id) ? l.name : 'Unknown area', dw - 32), dx + 16, y);
+        y += 18;
+        c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
-        c.fillText(open ? l.sub : unlockText(l), sw.x + 14, sw.y + 44);
-        let y = sw.y + sw.h + 26;
+        c.fillText(l.tier ? `${l.theme}  ·  tier ${l.tier}  ·  Lv ${l.enemyLevelRange[0]}-${l.enemyLevelRange[1]}` : 'Haven  ·  safe', dx + 16, y);
+        y += 22;
+        c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.text;
-        c.fillText(open ? l.desc : 'Push further to find out what is out there.', dx + 16, y);
-        y += 28;
-        const foes = Object.keys(l.weights)
-            .filter((id) => l.weights[id] > 0)
-            .sort((a, b) => l.weights[b] - l.weights[a])
-            .slice(0, 2)
-            .map((id) => ENEMIES[id].name + 's');
-        const rich = Object.keys(l.matBias)
-            .filter((m) => (l.matBias[m] || 1) > 1)
-            .map((m) => MATS[m].name);
-        const rows = [
-            ['Threat', l.depth ? `wave +${l.depth}` : 'none'],
-            ['Common foes', open ? foes.join(', ') : '???'],
-            ['Rich in', open ? (rich.join(', ') || 'nothing special') : '???'],
-            ['Best wave', open ? String(g.bests[l.id] || 0) : '-'],
-            ['Cleared to', open ? String(g.cleared[l.id] || 0) : '-'],
-            ['Unlock', unlockText(l)],
-        ];
-        c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
+        for (const line of this.wrap(c, open ? l.description : lockedAreaText(l.id), dw - 32).slice(0, 4)) {
+            c.fillText(line, dx + 16, y);
+            y += 15;
+        }
+        y += 8;
+        const rows = [];
+        if (l.tier)
+            rows.push(['Recommended', `Lv ${recommendedLevel(l)}`]);
+        rows.push(['Forge', l.hasCraftingStation ? (l.stationName || 'yes') : '-']);
+        if (l.tier)
+            rows.push(['Foes', l.enemyTypes.map((id) => ENEMIES[id].name).join(', ')]);
+        const t = roadTime(here, l.id);
+        rows.push(['From here', l.id === here ? 'you are here' : t ? `${t}s by road` : 'no direct road']);
+        c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
         for (const [k, v] of rows) {
             c.fillStyle = PAL.dim;
             c.fillText(k, dx + 16, y);
             c.fillStyle = PAL.text;
             c.textAlign = 'right';
-            c.fillText(v, dx + dw - 16, y);
+            c.fillText(this.clip(c, v, dw - 120), dx + dw - 16, y);
             c.textAlign = 'left';
-            y += 20;
+            y += 17;
+        }
+        if (open && l.bosses.length) {
+            y += 6;
+            c.fillStyle = PAL.dim;
+            c.fillText('BOSSES', dx + 16, y);
+            y += 16;
+            for (const b of l.bosses) {
+                const done = bossDefeated(w, b.id);
+                const sup = superDefeated(w, b.id);
+                c.fillStyle = done ? '#69e29a' : PAL.text;
+                c.fillText(`${done ? '\u2713' : '\u00B7'} ${b.name}${sup ? ' \u2605' : ''}`, dx + 16, y);
+                y += 15;
+            }
         }
         c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
-        c.fillStyle = l === g.location ? PAL.dim : open ? PAL.mpCharge : '#ff9d9d';
-        c.fillText(l === g.location ? 'You are here'
-            : open ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to travel — starts at wave 1`
-                : 'Locked', dx + 16, VIEW_H - 62);
+        const canGo = g.screen === 'location' && open && l.id !== here && t > 0;
+        c.fillStyle = canGo ? PAL.mpCharge : PAL.dim;
+        c.fillText(g.screen !== 'location' ? 'Travel from a location, not mid-fight'
+            : l.id === here ? 'You are here'
+                : !open ? 'Locked'
+                    : t ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to set out`
+                        : 'Go through a neighbouring area', dx + 16, M.y + M.h - 14);
+    }
+    /** Greedy word wrap to `w` pixels in the current font. */
+    wrap(c, text, w) {
+        const out = [];
+        let line = '';
+        for (const word of text.split(' ')) {
+            const test = line ? line + ' ' + word : word;
+            if (c.measureText(test).width > w && line) {
+                out.push(line);
+                line = word;
+            }
+            else
+                line = test;
+        }
+        if (line)
+            out.push(line);
+        return out;
     }
     /** A shrinking ring while the wave is still frozen. */
     drawGrace(c, g) {
@@ -4449,7 +5679,7 @@ class Renderer {
         c.textAlign = 'center';
         c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
-        c.fillText('action-hybrid JRPG combat  ·  synthesis  ·  talents  ·  endless waves', VIEW_W / 2, 198);
+        c.fillText('an open world of bosses  ·  roads full of enemies  ·  forges  ·  Lv 1-100', VIEW_W / 2, 198);
         // a thin gold rule under the wordmark
         c.strokeStyle = 'rgba(255,213,74,0.45)';
         c.lineWidth = 2;
@@ -4499,7 +5729,7 @@ class Renderer {
             c.fillText(IS_TOUCH ? 'tap either side of a bar to adjust' : '\u2190 \u2192 to adjust  ·  ESC to go back', VIEW_W / 2, VIEW_H - 46);
         }
         else if (g.hasSave()) {
-            c.fillText(`Level ${g.player.level}  ·  ${g.location.name}  ·  best wave ${g.bestWave}  ·  ${g.player.weapon.name} / ${g.player.armor.name}`, VIEW_W / 2, VIEW_H - 62);
+            c.fillText(`Level ${g.player.level}  ·  ${g.place.name}  ·  ${g.world.completedBosses.size}/${ALL_BOSSES.length} bosses  ·  ${g.player.weapon.name} / ${g.player.armor.name}`, VIEW_W / 2, VIEW_H - 62);
             c.fillStyle = '#ff9d9d';
             c.fillText('New Game wipes that progress.', VIEW_W / 2, VIEW_H - 44);
         }
@@ -4522,27 +5752,28 @@ class Renderer {
                 ['DSH', 'dash with i-frames (learn it in the talent tree first)'],
                 ['MAG', 'cast the highlighted spell; tap a chip to change it'],
                 ['Lock-on', 'automatic on touch — it picks the nearest enemy'],
-                ['Menu', 'the icon on the right: gear, synthesis, talents'],
+                ['Menu', 'the icon on the right: gear, forge, talents, map'],
+                ['Turn back', 'the button under the road bar; it also retreats'],
             ]
             : [
                 ['Move', 'W A S D'],
                 ['Attack / Jump', 'J  ·  K or Space'],
                 ['Dash / Lock-on', 'Shift  ·  L'],
                 ['Magic', '1 Fire  2 Blizzard  3 Thunder  4 Cure'],
-                ['Menu', 'Tab for gear, synthesis and talents'],
+                ['Menu', 'Tab for gear, forge, talents, status and the world map'],
+                ['Turn back', 'B on a road; B also retreats from a battle'],
                 ['Potion / Pause', 'Q  ·  P'],
                 ['Tuning panel', '` opens every combat constant as a live slider'],
             ];
         const rules = [
-            'Enemies drop crafting materials, potions and ethers. Each type drops',
-            'something different, so farm the wave that has what you need.',
-            'Weapons add power and reach. Armour subtracts damage. Every tier is',
-            'gated on owning the one below it.',
-            'Bulwarks block anything from the front — go around, or break the guard',
-            'with a finisher. Cure spends your whole MP bar and locks it recharging.',
-            'Levels, gear and talents persist. Dying costs the wave, not the grind.',
-            'Clearing waves opens new areas on the MAP tab. Deeper areas hit',
-            'harder, pay more EXP and favour different materials.',
+            'You start in the Haven. Pick TRAVEL to open the map and take a road to a',
+            'neighbouring area. Roads are full of enemies; press B to turn back.',
+            'Every area has 2-3 bosses. Beating them opens new areas and new Wave',
+            'Trial tiers, and drops boss-only materials. Superbosses are optional.',
+            'Forge gear at the Haven or any station on the map. No recipe is locked:',
+            'if you hold the materials, you can make it.',
+            'Dying loses nothing — you wake at the last safe place. The game saves',
+            'on every change, and the location panel has a Save row too.',
         ];
         c.textAlign = 'left';
         let y = 112;
@@ -4612,7 +5843,9 @@ class Renderer {
     }
 }
 /* =========================================================================
- * main.ts — the Game: fixed-timestep loop, waves, progression, and glue.
+ * main.ts — the Game: fixed-timestep loop, the world state machine
+ * (location -> travel -> location, location -> battle -> location),
+ * progression, saving, and glue.
  * ========================================================================= */
 const SAVE_KEY = 'aerial-finisher-save-v2';
 function freshSave() {
@@ -4621,7 +5854,7 @@ function freshSave() {
         inv: {}, weapons: ['w1'], armors: ['a1'],
         weapon: 'w1', armor: 'a1', talents: {},
         potions: 3, ethers: 2,
-        location: 'plaza', bests: {}, cleared: {},
+        world: worldToSave(freshWorld()),
     };
 }
 function loadSave() {
@@ -4658,20 +5891,9 @@ function loadSave() {
                     if (j.talents[t.id])
                         d.talents[t.id] = true;
             }
-            for (const l of LOCATIONS) {
-                if (j.bests && j.bests[l.id])
-                    d.bests[l.id] = Math.max(1, j.bests[l.id] | 0);
-                if (j.cleared && j.cleared[l.id])
-                    d.cleared[l.id] = Math.max(0, j.cleared[l.id] | 0);
-            }
-            // Saves from before locations: all of that progress happened in the Plaza.
-            if (!j.bests) {
-                d.bests.plaza = d.bestWave;
-                d.cleared.plaza = d.bestWave - 1;
-            }
-            const loc = LOCATIONS.find((l) => l.id === j.location);
-            if (loc && locationUnlocked(loc, d.cleared))
-                d.location = loc.id;
+            // Saves from before the open world have no `world`: they start at the hub
+            // with their level, gear and materials intact.
+            d.world = worldToSave(worldFromSave(j.world));
         }
     }
     catch { /* private mode, blocked storage — play on regardless */ }
@@ -4719,21 +5941,26 @@ class Game {
         this.shakeAmount = 0;
         this.paused = false;
         this.god = false;
+        // ---- the world
+        this.world = freshWorld();
+        this.travel = null;
+        this.battle = null;
+        this.placeIndex = 0; // cursor in the location panel
+        this.trialTier = 1; // Wave Trial tier picked in the panel
+        this.mapIndex = 0; // cursor on the world map
+        this.forgeOpen = false; // the station's forge overlay is up
+        this.scroll = 0; // road scroll, for the travel backdrop
         this.wave = 1;
-        this.bestWave = 1; // best wave reached anywhere
-        this.location = LOCATIONS[0];
-        this.bests = {}; // best wave reached, per location
-        this.cleared = {}; // highest wave cleared, per location
-        this.mapIndex = 0;
+        this.bestWave = 1; // best Wave Trial wave, any tier
         this.restPoint = false;
         this.restTimer = 0;
         this.betweenWaves = 0;
+        this.battleOver = 0; // counts down after a battle is won, then back to the location
         this.comboCount = 0;
         this.comboTimer = 0;
         this.comboDisplay = 0;
         this.menuMode = 'root';
         this.menuIndex = 0;
-        // full-screen pause menu
         // title / options / how-to-play live in front of everything
         this.screen = 'title';
         this.titleMode = 'root';
@@ -4760,19 +5987,26 @@ class Game {
         const save = loadSave();
         applySave(this.player, save);
         this.bestWave = save.bestWave;
-        this.bests = { ...save.bests };
-        this.cleared = { ...save.cleared };
-        this.location = locationById(save.location);
-        this.mapIndex = LOCATIONS.indexOf(this.location);
-        // Wave 1 spawns immediately but stays frozen behind the title screen,
-        // so the menu has the arena as a backdrop instead of an empty box.
-        this.startWave(1);
+        this.world = worldFromSave(save.world);
+        this.mapIndex = LOCATION_LIST.indexOf(this.place);
+        this.trialTier = maxWaveTier(this.world);
         this.bannerT = 0;
     }
+    /** Where you are standing, or where you last stood. */
+    get place() { return locById(this.world.currentLocation); }
+    /** Whose look and enemies the arena is using right now. */
+    scene() {
+        if (this.screen === 'travel' && this.travel)
+            return roadScene(this.travel);
+        return this.place;
+    }
+    inCombat() { return this.screen === 'travel' || this.screen === 'battle'; }
+    atStation() { return this.screen === 'location' && this.place.hasCraftingStation; }
     hasSave() {
         const p = this.player;
-        return p.level > 1 || this.bestWave > 1 || this.location.id !== 'plaza' || p.ownedWeapons.length > 1
-            || p.ownedArmors.length > 1 || Object.keys(p.talents).length > 0;
+        return p.level > 1 || this.bestWave > 1 || p.ownedWeapons.length > 1
+            || p.ownedArmors.length > 1 || Object.keys(p.talents).length > 0
+            || this.world.completedBosses.size > 0 || this.world.discoveredLocations.size > 1;
     }
     titleRows() {
         if (this.titleMode === 'options')
@@ -4785,9 +6019,7 @@ class Game {
     handleTitle() {
         const inp = this.input;
         const rows = this.titleRows();
-        const idx = this.titleMode === 'options' ? 'optionIndex' : 'titleIndex';
         let cur = this.titleMode === 'options' ? this.optionIndex : this.titleIndex;
-        // taps: find the row under the finger
         const tap = inp.takeTap();
         let activate = false;
         if (this.titleMode === 'help') {
@@ -4835,7 +6067,6 @@ class Game {
             this.optionIndex = cur;
         else
             this.titleIndex = cur;
-        void idx;
         if (inp.wasPressed('cancel') && this.titleMode !== 'root') {
             this.titleMode = 'root';
             this.titleIndex = 0;
@@ -4861,11 +6092,11 @@ class Game {
         switch (label) {
             case 'Continue':
             case 'Start':
-                this.beginRun();
+                this.enterWorld();
                 break;
             case 'New Game':
                 this.resetSave();
-                this.beginRun();
+                this.enterWorld();
                 break;
             case 'Options':
                 this.titleMode = 'options';
@@ -4887,13 +6118,9 @@ class Game {
                 break;
         }
     }
-    beginRun() {
-        this.screen = 'play';
+    enterWorld() {
         this.titleMode = 'root';
-        this.deathT = 0;
-        this.restPoint = false;
-        this.betweenWaves = 0;
-        this.startWave(1);
+        this.arrive(this.world.currentLocation, false);
         this.input.clearBuffer();
     }
     /* ----------------------------------------------------------- main loop */
@@ -4916,37 +6143,34 @@ class Game {
     tick(dt) {
         this.input.pollPad();
         this.input.pollTouch();
-        this.input.uiMode = this.menuOpen || this.screen === 'title';
+        this.input.uiMode = this.menuOpen || this.screen === 'title' || this.screen === 'location';
+        if (TUNING.musicVolume !== this.lastMusicVol) {
+            this.lastMusicVol = TUNING.musicVolume;
+            this.music.setVolume(TUNING.musicVolume);
+        }
         if (this.screen === 'title') {
             this.time += dt;
             if (this.bannerT > 0)
                 this.bannerT -= dt;
             this.updateVfx(dt);
             this.music.target = 0;
-            if (TUNING.musicVolume !== this.lastMusicVol) {
-                this.lastMusicVol = TUNING.musicVolume;
-                this.music.setVolume(TUNING.musicVolume);
-            }
             this.handleTitle();
             this.input.endTick();
             return;
         }
         // Global toggles work even while paused or dead.
-        if (this.input.wasPressed('pause') && this.player.alive)
+        if (this.input.wasPressed('pause') && this.player.alive && this.inCombat())
             this.paused = !this.paused;
         if (this.input.wasPressed('mute')) {
             this.sfx.muted = !this.sfx.muted;
             this.music.setMuted(this.sfx.muted);
             this.toast(this.sfx.muted ? 'SOUND OFF' : 'SOUND ON');
         }
-        if (TUNING.musicVolume !== this.lastMusicVol) {
-            this.lastMusicVol = TUNING.musicVolume;
-            this.music.setVolume(TUNING.musicVolume);
-        }
         if (this.input.wasPressed('menu') && this.player.alive) {
-            this.menuOpen = !this.menuOpen;
-            this.menuIndex = 0;
-            this.mapIndex = LOCATIONS.indexOf(this.location);
+            if (this.menuOpen)
+                this.closeMenu();
+            else
+                this.openMenu(this.menuTab);
             this.input.clearBuffer();
         }
         this.syncMusic();
@@ -4956,9 +6180,9 @@ class Game {
             return;
         }
         if (!this.player.alive && this.deathT > 0.9) {
-            const tapped = IS_TOUCH && !!this.input.takeTap();
+            const tapped = !!this.input.takeTap();
             if (this.input.wasPressed('restart') || tapped || this.input.wasPressed('confirm')) {
-                this.restart();
+                this.recoverFromDeath();
                 this.input.endTick();
                 return;
             }
@@ -4978,6 +6202,15 @@ class Game {
             this.comboCount = 0;
         this.shakeAmount *= Math.pow(0.86, dt * 60);
         this.updateVfx(dt);
+        if (this.screen === 'location') {
+            this.handlePlace();
+            this.player.update(this, dt);
+            for (const p of this.pickups)
+                p.update(this, dt);
+            this.cull();
+            this.input.endTick();
+            return;
+        }
         // Hitstop freezes the simulation but keeps the picture alive.
         if (this.hitstopFrames > 0) {
             this.hitstopFrames--;
@@ -4992,6 +6225,12 @@ class Game {
             this.input.endTick();
             return;
         }
+        // Turn back on the road, or retreat from a battle: B, or tap the button.
+        const tap = this.input.takeTap();
+        const tappedBack = !!tap && tap.x >= BACK_BTN.x && tap.x <= BACK_BTN.x + BACK_BTN.w
+            && tap.y >= BACK_BTN.y && tap.y <= BACK_BTN.y + BACK_BTN.h;
+        if (this.input.wasPressed('back') || tappedBack)
+            this.goBack();
         if (this.input.touchChip >= 0) {
             this.touchSpell = this.input.touchChip;
             this.sfx.guard();
@@ -5019,7 +6258,10 @@ class Game {
         for (const p of this.pickups)
             p.update(this, dt);
         this.cull();
-        this.updateWaves(dt);
+        if (this.screen === 'travel')
+            this.updateTravel(dt);
+        else
+            this.updateBattle(dt);
         this.input.endTick();
     }
     cull() {
@@ -5030,21 +6272,20 @@ class Game {
     /** Intensity for the score, resolved from what is actually happening. */
     syncMusic() {
         let want;
-        if (this.menuOpen || this.restPoint)
+        if (this.menuOpen || this.restPoint || this.screen === 'location' || this.battleOver > 0)
             want = 0;
         else if (!this.player.alive)
             want = 1;
         else {
             const alive = this.enemies.filter((e) => e.alive).length;
-            // Thresholds are set so the score actually visits every layer — five
-            // enemies is an ordinary wave, not a crisis, so it can't sit on 3 forever.
             if (alive <= 2)
                 want = 1;
             else
                 want = 2;
             if (alive >= 6 || this.comboCount >= 12)
                 want = 3;
-            if ((this.wave % 5 === 0 && alive >= 3) || this.player.hp < this.player.stats.maxHp * 0.25)
+            const bossUp = !!this.battle?.bossEnemy?.alive;
+            if (bossUp || this.player.hp < this.player.stats.maxHp * 0.25)
                 want = 4;
         }
         this.music.target = want;
@@ -5065,7 +6306,6 @@ class Game {
         }
         this.particles = this.particles.filter((p) => p.life > 0);
         for (const f of this.floats) {
-            f.y -= 0;
             f.z += f.vy * dt;
             f.vy -= 120 * dt;
             f.life -= dt;
@@ -5078,71 +6318,384 @@ class Game {
             r.life -= dt;
         this.rings = this.rings.filter((r) => r.life > 0);
     }
-    /* --------------------------------------------------------------- waves */
-    /** The wave number difficulty is computed from: local wave + location depth. */
-    effectiveWave() {
-        return this.wave + this.location.depth;
+    /* --------------------------------------------------------------- world */
+    /** Land somewhere: it becomes the current location and is discovered. */
+    arrive(id, announce) {
+        const loc = locById(id);
+        this.world.currentLocation = loc.id;
+        this.world.discoveredLocations.add(loc.id);
+        this.screen = 'location';
+        this.travel = null;
+        this.battle = null;
+        this.battleOver = 0;
+        this.restPoint = false;
+        this.betweenWaves = 0;
+        this.waveIntro = 0;
+        this.paused = false;
+        // loot left on the floor is swept into your pack rather than lost
+        for (const p of this.pickups)
+            if (!p.collected) {
+                p.collected = true;
+                this.collect(p);
+            }
+        this.pickups.length = 0;
+        for (const e of this.enemies)
+            if (e.alive)
+                this.ring(e.x, e.y, e.z, 6, 50, '#ffffff');
+        this.enemies.length = 0;
+        this.projectiles.length = 0;
+        this.player.lock = null;
+        this.player.x = VIEW_W / 2 + 90;
+        this.player.y = VIEW_H / 2 + 40;
+        this.player.vx = this.player.vy = 0;
+        // Havens and forges are safe ground: rest there and you are made whole,
+        // and the quartermaster tops your pack back up.
+        if (loc.tier === 0 || loc.hasCraftingStation) {
+            this.player.hp = this.player.stats.maxHp;
+            this.player.mp = this.player.stats.maxMp;
+            this.player.charging = false;
+            this.player.potions = Math.max(this.player.potions, 3);
+            this.player.ethers = Math.max(this.player.ethers, 2);
+        }
+        this.placeIndex = 0;
+        this.mapIndex = LOCATION_LIST.indexOf(loc);
+        this.trialTier = clamp(this.trialTier, 1, maxWaveTier(this.world));
+        if (announce) {
+            this.banner(loc.name.toUpperCase(), loc.hasCraftingStation ? `${loc.stationName}  ·  HP / MP restored, items restocked`
+                : `Tier ${loc.tier}  ·  recommended Lv ${recommendedLevel(loc)}`, loc.look.accent);
+        }
+        this.save();
+    }
+    /** Set out along a road from the current location. */
+    travelTo(id) {
+        if (this.screen !== 'location') {
+            this.toast('FINISH WHAT YOU ARE DOING FIRST');
+            return false;
+        }
+        const here = this.world.currentLocation;
+        if (id === here) {
+            this.toast('YOU ARE ALREADY HERE');
+            return false;
+        }
+        if (!isAreaUnlocked(this.world, id)) {
+            this.toast(lockedAreaText(id).toUpperCase());
+            return false;
+        }
+        if (!roadTime(here, id)) {
+            this.toast('NO ROAD FROM HERE — TRAVEL THROUGH A NEIGHBOUR');
+            return false;
+        }
+        this.closeMenu();
+        this.travel = newTravel(here, id);
+        this.screen = 'travel';
+        this.enemies.length = 0;
+        this.projectiles.length = 0;
+        this.player.x = this.arena.x + 90;
+        this.player.y = this.arena.y + this.arena.h / 2;
+        this.waveIntro = 0;
+        this.banner('ON THE ROAD', `to ${locById(id).name}  ·  ${Math.round(this.travel.duration)}s`, locById(id).look.accent);
+        this.sfx.cast(640);
+        return true;
+    }
+    updateTravel(dt) {
+        const t = this.travel;
+        if (!t)
+            return;
+        if (tickTravel(this, t, dt))
+            this.finishTravel();
+    }
+    finishTravel() {
+        const t = this.travel;
+        // The road pays: EXP for the distance, scaled by how dangerous it was.
+        const tier = roadScene(t).tier;
+        const bonus = Math.round(t.duration * 2 * TIER_SCALING.xpMultiplier(Math.max(1, tier)) * TUNING.expMult);
+        if (bonus > 0)
+            this.grantExp(bonus, this.player.x, this.player.y, 20);
+        this.arrive(t.to, true);
+        if (bonus > 0)
+            this.toast(`+${bonus} EXP FOR THE ROAD`);
+    }
+    /** B / the on-screen button: turn around on a road, or leave a battle. */
+    goBack() {
+        if (this.screen === 'travel' && this.travel) {
+            reverseTravel(this.travel);
+            this.toast(`TURNING BACK TO ${locById(this.travel.to).name.toUpperCase()}`);
+            this.sfx.guard();
+        }
+        else if (this.screen === 'battle' && this.battleOver <= 0) {
+            this.arrive(this.world.currentLocation, false);
+            this.banner('RETREATED', 'Anything you picked up is yours to keep', '#9fd8ff');
+        }
+    }
+    /** The action list shown while standing in a location. */
+    placeRows() {
+        const l = this.place;
+        const w = this.world;
+        const rows = [];
+        for (const b of l.bosses) {
+            const done = bossDefeated(w, b.id);
+            rows.push({
+                label: `${done ? '\u2713' : '\u2620'} ${b.name}`,
+                right: done ? 'again' : `Lv ${this.bossLevel(b)}`,
+                enabled: true, color: done ? '#69e29a' : b.accent,
+                act: () => this.startBoss(b, false),
+            });
+            // The Ascendant: optional, harder, double spoils plus Star Fragments.
+            if (ascendantAvailable(w, b)) {
+                const sdone = superDefeated(w, b.id);
+                rows.push({
+                    label: `   \u2605 Ascendant`, right: sdone ? '\u2713 again' : 'x2 loot',
+                    enabled: true, color: '#ffd54a',
+                    act: () => this.startBoss(b, true),
+                });
+            }
+        }
+        if (l.tier > 0) {
+            const t = this.trialTier;
+            rows.push({
+                label: 'Wave Trial', right: `◀ Tier ${t} ▶`, enabled: true,
+                act: () => this.startTrial(t),
+            });
+        }
+        if (l.hasCraftingStation) {
+            rows.push({ label: l.stationName || 'Forge', right: 'FORGE', enabled: true, act: () => this.openForge(), color: l.look.accent });
+        }
+        rows.push({ label: 'Travel', right: 'MAP', enabled: true, act: () => this.openMenu(4) });
+        if (l.id !== HUB_ID) {
+            rows.push({ label: 'Road home', right: `${l.hubDistance}s`, enabled: true, act: () => this.travelTo(HUB_ID) });
+        }
+        rows.push({ label: 'Gear & talents', right: '', enabled: true, act: () => this.openMenu(0) });
+        rows.push({ label: 'Save', right: '', enabled: true, act: () => { this.save(); this.toast('GAME SAVED'); this.sfx.cast(700); } });
+        void w;
+        return rows;
+    }
+    handlePlace() {
+        const inp = this.input;
+        const rows = this.placeRows();
+        if (this.placeIndex >= rows.length)
+            this.placeIndex = 0;
+        const tap = inp.takeTap();
+        if (tap) {
+            const i = this.placeRowAt(tap.x, tap.y, rows.length);
+            if (i >= 0) {
+                const r = rows[i];
+                // the trial row's arrows are their own targets
+                if (r.label === 'Wave Trial' && tap.x > PLACE_PANEL.x + PLACE_PANEL.w - 120) {
+                    this.nudgeTrial(tap.x < PLACE_PANEL.x + PLACE_PANEL.w - 60 ? -1 : 1);
+                    this.placeIndex = i;
+                    return;
+                }
+                if (this.placeIndex === i || IS_TOUCH === false) {
+                    this.placeIndex = i;
+                    if (r.enabled)
+                        r.act();
+                }
+                else {
+                    this.placeIndex = i;
+                    this.sfx.guard();
+                }
+                return;
+            }
+        }
+        if (inp.wasPressed('down')) {
+            this.placeIndex = (this.placeIndex + 1) % rows.length;
+            this.sfx.guard();
+        }
+        if (inp.wasPressed('up')) {
+            this.placeIndex = (this.placeIndex - 1 + rows.length) % rows.length;
+            this.sfx.guard();
+        }
+        const cur = rows[this.placeIndex];
+        if (cur && cur.label === 'Wave Trial') {
+            if (inp.wasPressed('left'))
+                this.nudgeTrial(-1);
+            if (inp.wasPressed('right'))
+                this.nudgeTrial(1);
+        }
+        if (inp.wasPressed('confirm') && cur) {
+            if (cur.enabled)
+                cur.act();
+            else
+                this.toast('NOT AVAILABLE');
+        }
+    }
+    /** Row index under a point in the location panel, or -1. */
+    placeRowAt(x, y, n) {
+        const top = PLACE_PANEL.y + 52;
+        if (x < PLACE_PANEL.x || x > PLACE_PANEL.x + PLACE_PANEL.w || y < top)
+            return -1;
+        const i = Math.floor((y - top) / PLACE_PANEL.rowH);
+        return i >= 0 && i < n ? i : -1;
+    }
+    nudgeTrial(d) {
+        const tiers = [...this.world.unlockedWaveTiers].sort((a, b) => a - b);
+        const i = Math.max(0, tiers.indexOf(this.trialTier));
+        this.trialTier = tiers[clamp(i + d, 0, tiers.length - 1)];
+        this.sfx.guard();
+    }
+    openMenu(tab) {
+        this.menuOpen = true;
+        this.menuTab = tab;
+        this.menuIndex = 0;
+        if (tab === 4)
+            this.mapIndex = LOCATION_LIST.indexOf(this.place);
+        this.input.clearBuffer();
+    }
+    closeMenu() {
+        this.menuOpen = false;
+        this.forgeOpen = false;
+    }
+    openForge() {
+        if (!this.atStation()) {
+            this.toast('NO FORGE HERE');
+            return;
+        }
+        this.openMenu(1);
+        this.forgeOpen = true;
+        this.sfx.cast(420);
+    }
+    /* ------------------------------------------------------------- battles */
+    startTrial(tier) {
+        if (this.screen !== 'location')
+            return;
+        if (this.place.tier === 0) {
+            this.toast('NO TRIALS IN THE HAVEN');
+            return;
+        }
+        if (!this.world.unlockedWaveTiers.has(tier)) {
+            this.toast(lockedTierText(tier).toUpperCase());
+            return;
+        }
+        this.battle = { kind: 'trial', boss: null, superboss: false, tier, totalWaves: 0, bossEnemy: null };
+        this.beginBattle();
+        this.banner(`WAVE TRIAL ${tier}`, `${this.place.name}  ·  endless — press B to leave`, this.place.look.accent);
+    }
+    bossLevel(b) { return TIER_LEVELS[clamp(b.tier, 1, 10)][1]; }
+    /** A boss battle: two waves of the area's enemies, then the boss itself. */
+    startBoss(b, superboss) {
+        if (this.screen !== 'location')
+            return;
+        if (bossHome(b.id) !== this.world.currentLocation) {
+            this.toast('THAT BOSS IS ELSEWHERE');
+            return;
+        }
+        this.battle = { kind: 'boss', boss: b, superboss, tier: b.tier, totalWaves: 3, bossEnemy: null };
+        this.beginBattle();
+        this.banner(superboss ? ascendantName(b).toUpperCase() : b.name.toUpperCase(), superboss ? 'hard mode  ·  x1.5 stats  ·  x2 spoils' : `${b.title}  ·  2 waves, then the boss`, superboss ? '#ffd54a' : b.accent);
+    }
+    spawnBoss() {
+        const bt = this.battle;
+        const b = bt.boss;
+        const a = this.arena;
+        const e = new Enemy(bossEnemyDef(b), a.x + a.w / 2, a.y + 70, this.bossLevel(b), b.tier);
+        e.boss = b;
+        if (bt.superboss)
+            makeAscendant(e, b);
+        this.enemies.push(e);
+        bt.bossEnemy = e;
+        this.ring(e.x, e.y, 0, 12, 140, b.accent);
+        // deeper bosses bring a guard or two
+        const guards = b.tier >= 7 ? 2 : b.tier >= 4 ? 1 : 0;
+        for (let i = 0; i < guards; i++) {
+            const pos = this.spawnPoint(i * 2 + 1, 4);
+            const id = pick(this.place.enemyTypes);
+            this.enemies.push(new Enemy(ENEMIES[id], pos.x, pos.y, this.levelFor(bt.tier), bt.tier));
+        }
+    }
+    /** The boss is down: record it, open what it opens, drop its spoils. */
+    winBoss() {
+        const bt = this.battle;
+        const b = bt.boss;
+        const first = !bossDefeated(this.world, b.id);
+        const opened = defeatBoss(this.world, b);
+        const e = bt.bossEnemy;
+        const mult = bt.superboss ? b.superboss.dropMultiplier : 1;
+        for (const m of b.uniqueMaterials) {
+            this.pickups.push(new Pickup(e.x, e.y, 30, 'mat', m, Math.round(rndInt(2, 4) * mult)));
+        }
+        for (const d of rollDrops(ENEMIES[pick(this.place.enemyTypes)].id, b.tier + 2, 2 * mult)) {
+            this.pickups.push(new Pickup(e.x, e.y, 30, d.kind, d.id, d.count));
+        }
+        if (b.tier >= 5)
+            this.pickups.push(new Pickup(e.x, e.y, 30, 'mat', 'core', Math.round(rndInt(1, 2) * mult)));
+        this.pickups.push(new Pickup(e.x, e.y, 30, 'potion', null, 1));
+        if (bt.superboss)
+            winAscendant(this, b, e);
+        this.battleOver = 4.5;
+        this.sfx.levelUp();
+        const sub = opened.length ? `Unlocked: ${opened.join('  ·  ')}` : first ? 'Its spoils are yours' : 'Farmed again';
+        this.banner(bt.superboss ? 'ASCENDANT FELLED' : 'BOSS DEFEATED', sub, b.accent);
+        this.save();
+    }
+    beginBattle() {
+        this.screen = 'battle';
+        this.restPoint = false;
+        this.betweenWaves = 0;
+        this.battleOver = 0;
+        this.player.x = VIEW_W / 2;
+        this.player.y = VIEW_H / 2 + 40;
+        this.startWave(1);
     }
     waveScale() {
-        return 1 + TUNING.waveScaling * (this.effectiveWave() - 1);
+        return 1 + TUNING.waveScaling * (this.wave - 1);
     }
-    composition(wave) {
-        let budget = 3 + wave * 1.5;
-        const w = this.location.weights;
-        const pool = [
-            { id: 'shade', cost: 1, min: 1, cap: 6 },
-            { id: 'caster', cost: 2.2, min: 3, cap: 3 },
-            { id: 'flyer', cost: 2.4, min: 4, cap: 3 },
-            { id: 'bruiser', cost: 4.5, min: 5, cap: 2 },
-        ].map((p) => ({ ...p, weight: w[p.id] ?? 1 }))
-            // A location's favourite enemy is allowed to show up in larger numbers.
-            .map((p) => ({ ...p, cap: Math.round(p.cap * Math.max(1, p.weight * 0.75)) }))
-            .filter((p) => p.weight > 0 && wave >= p.min);
+    /** Enemy costs for filling a wave from the location's native enemy types. */
+    composition(wave, types) {
+        let budget = 3 + Math.min(wave, 14) * 1.3;
+        const table = {
+            shade: { cost: 1, cap: 6 }, caster: { cost: 2.2, cap: 3 },
+            flyer: { cost: 2.4, cap: 3 }, bruiser: { cost: 4.5, cap: 2 },
+        };
+        const pool = types.filter((id) => table[id]).map((id) => ({ id, ...table[id] }));
         if (!pool.length)
             return ['shade'];
         const used = {};
         const out = [];
-        // Guarantee at least one of the newest unlocked type, so waves feel fresh.
-        const newest = pool[pool.length - 1];
-        if (wave >= newest.min && wave <= newest.min + 1) {
-            out.push(newest.id);
-            used[newest.id] = 1;
-            budget -= newest.cost;
-        }
         let guard = 0;
-        while (budget > 0.9 && out.length < 10 && guard++ < 60) {
+        while (budget > 0.9 && out.length < 9 && guard++ < 60) {
             const affordable = pool.filter((p) => p.cost <= budget + 0.6 && (used[p.id] || 0) < p.cap);
             if (!affordable.length)
                 break;
-            const choice = pickWeighted(affordable);
+            const choice = pick(affordable);
             out.push(choice.id);
             used[choice.id] = (used[choice.id] || 0) + 1;
             budget -= choice.cost;
         }
         if (!out.length)
-            out.push('shade');
+            out.push(pool[0].id);
         return out;
     }
+    /** Level for an enemy fighting at `tier`: drawn from that tier's band. */
+    levelFor(tier) {
+        const band = TIER_LEVELS[clamp(tier, 1, 10)];
+        return rndInt(band[0], band[1]);
+    }
     startWave(n) {
+        const b = this.battle;
         this.wave = n;
         this.player.secondWindUsed = false;
         this.waveIntro = Math.max(0, TUNING.waveIntro);
         this.enemies.length = 0;
         this.projectiles.length = 0;
         this.player.lock = null;
-        const ids = this.composition(this.effectiveWave());
-        const scale = this.waveScale();
+        if (b.kind === 'boss' && n >= b.totalWaves) {
+            this.spawnBoss();
+            this.save();
+            return;
+        }
+        const ids = this.composition(b.kind === 'boss' ? n + 1 : n, this.place.enemyTypes);
+        const extra = b.kind === 'boss' ? 1 : this.waveScale();
         for (let i = 0; i < ids.length; i++) {
             const pos = this.spawnPoint(i, ids.length);
-            const e = new Enemy(ENEMIES[ids[i]], pos.x, pos.y, scale);
-            this.enemies.push(e);
+            this.enemies.push(new Enemy(ENEMIES[ids[i]], pos.x, pos.y, this.levelFor(b.tier), b.tier, extra));
             this.ring(pos.x, pos.y, 0, 8, 60, '#8fb4ff');
         }
-        if (n > this.bestWave) {
-            this.bestWave = n;
+        if (b.kind === 'trial') {
+            if (n > (this.world.trialBest[b.tier] || 0))
+                this.world.trialBest[b.tier] = n;
+            if (n > this.bestWave)
+                this.bestWave = n;
         }
-        if (n > (this.bests[this.location.id] || 0))
-            this.bests[this.location.id] = n;
         this.save();
     }
     spawnPoint(i, total) {
@@ -5162,20 +6715,27 @@ class Game {
             y: clamp(y, a.y + 30, a.y + a.h - 30),
         };
     }
-    updateWaves(dt) {
+    updateBattle(dt) {
+        const b = this.battle;
+        if (!b)
+            return;
+        if (this.battleOver > 0) {
+            this.battleOver -= dt;
+            if (this.battleOver <= 0)
+                this.arrive(this.world.currentLocation, false);
+            return;
+        }
         const anyAlive = this.enemies.some((e) => e.alive);
         if (anyAlive)
             return;
+        if (b.kind === 'boss' && this.wave >= b.totalWaves) {
+            this.winBoss();
+            return;
+        }
         if (this.betweenWaves <= 0 && !this.restPoint) {
             // wave just cleared
-            const isRest = this.wave % 5 === 0;
             this.sfx.wave();
-            const opened = this.markCleared(this.wave);
-            if (opened) {
-                // An unlock outranks the usual banner; the rest point still happens.
-                this.banner('NEW AREA', `${opened.name} — travel from the MAP tab`, opened.look.accent);
-                this.sfx.levelUp();
-            }
+            const isRest = b.kind === 'trial' && this.wave % 5 === 0;
             if (isRest) {
                 this.restPoint = true;
                 this.restTimer = 5;
@@ -5184,13 +6744,11 @@ class Game {
                 this.player.charging = false;
                 this.player.potions = Math.max(this.player.potions, 3);
                 this.player.ethers = Math.max(this.player.ethers, 2);
-                if (!opened)
-                    this.banner('REST POINT', 'HP / MP restored, items resupplied', '#7fe8ff');
+                this.banner('REST POINT', 'HP / MP restored, items resupplied', '#7fe8ff');
             }
             else {
-                this.betweenWaves = opened ? 3.2 : 2.2;
-                if (!opened)
-                    this.banner(`WAVE ${this.wave} CLEAR`, '', '#4fe08a');
+                this.betweenWaves = 2.2;
+                this.banner(`WAVE ${this.wave} CLEAR`, '', '#4fe08a');
             }
             this.save();
             return;
@@ -5207,38 +6765,12 @@ class Game {
         this.betweenWaves -= dt;
         if (this.betweenWaves <= 0) {
             this.startWave(this.wave + 1);
-            this.banner(`WAVE ${this.wave}`, 'Get ready', '#8fb4ff');
+            if (b.kind === 'boss' && this.wave >= b.totalWaves) {
+                this.banner(b.boss.name.toUpperCase(), b.superboss ? 'ASCENDANT' : b.boss.title, b.boss.accent);
+            }
+            else
+                this.banner(`WAVE ${this.wave}`, 'Get ready', '#8fb4ff');
         }
-    }
-    /* ----------------------------------------------------------- locations */
-    /** Record a cleared wave; returns a location it just opened, if any. */
-    markCleared(wave) {
-        const before = LOCATIONS.filter((l) => locationUnlocked(l, this.cleared));
-        const id = this.location.id;
-        if (wave > (this.cleared[id] || 0))
-            this.cleared[id] = wave;
-        return LOCATIONS.find((l) => !before.includes(l) && locationUnlocked(l, this.cleared)) || null;
-    }
-    isUnlocked(loc) {
-        return locationUnlocked(loc, this.cleared);
-    }
-    travel(loc) {
-        if (!this.isUnlocked(loc)) {
-            this.toast(unlockText(loc).toUpperCase());
-            return;
-        }
-        if (loc === this.location) {
-            this.toast('ALREADY HERE');
-            return;
-        }
-        this.location = loc;
-        this.menuOpen = false;
-        this.save();
-        // Travelling is a fresh run at wave 1 of the new place; like a retry,
-        // levels, gear, materials and talents all come with you.
-        this.restart();
-        this.banner(loc.name.toUpperCase(), loc.sub, loc.look.accent);
-        this.sfx.cast(640);
     }
     /* ---------------------------------------------------------- collisions */
     clampToArena(o) {
@@ -5325,17 +6857,32 @@ class Game {
         p.takeHit(this, r.dmg, ang, 240, 22);
         this.burst(p.x, p.y, p.z + 20, 8, '#ff8a80');
     }
-    spawnEnemyBolt(e) {
+    /** An enemy bolt, aimed at the player plus `spread` radians. Scales with the caster. */
+    spawnEnemyBolt(e, spread = 0) {
         const p = this.player;
-        const ang = Math.atan2(p.y - e.y, p.x - e.x);
+        const ang = Math.atan2(p.y - e.y, p.x - e.x) + spread;
         const sp = 300;
         this.projectiles.push(new Projectile({
             x: e.x + Math.cos(ang) * 18, y: e.y + Math.sin(ang) * 18, z: e.z + e.def.height * 0.7,
             vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-            radius: 6, life: 2.4, color: e.def.accent, owner: 'enemy',
-            power: e.def.power * 0.9,
+            radius: e.boss ? 8 : 6, life: 2.4, color: e.def.accent, owner: 'enemy',
+            power: e.def.power * 0.9 * (e.str / e.def.str),
+            mag: e.str * 0.6,
         }));
         this.sfx.cast(260);
+    }
+    /** A boss's area attack landing at (x, y). Being in the air clears it. */
+    bossShock(e, x, y, r, mult) {
+        const p = this.player;
+        if (!p.alive || p.z > 26 || dist(x, y, p.x, p.y) > r + p.radius)
+            return;
+        if (this.god) {
+            this.floatText(p.x, p.y, p.z + 40, 'GOD', '#7fe8ff', 14);
+            return;
+        }
+        const res = physDamage(e.def.power * mult * TUNING.enemyDamageMult * (e.str / e.def.str), e.str, p.stats.def);
+        p.takeHit(this, res.dmg, Math.atan2(p.y - y, p.x - x), 320, 26);
+        this.burst(p.x, p.y, p.z + 20, 10, '#ff8a80');
     }
     projectileCollide(proj) {
         if (proj.owner === 'player') {
@@ -5372,7 +6919,7 @@ class Game {
             if (dist(proj.x, proj.y, p.x, p.y) > p.radius + proj.radius + 4)
                 return;
             proj.dead = true;
-            const r = magicDamage(proj.power * TUNING.enemyDamageMult, 8, p.stats.mres);
+            const r = magicDamage(proj.power * TUNING.enemyDamageMult, proj.mag, p.stats.mres);
             p.takeHit(this, r.dmg, Math.atan2(p.y - proj.y, p.x - proj.x), 170, 16);
             this.burst(proj.x, proj.y, proj.z, 10, proj.color);
         }
@@ -5457,19 +7004,12 @@ class Game {
             out.push({ kind: 'a', w: null, a: armorById(id) });
         return out;
     }
+    /** Every recipe, always: nothing is gated on level or on owning a lower tier. */
     synthEntries() {
         const p = this.player;
         const out = [];
         const add = (kind, id, name, recipe, owned) => {
-            let state;
-            if (owned)
-                state = 'owned';
-            else if (recipe.requires && !(kind === 'w' ? p.ownedWeapons : p.ownedArmors).includes(recipe.requires))
-                state = 'locked';
-            else if (!canAfford(p.inv, recipe.needs))
-                state = 'lack';
-            else
-                state = 'ready';
+            const state = owned ? 'owned' : canAfford(p.inv, recipe.needs) ? 'ready' : 'lack';
             out.push({ kind, id, name, recipe, state });
         };
         for (const w of WEAPONS)
@@ -5486,14 +7026,21 @@ class Game {
         if (tap && this.tapBigMenu(tap))
             return;
         if (inp.wasPressed('cancel')) {
-            this.menuOpen = false;
+            this.closeMenu();
             return;
         }
         for (let i = 0; i < MENU_TABS; i++) {
-            if (inp.wasPressed(('spell' + (i + 1))))
+            if (inp.wasPressed(('spell' + (i + 1)))) {
                 this.menuTab = i;
+                if (i !== 1)
+                    this.forgeOpen = false;
+            }
         }
-        const cycle = (d) => { this.menuTab = (this.menuTab + d + MENU_TABS) % MENU_TABS; };
+        const cycle = (d) => {
+            this.menuTab = (this.menuTab + d + MENU_TABS) % MENU_TABS;
+            if (this.menuTab !== 1)
+                this.forgeOpen = false;
+        };
         if (this.menuTab === 2) {
             if (inp.wasPressed('left')) {
                 this.talentBranch = (this.talentBranch + 2) % 3;
@@ -5516,6 +7063,20 @@ class Game {
             }
             if (inp.wasPressed('confirm'))
                 this.learnTalent(list[this.talentIndex].id);
+            return;
+        }
+        if (this.menuTab === 4) {
+            // the world map: arrows walk the cursor between places
+            if (inp.wasPressed('left'))
+                this.moveMapCursor(-1, 0);
+            if (inp.wasPressed('right'))
+                this.moveMapCursor(1, 0);
+            if (inp.wasPressed('up'))
+                this.moveMapCursor(0, -1);
+            if (inp.wasPressed('down'))
+                this.moveMapCursor(0, 1);
+            if (inp.wasPressed('confirm'))
+                this.travelTo(LOCATION_LIST[this.mapIndex].id);
             return;
         }
         if (inp.wasPressed('left')) {
@@ -5558,18 +7119,29 @@ class Game {
                     this.craft(e);
             }
         }
-        else if (this.menuTab === 4) {
-            const n = LOCATIONS.length;
-            if (inp.wasPressed('down')) {
-                this.mapIndex = (this.mapIndex + 1) % n;
-                this.sfx.guard();
+    }
+    /** Step the map cursor to the nearest place roughly in direction (dx, dy). */
+    moveMapCursor(dx, dy) {
+        const from = mapPoint(LOCATION_LIST[this.mapIndex]);
+        let best = -1, bestScore = Infinity;
+        LOCATION_LIST.forEach((l, i) => {
+            if (i === this.mapIndex)
+                return;
+            const p = mapPoint(l);
+            const vx = p.x - from.x, vy = p.y - from.y;
+            const d = Math.hypot(vx, vy);
+            const along = (vx * dx + vy * dy) / d; // cosine to the pressed direction
+            if (along < 0.35)
+                return;
+            const score = d / along;
+            if (score < bestScore) {
+                bestScore = score;
+                best = i;
             }
-            if (inp.wasPressed('up')) {
-                this.mapIndex = (this.mapIndex - 1 + n) % n;
-                this.sfx.guard();
-            }
-            if (inp.wasPressed('confirm'))
-                this.travel(LOCATIONS[this.mapIndex]);
+        });
+        if (best >= 0) {
+            this.mapIndex = best;
+            this.sfx.guard();
         }
     }
     equip(e) {
@@ -5586,14 +7158,15 @@ class Game {
         this.sfx.cast(520);
         this.save();
     }
+    /** Forging only happens at a crafting station. */
     craft(e) {
         const p = this.player;
-        if (e.state === 'owned') {
-            this.toast('ALREADY FORGED');
+        if (!this.atStation()) {
+            this.toast('FIND A CRAFTING STATION TO FORGE');
             return;
         }
-        if (e.state === 'locked') {
-            this.toast('FORGE THE PREVIOUS TIER FIRST');
+        if (e.state === 'owned') {
+            this.toast('ALREADY FORGED');
             return;
         }
         if (e.state === 'lack') {
@@ -5611,7 +7184,7 @@ class Game {
         }
         p.refreshStats(false);
         this.sfx.levelUp();
-        this.banner('SYNTHESIS', e.name + ' forged and equipped', '#ffd54a');
+        this.banner('FORGED', `${e.name} — ${this.place.stationName || 'forge'}`, this.place.look.accent);
         this.save();
     }
     learnTalent(id) {
@@ -5712,6 +7285,8 @@ class Game {
     }
     /* --------------------------------------------------------- progression */
     onEnemyDeath(e) {
+        if (this.travel)
+            this.travel.kills++;
         this.sfx.die();
         this.burst(e.x, e.y, e.z + e.def.height * 0.5, 22, e.def.accent);
         this.ring(e.x, e.y, e.z, 8, 70, e.def.accent);
@@ -5720,7 +7295,7 @@ class Game {
         if (this.player.lock === e)
             this.player.lock = null;
         const luck = TUNING.dropRate * (this.player.hasT('scavenger') ? 1.55 : 1);
-        for (const d of rollDrops(e.def.id, this.effectiveWave(), luck, this.location.matBias)) {
+        for (const d of rollDrops(e.def.id, e.tier, luck)) {
             this.pickups.push(new Pickup(e.x, e.y, e.z + 12, d.kind, d.id, d.count));
         }
         this.grantExp(e.exp, e.x, e.y, e.z);
@@ -5753,8 +7328,13 @@ class Game {
         this.hitstop(12);
         this.save();
     }
-    restart() {
-        // Levels, gear, materials and talents all persist — that is the grind.
+    /**
+     * Back on your feet after a defeat. Levels, gear, materials and talents all
+     * persist — you wake at the last safe place: where the road started, or the
+     * location the battle was in.
+     */
+    recoverFromDeath() {
+        const safe = this.screen === 'travel' && this.travel ? this.travel.from : this.world.currentLocation;
         this.player = new Player();
         applySave(this.player, loadSave());
         this.projectiles.length = 0;
@@ -5765,10 +7345,10 @@ class Game {
         this.comboCount = 0;
         this.menuMode = 'root';
         this.menuIndex = 0;
-        this.restPoint = false;
-        this.betweenWaves = 0;
-        this.startWave(1);
-        this.banner('WAVE 1', `${this.location.name}  ·  Level ${this.player.level} — go again`, '#8fb4ff');
+        this.arrive(safe, false);
+        this.player.hp = this.player.stats.maxHp;
+        this.player.mp = this.player.stats.maxMp;
+        this.banner('DEFEATED', `You come to in ${locById(safe).name}. Nothing was lost.`, '#ff9d9d');
     }
     /* --------------------------------------------------- touch menu taps */
     /** Hit-test a tap against the pause menu. Returns true if it was consumed. */
@@ -5777,13 +7357,15 @@ class Game {
             const tx = MENU_TAB.x + i * (MENU_TAB.w + MENU_TAB.gap);
             if (tap.x >= tx && tap.x <= tx + MENU_TAB.w && tap.y >= MENU_TAB.y && tap.y <= MENU_TAB.y + MENU_TAB.h) {
                 this.menuTab = i;
+                if (i !== 1)
+                    this.forgeOpen = false;
                 this.sfx.guard();
                 return true;
             }
         }
         // a close box in the top-right corner
         if (tap.x > VIEW_W - 60 && tap.y < 52) {
-            this.menuOpen = false;
+            this.closeMenu();
             return true;
         }
         const rowIndex = () => Math.floor((tap.y - MENU_LIST.y - MENU_LIST.pad) / MENU_LIST.rowH);
@@ -5803,7 +7385,7 @@ class Game {
             }
         }
         if (this.menuTab === 1 && inList) {
-            const i = rowIndex();
+            const i = Math.floor((tap.y - MENU_LIST.y - MENU_LIST.pad) / SYNTH_ROW_H);
             const list = this.synthEntries();
             if (i >= 0 && i < list.length) {
                 if (this.synthIndex === i)
@@ -5815,16 +7397,19 @@ class Game {
                 return true;
             }
         }
-        if (this.menuTab === 4 && inList) {
-            const i = rowIndex();
-            if (i >= 0 && i < LOCATIONS.length) {
-                if (this.mapIndex === i)
-                    this.travel(LOCATIONS[i]);
-                else {
-                    this.mapIndex = i;
-                    this.sfx.guard();
+        if (this.menuTab === 4) {
+            // tap a place to select it, tap it again to set out
+            for (let i = 0; i < LOCATION_LIST.length; i++) {
+                const p = mapPoint(LOCATION_LIST[i]);
+                if (Math.hypot(tap.x - p.x, tap.y - p.y) <= 20) {
+                    if (this.mapIndex === i)
+                        this.travelTo(LOCATION_LIST[i].id);
+                    else {
+                        this.mapIndex = i;
+                        this.sfx.guard();
+                    }
+                    return true;
                 }
-                return true;
             }
         }
         if (this.menuTab === 2) {
@@ -5849,6 +7434,7 @@ class Game {
         }
         return false;
     }
+    /** Save anywhere: this runs on every meaningful change, and from the panel. */
     save() {
         const p = this.player;
         writeSave({
@@ -5856,19 +7442,19 @@ class Game {
             inv: p.inv, weapons: p.ownedWeapons, armors: p.ownedArmors,
             weapon: p.weapon.id, armor: p.armor.id, talents: p.talents,
             potions: p.potions, ethers: p.ethers,
-            location: this.location.id, bests: this.bests, cleared: this.cleared,
+            world: worldToSave(this.world),
         });
     }
     resetSave() {
         writeSave(freshSave());
         this.bestWave = 1;
-        this.bests = {};
-        this.cleared = {};
-        this.location = LOCATIONS[0];
-        this.mapIndex = 0;
-        this.restart();
+        this.world = freshWorld();
+        this.trialTier = 1;
+        this.player = new Player();
+        applySave(this.player, loadSave());
         this.toast('SAVE RESET');
     }
+    /* ----------------------------------------------------------------- fx */
     /* ----------------------------------------------------------------- fx */
     collect(p) {
         const pl = this.player;
@@ -5953,7 +7539,13 @@ class Game {
         this.rings.push({ x, y, z, r, maxR, life: 0.4, maxLife: 0.4, color });
     }
 }
-/* ==================================================== debug tuning panel */
+/** Screen position of a place on the world map (MAP tab). */
+function mapPoint(l) {
+    return {
+        x: MAP_BOX.x + 34 + l.map.x * (MAP_BOX.w - 68),
+        y: MAP_BOX.y + 40 + l.map.y * (MAP_BOX.h - 80),
+    };
+}
 function buildDebugPanel(g) {
     var _a;
     const panel = document.getElementById('debug');
@@ -5969,7 +7561,7 @@ function buildDebugPanel(g) {
         + '<button data-act="skip">Skip to wave +5</button>'
         + '<button data-act="mats">+50 all materials</button>'
         + '<button data-act="ap">+10 AP (levels)</button>'
-        + '<button data-act="areas">Unlock all areas</button>'
+        + '<button data-act="areas">Unlock all areas + tiers</button>'
         + '<button data-act="god">God mode: off</button>'
         + '<button data-act="reset">Reset save</button>'
         + '<button data-act="defaults">Reset tuning</button>'
@@ -6016,8 +7608,12 @@ function buildDebugPanel(g) {
                             e.applyDamage(g, 999999, 0, 0, 0, 0);
                     break;
                 case 'skip':
-                    g.startWave(g.wave + 5);
-                    g.banner(`WAVE ${g.wave}`, '', '#8fb4ff');
+                    if (g.screen === 'battle' && g.battle?.kind === 'trial') {
+                        g.startWave(g.wave + 5);
+                        g.banner(`WAVE ${g.wave}`, '', '#8fb4ff');
+                    }
+                    else
+                        g.toast('ONLY IN A WAVE TRIAL');
                     break;
                 case 'mats':
                     for (const m of MAT_ORDER)
@@ -6030,10 +7626,11 @@ function buildDebugPanel(g) {
                         g.grantExp(expToNext(g.player.level), g.player.x, g.player.y, 20);
                     break;
                 case 'areas':
-                    for (const l of LOCATIONS)
-                        if (l.unlock)
-                            g.cleared[l.unlock.from] = Math.max(g.cleared[l.unlock.from] || 0, l.unlock.wave);
-                    g.toast('ALL AREAS OPEN');
+                    for (const l of LOCATION_LIST)
+                        g.world.unlockedAreas.add(l.id);
+                    for (let t = 1; t <= 10; t++)
+                        g.world.unlockedWaveTiers.add(t);
+                    g.toast('ALL AREAS AND TIERS OPEN');
                     g.save();
                     break;
                 case 'god':
@@ -6042,6 +7639,8 @@ function buildDebugPanel(g) {
                     break;
                 case 'reset':
                     g.resetSave();
+                    if (g.screen !== 'title')
+                        g.arrive(HUB_ID, true);
                     break;
                 case 'defaults':
                     for (const k of Object.keys(defaults))

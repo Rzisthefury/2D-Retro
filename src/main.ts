@@ -553,8 +553,9 @@ class Game {
     // The road pays: EXP for the distance, scaled by how dangerous it was.
     const tier = roadScene(t).tier;
     const bonus = Math.round(t.duration * 2 * TIER_SCALING.xpMultiplier(Math.max(1, tier)) * TUNING.expMult);
-    this.arrive(t.to, true);
     if (bonus > 0) this.grantExp(bonus, this.player.x, this.player.y, 20);
+    this.arrive(t.to, true);
+    if (bonus > 0) this.toast(`+${bonus} EXP FOR THE ROAD`);
   }
 
   /** B / the on-screen button: turn around on a road, or leave a battle. */

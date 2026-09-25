@@ -995,7 +995,7 @@ class Enemy {
         const t = this.tell(52);
         this.moveX = this.x; this.moveY = this.y;
         if (f === t) {
-          g.bossShock(this, this.x, this.y, SLAM_RADIUS, 1.5);
+          g.bossShock(this, this.x, this.y, SLAM_RADIUS, SHOCK_MULT);
           g.shake(12);
           g.ring(this.x, this.y, 0, 20, SLAM_RADIUS, this.def.accent);
           g.burst(this.x, this.y, 0, 24, this.def.accent);
@@ -1050,7 +1050,7 @@ class Enemy {
           this.z = DIVE_HEIGHT * (1 - k) + this.def.hover * k;
           if (f === rise + track + fall) {
             this.z = this.def.hover;
-            g.bossShock(this, this.moveX, this.moveY, DIVE_RADIUS, 1.4);
+            g.bossShock(this, this.moveX, this.moveY, DIVE_RADIUS, SHOCK_MULT * 0.9);
             g.shake(10);
             g.ring(this.moveX, this.moveY, 0, 10, DIVE_RADIUS, this.def.accent);
             g.burst(this.moveX, this.moveY, 0, 18, this.def.accent);
@@ -1220,6 +1220,8 @@ class Pickup {
 /* ----------------------------------------------------------- boss bodies */
 
 const SLAM_RADIUS = 150;
+const SHOCK_MULT = 1.5;       // slam / dive damage relative to a normal swing
+const BOSS_HP_SCALE = 0.75;   // boss data HP -> fight HP, tuned so fights last ~40-90 hits
 const DIVE_RADIUS = 96;
 const DIVE_HEIGHT = 190;
 
@@ -1233,8 +1235,12 @@ function bossEnemyDef(b: BossDefinition): EnemyDef {
   };
   return {
     id: b.id, name: b.name,
-    hp: b.stats.hp, str: b.stats.attack, def: b.stats.defense, mres: Math.round(b.stats.defense * 0.8),
-    color: b.color, accent: b.accent, exp: 420, power: Math.round(b.stats.attack * 1.25),
+    // `attack` is fed in gently: strength counts twice in physDamage (as a
+    // power ratio and as the strength term), so a raw 20 would snowball
+    // with tier and one-shot you late on.
+    hp: Math.round(b.stats.hp * BOSS_HP_SCALE),
+    str: 8 + (b.stats.attack - 12) * 0.25, def: b.stats.defense, mres: Math.round(b.stats.defense * 0.8),
+    color: b.color, accent: b.accent, exp: 420, power: 12 + (b.stats.attack - 12) * 0.5,
     guard: false,
     ...base[b.pattern],
   } as EnemyDef;

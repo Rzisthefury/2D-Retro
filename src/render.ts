@@ -1465,6 +1465,7 @@ class Renderer {
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillText(IS_TOUCH
       ? 'tap a tab  ·  tap a row to select, tap again to confirm  ·  \u2715 to close'
+      : g.menuTab === 4 ? '1-5 tabs  ·  arrows move between places  ·  ENTER travel there  ·  TAB or ESC close'
       : '1-5 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close',
       26, VIEW_H - 18);
     void p;
