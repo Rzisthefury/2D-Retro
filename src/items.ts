@@ -212,16 +212,17 @@ function coreChance(wave: number): number {
 
 interface RolledDrop { kind: 'mat' | 'potion' | 'ether'; id: MatId | null; count: number; }
 
-function rollDrops(enemyId: string, wave: number, luck: number): RolledDrop[] {
+/** `bias` is the current location's per-material multiplier (see locations.ts). */
+function rollDrops(enemyId: string, wave: number, luck: number, bias: Partial<Record<MatId, number>> = {}): RolledDrop[] {
   const t = DROPS[enemyId] || DROPS.shade;
   const out: RolledDrop[] = [];
   const waveBonus = 1 + Math.min(0.6, wave * 0.012);
   for (const m of t.mats) {
-    if (Math.random() < m.chance * luck * waveBonus) {
+    if (Math.random() < m.chance * luck * waveBonus * (bias[m.id] || 1)) {
       out.push({ kind: 'mat', id: m.id, count: rndInt(m.min, m.max) });
     }
   }
-  if (Math.random() < coreChance(wave) * luck) out.push({ kind: 'mat', id: 'core', count: 1 });
+  if (Math.random() < coreChance(wave) * luck * (bias.core || 1)) out.push({ kind: 'mat', id: 'core', count: 1 });
   if (Math.random() < t.potion) out.push({ kind: 'potion', id: null, count: 1 });
   if (Math.random() < t.ether) out.push({ kind: 'ether', id: null, count: 1 });
   return out;

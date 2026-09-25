@@ -81,19 +81,22 @@ class Renderer {
 
   private drawArena(g: Game) {
     const c = this.ctx;
+    const look = g.location.look;
     const grad = c.createLinearGradient(0, 0, 0, VIEW_H);
-    grad.addColorStop(0, '#12151f');
-    grad.addColorStop(1, PAL.floor);
+    grad.addColorStop(0, look.sky);
+    grad.addColorStop(1, look.floor);
     c.fillStyle = grad;
     c.fillRect(0, 0, VIEW_W, VIEW_H);
 
     const a = g.arena;
+    this.drawBackdrop(c, g);
+
     // floor plate
-    c.fillStyle = PAL.floorAlt;
+    c.fillStyle = look.floorAlt;
     c.fillRect(a.x, a.y, a.w, a.h);
 
     // grid
-    c.strokeStyle = PAL.grid;
+    c.strokeStyle = look.grid;
     c.lineWidth = 1;
     c.beginPath();
     for (let x = a.x; x <= a.x + a.w + 0.5; x += 60) { c.moveTo(x, a.y); c.lineTo(x, a.y + a.h); }
@@ -103,7 +106,7 @@ class Renderer {
     // centre motif
     c.save();
     c.globalAlpha = 0.20;
-    c.strokeStyle = '#4a5aa0';
+    c.strokeStyle = look.motif;
     c.lineWidth = 3;
     c.beginPath();
     c.arc(a.x + a.w / 2, a.y + a.h / 2, 110, 0, Math.PI * 2);
@@ -112,6 +115,8 @@ class Renderer {
     c.arc(a.x + a.w / 2, a.y + a.h / 2, 76, 0, Math.PI * 2);
     c.stroke();
     c.restore();
+
+    this.drawFloorDeco(c, g);
 
     // rest-point glow
     if (g.restPoint) {
@@ -129,9 +134,142 @@ class Renderer {
     }
 
     // walls
-    c.strokeStyle = '#39406090';
+    c.strokeStyle = look.wall;
     c.lineWidth = 4;
     c.strokeRect(a.x, a.y, a.w, a.h);
+  }
+
+  /** Scenery behind the arena plate, one style per location. */
+  private drawBackdrop(c: CanvasRenderingContext2D, g: Game) {
+    const look = g.location.look;
+    const a = g.arena;
+    const t = g.time;
+    c.save();
+    switch (look.deco) {
+      case 'plaza': {
+        // distant lamp posts along the back wall
+        for (let x = a.x + 40; x < a.x + a.w; x += 120) {
+          c.fillStyle = '#20263a';
+          c.fillRect(x - 2, a.y - 46, 4, 46);
+          c.globalAlpha = 0.55 + Math.sin(t * 2 + x) * 0.1;
+          c.fillStyle = look.accent;
+          c.beginPath(); c.arc(x, a.y - 50, 4, 0, Math.PI * 2); c.fill();
+          c.globalAlpha = 1;
+        }
+        break;
+      }
+      case 'bastion': {
+        // crenellated rampart across the top
+        c.fillStyle = '#2a231f';
+        c.fillRect(0, a.y - 34, VIEW_W, 34);
+        for (let x = 0; x < VIEW_W; x += 48) c.fillRect(x, a.y - 52, 28, 18);
+        // floodwater lapping at the bottom edge
+        c.globalAlpha = 0.35;
+        c.fillStyle = '#2d4a5a';
+        c.fillRect(0, a.y + a.h + 6, VIEW_W, VIEW_H - (a.y + a.h + 6));
+        c.strokeStyle = '#5a8aa0';
+        c.lineWidth = 1.5;
+        c.beginPath();
+        for (let x = 0; x <= VIEW_W; x += 8) {
+          const y = a.y + a.h + 14 + Math.sin(x * 0.05 + t * 1.6) * 2.5;
+          if (x === 0) c.moveTo(x, y); else c.lineTo(x, y);
+        }
+        c.stroke();
+        break;
+      }
+      case 'spire': {
+        // tall pillars with hovering glyphs
+        for (let i = 0; i < 6; i++) {
+          const x = a.x + 30 + i * (a.w - 60) / 5;
+          c.fillStyle = '#1c2247';
+          c.fillRect(x - 9, 0, 18, a.y);
+          c.globalAlpha = 0.5 + Math.sin(t * 2.2 + i) * 0.3;
+          c.strokeStyle = look.accent;
+          c.lineWidth = 1.5;
+          const gy = a.y - 30 + Math.sin(t * 1.4 + i * 1.7) * 6;
+          c.beginPath(); c.arc(x, gy, 7, 0, Math.PI * 2); c.stroke();
+          c.beginPath(); c.moveTo(x - 4, gy); c.lineTo(x + 4, gy); c.moveTo(x, gy - 4); c.lineTo(x, gy + 4); c.stroke();
+          c.globalAlpha = 1;
+        }
+        break;
+      }
+      case 'wastes': {
+        // a jagged dune ridge and embers drifting upwards
+        c.fillStyle = '#2e1a10';
+        c.beginPath();
+        c.moveTo(0, a.y);
+        for (let x = 0; x <= VIEW_W; x += 40) c.lineTo(x, a.y - 22 - ((x * 37) % 29));
+        c.lineTo(VIEW_W, a.y);
+        c.closePath();
+        c.fill();
+        for (let i = 0; i < 26; i++) {
+          const x = (i * 131 + Math.sin(t + i) * 14) % VIEW_W;
+          const y = VIEW_H - ((t * (18 + (i % 5) * 7) + i * 53) % VIEW_H);
+          c.globalAlpha = 0.25 + (i % 4) * 0.1;
+          c.fillStyle = i % 3 ? look.accent : look.motif;
+          c.fillRect(x, y, 2.5, 2.5);
+        }
+        break;
+      }
+      case 'rift': {
+        // star specks and slow-pulsing tears in the dark
+        for (let i = 0; i < 40; i++) {
+          const x = (i * 97) % VIEW_W;
+          const y = (i * 61) % VIEW_H;
+          c.globalAlpha = 0.2 + 0.25 * Math.abs(Math.sin(t * 0.8 + i));
+          c.fillStyle = i % 5 ? '#c9b8ff' : look.motif;
+          c.fillRect(x, y, 1.8, 1.8);
+        }
+        c.globalAlpha = 0.35 + Math.sin(t * 1.3) * 0.15;
+        c.strokeStyle = look.motif;
+        c.lineWidth = 2;
+        for (const [x0, y0] of [[120, 40], [520, 30], [820, 60]]) {
+          c.beginPath();
+          c.moveTo(x0, y0);
+          c.lineTo(x0 + 18, y0 + 14); c.lineTo(x0 + 8, y0 + 26); c.lineTo(x0 + 26, y0 + 42);
+          c.stroke();
+        }
+        break;
+      }
+    }
+    c.restore();
+  }
+
+  /** Marks on the arena plate itself; drawn under every character. */
+  private drawFloorDeco(c: CanvasRenderingContext2D, g: Game) {
+    const look = g.location.look;
+    const a = g.arena;
+    c.save();
+    if (look.deco === 'bastion') {
+      // cracked flagstones
+      c.strokeStyle = '#3d332c';
+      c.lineWidth = 2;
+      for (let i = 0; i < 7; i++) {
+        const x = a.x + 70 + (i * 173) % (a.w - 140);
+        const y = a.y + 40 + (i * 97) % (a.h - 80);
+        c.beginPath(); c.moveTo(x, y); c.lineTo(x + 14, y + 9); c.lineTo(x + 8, y + 22); c.stroke();
+      }
+    } else if (look.deco === 'wastes') {
+      // cooling lava seams
+      c.globalAlpha = 0.28 + Math.sin(g.time * 1.8) * 0.08;
+      c.strokeStyle = look.motif;
+      c.lineWidth = 2.5;
+      for (let i = 0; i < 5; i++) {
+        const x = a.x + 60 + (i * 211) % (a.w - 120);
+        const y = a.y + 30 + (i * 83) % (a.h - 60);
+        c.beginPath(); c.moveTo(x, y); c.lineTo(x + 30, y + 12); c.lineTo(x + 52, y + 6); c.stroke();
+      }
+    } else if (look.deco === 'rift') {
+      // the floor edge crumbles into the void
+      c.globalAlpha = 0.5;
+      c.fillStyle = '#05030a';
+      for (let x = a.x; x < a.x + a.w; x += 34) {
+        c.beginPath();
+        c.moveTo(x, a.y + a.h); c.lineTo(x + 17, a.y + a.h - 10 - (x % 7)); c.lineTo(x + 34, a.y + a.h);
+        c.fill();
+      }
+    }
+    c.restore();
   }
 
   private drawShadow(c: CanvasRenderingContext2D, x: number, y: number, r: number, z: number) {
@@ -728,7 +866,10 @@ class Renderer {
     c.fillText(`WAVE ${g.wave}`, VIEW_W - 18, 32);
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText(`best ${g.bestWave}   enemies ${g.enemies.filter((e) => e.alive).length}`, VIEW_W - 18, 50);
+    c.fillText(`best ${g.bests[g.location.id] || 1}   enemies ${g.enemies.filter((e) => e.alive).length}`, VIEW_W - 18, 50);
+    c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = g.location.look.accent;
+    c.fillText(g.location.name.toUpperCase(), VIEW_W - 18, 66);
     c.restore();
 
     // equipped gear, small, under the bars
@@ -852,7 +993,7 @@ class Renderer {
       c.fillText('DEFEATED', VIEW_W / 2, VIEW_H / 2 - 20);
       c.font = '700 15px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = PAL.text;
-      c.fillText(`Reached wave ${g.wave}  ·  Level ${g.player.level}`, VIEW_W / 2, VIEW_H / 2 + 14);
+      c.fillText(`Reached wave ${g.wave} in ${g.location.name}  ·  Level ${g.player.level}`, VIEW_W / 2, VIEW_H / 2 + 14);
       c.fillStyle = PAL.dim;
       c.fillText(IS_TOUCH ? 'Tap to retry — you keep your level.'
                           : 'Press R to retry — you keep your level.', VIEW_W / 2, VIEW_H / 2 + 40);
@@ -943,7 +1084,7 @@ class Renderer {
     c.fillStyle = 'rgba(6,8,14,0.975)';
     c.fillRect(0, 0, VIEW_W, VIEW_H);
 
-    const tabs = ['GEAR', 'SYNTH', 'TALENTS', 'STATUS'];
+    const tabs = ['GEAR', 'SYNTH', 'TALENTS', 'STATUS', 'MAP'];
     c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
     for (let i = 0; i < tabs.length; i++) {
       const on = i === g.menuTab;
@@ -980,13 +1121,14 @@ class Renderer {
     if (g.menuTab === 0) this.drawGearTab(c, g, top);
     else if (g.menuTab === 1) this.drawSynthTab(c, g, top);
     else if (g.menuTab === 2) this.drawTalentTab(c, g, top);
-    else this.drawStatusTab(c, g, top);
+    else if (g.menuTab === 3) this.drawStatusTab(c, g, top);
+    else this.drawMapTab(c, g, top);
 
     c.fillStyle = PAL.dim;
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillText(IS_TOUCH
       ? 'tap a tab  ·  tap a row to select, tap again to confirm  ·  \u2715 to close'
-      : '1-4 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close',
+      : '1-5 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close',
       26, VIEW_H - 18);
     void p;
     c.restore();
@@ -1251,6 +1393,88 @@ class Renderer {
     c.fillText('Shades drop shards · Bulwarks drop plate', mx + 16, my);
     c.fillText('Chanters drop sigils · Wisps drop embers', mx + 16, my + 16);
     c.fillText('Void Cores only appear from wave 10 on', mx + 16, my + 32);
+    c.fillText('(deeper areas count as later waves)', mx + 16, my + 48);
+  }
+
+  private drawMapTab(c: CanvasRenderingContext2D, g: Game, top: number) {
+    const lw = MENU_LIST.w, rowH = MENU_LIST.rowH;
+    this.listBox(c, 26, top, lw, VIEW_H - top - 46);
+    c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
+
+    for (let i = 0; i < LOCATIONS.length; i++) {
+      const l = LOCATIONS[i];
+      const y = top + MENU_LIST.pad + i * rowH;
+      const open = g.isUnlocked(l);
+      const here = l === g.location;
+      if (i === g.mapIndex) this.rowHighlight(c, 32, y - 4, lw - 12, rowH - 2);
+      c.fillStyle = open ? l.look.accent : '#3a4058';
+      c.fillRect(42, y + 3, 9, 9);
+      c.fillStyle = here ? PAL.mpCharge : open ? PAL.text : '#5d6480';
+      c.fillText(open ? l.name : '? ? ?', 60, y + 13);
+      c.textAlign = 'right';
+      c.fillStyle = here ? PAL.mpCharge : PAL.dim;
+      c.fillText(here ? 'HERE' : open ? `best ${g.bests[l.id] || 0}` : 'LOCKED', 26 + lw - 12, y + 13);
+      c.textAlign = 'left';
+    }
+
+    const dx = 26 + lw + 14;
+    const dw = VIEW_W - dx - 26;
+    this.listBox(c, dx, top, dw, VIEW_H - top - 46);
+    const l = LOCATIONS[g.mapIndex];
+    if (!l) return;
+    const open = g.isUnlocked(l);
+
+    // a swatch of the place, drawn from its own palette
+    const sw = { x: dx + 16, y: top + 14, w: dw - 32, h: 54 };
+    const sg = c.createLinearGradient(0, sw.y, 0, sw.y + sw.h);
+    sg.addColorStop(0, l.look.sky); sg.addColorStop(1, l.look.floorAlt);
+    c.fillStyle = sg;
+    this.roundRect(c, sw.x, sw.y, sw.w, sw.h, 6); c.fill();
+    c.strokeStyle = open ? l.look.accent : 'rgba(120,150,220,0.22)';
+    c.lineWidth = 1.5;
+    this.roundRect(c, sw.x, sw.y, sw.w, sw.h, 6); c.stroke();
+    c.font = '800 20px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = open ? l.look.accent : '#5d6480';
+    c.fillText(open ? l.name.toUpperCase() : 'UNKNOWN AREA', sw.x + 14, sw.y + 26);
+    c.font = '500 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.dim;
+    c.fillText(open ? l.sub : unlockText(l), sw.x + 14, sw.y + 44);
+
+    let y = sw.y + sw.h + 26;
+    c.fillStyle = PAL.text;
+    c.fillText(open ? l.desc : 'Push further to find out what is out there.', dx + 16, y);
+    y += 28;
+
+    const foes = Object.keys(l.weights)
+      .filter((id) => l.weights[id] > 0)
+      .sort((a, b) => l.weights[b] - l.weights[a])
+      .slice(0, 2)
+      .map((id) => ENEMIES[id].name + 's');
+    const rich = (Object.keys(l.matBias) as MatId[])
+      .filter((m) => (l.matBias[m] || 1) > 1)
+      .map((m) => MATS[m].name);
+    const rows: [string, string][] = [
+      ['Threat', l.depth ? `wave +${l.depth}` : 'none'],
+      ['Common foes', open ? foes.join(', ') : '???'],
+      ['Rich in', open ? (rich.join(', ') || 'nothing special') : '???'],
+      ['Best wave', open ? String(g.bests[l.id] || 0) : '-'],
+      ['Cleared to', open ? String(g.cleared[l.id] || 0) : '-'],
+      ['Unlock', unlockText(l)],
+    ];
+    c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
+    for (const [k, v] of rows) {
+      c.fillStyle = PAL.dim; c.fillText(k, dx + 16, y);
+      c.fillStyle = PAL.text; c.textAlign = 'right';
+      c.fillText(v, dx + dw - 16, y);
+      c.textAlign = 'left';
+      y += 20;
+    }
+
+    c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = l === g.location ? PAL.dim : open ? PAL.mpCharge : '#ff9d9d';
+    c.fillText(l === g.location ? 'You are here'
+      : open ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to travel — starts at wave 1`
+      : 'Locked', dx + 16, VIEW_H - 62);
   }
 
   /** A shrinking ring while the wave is still frozen. */
@@ -1423,7 +1647,7 @@ class Renderer {
     if (g.titleMode === 'options') {
       c.fillText(IS_TOUCH ? 'tap either side of a bar to adjust' : '\u2190 \u2192 to adjust  ·  ESC to go back', VIEW_W / 2, VIEW_H - 46);
     } else if (g.hasSave()) {
-      c.fillText(`Level ${g.player.level}  ·  best wave ${g.bestWave}  ·  ${g.player.weapon.name} / ${g.player.armor.name}`, VIEW_W / 2, VIEW_H - 62);
+      c.fillText(`Level ${g.player.level}  ·  ${g.location.name}  ·  best wave ${g.bestWave}  ·  ${g.player.weapon.name} / ${g.player.armor.name}`, VIEW_W / 2, VIEW_H - 62);
       c.fillStyle = '#ff9d9d';
       c.fillText('New Game wipes that progress.', VIEW_W / 2, VIEW_H - 44);
     } else {
@@ -1467,6 +1691,8 @@ class Renderer {
       'Bulwarks block anything from the front — go around, or break the guard',
       'with a finisher. Cure spends your whole MP bar and locks it recharging.',
       'Levels, gear and talents persist. Dying costs the wave, not the grind.',
+      'Clearing waves opens new areas on the MAP tab. Deeper areas hit',
+      'harder, pay more EXP and favour different materials.',
     ];
 
     c.textAlign = 'left';

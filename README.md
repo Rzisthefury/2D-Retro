@@ -209,3 +209,54 @@ the apple-mobile-web-app meta tags make Add to Home Screen a fullscreen app.
 Known: the canvas letterboxes on a 19.5:9 phone (960x540 fitted by height).
 Widening `VIEW_W` on mobile would fill it, but every layout constant is written
 against 960x540, so that is a deliberate later job.
+
+---
+
+# rev 4 - locations
+
+## New file
+
+| file | what lives there |
+|---|---|
+| `src/locations.ts` | `LOCATIONS`: five areas, each a look, an enemy mix, a depth and a material bias |
+
+Compiled after `talents.ts` (it needs `MatId` from items.ts).
+
+## The five areas
+
+| area | depth | favours | rich in | opens when |
+|---|---|---|---|---|
+| Twilight Plaza | 0 | balanced | - | from the start |
+| Sunken Bastion | 4 | Bulwarks | plate, iron | clear wave 5 in the Plaza |
+| Chanter's Spire | 6 | Chanters, Wisps | sigils, embers, crystal | clear wave 5 in the Bastion |
+| Ember Wastes | 9 | Shades, Wisps | embers, iron, crystal | clear wave 5 in the Spire |
+| Void Rift | 13 | everything | Void Cores, crystal | clear wave 10 in the Wastes |
+
+## How it works
+
+- **Depth.** `Game.effectiveWave()` is `wave + location.depth`. Enemy stats,
+  EXP, which enemy types can spawn, and `coreChance` all read it, so a deep
+  area is harder *and* pays better from its first wave. The HUD still shows the
+  local wave, and rest points still land on every 5th local wave. Bastion's
+  depth is 4 so that effective wave 5 puts Bulwarks in its very first wave.
+- **Enemy mix.** `composition()` picks with `pickWeighted` (core.ts) using the
+  location's `weights`; a weight above ~1.3 also raises that type's cap.
+- **Drops.** `rollDrops` takes the location's `matBias` as a per-material
+  chance multiplier, which is what makes each area the place to farm something.
+- **Unlocks** are derived, never stored: `locationUnlocked` checks the
+  highest wave cleared in the `from` area. `markCleared` runs on every wave
+  clear and fires a NEW AREA banner the moment something opens.
+- **Travel** is the fifth pause-menu tab, MAP (key `5`). Travelling is a
+  fresh run at wave 1 of the new place, exactly like a retry: level, gear,
+  materials and talents come with you.
+- **Look.** `LocationLook` feeds `drawArena`; `drawBackdrop` and
+  `drawFloorDeco` add per-area scenery (lamp posts, ramparts and floodwater,
+  glyph pillars, drifting embers, void tears).
+
+## Save
+
+`aerial-finisher-save-v2` gains `location`, `bests` and `cleared` (both keyed
+by location id). A save without them is migrated as all-Plaza progress, so an
+existing player who has already reached wave 6 finds the Bastion open.
+
+The debug panel has an **Unlock all areas** button.

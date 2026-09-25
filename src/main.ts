@@ -13,6 +13,8 @@ interface SaveData {
   inv: Inventory; weapons: string[]; armors: string[];
   weapon: string; armor: string; talents: TalentSet;
   potions: number; ethers: number;
+  // locations: where you are, best wave reached and highest wave cleared per place
+  location: string; bests: Record<string, number>; cleared: Record<string, number>;
 }
 
 const SAVE_KEY = 'aerial-finisher-save-v2';
@@ -23,6 +25,7 @@ function freshSave(): SaveData {
     inv: {}, weapons: ['w1'], armors: ['a1'],
     weapon: 'w1', armor: 'a1', talents: {},
     potions: 3, ethers: 2,
+    location: 'plaza', bests: {}, cleared: {},
   };
 }
 
@@ -53,6 +56,17 @@ function loadSave(): SaveData {
       if (j.talents && typeof j.talents === 'object') {
         for (const t of TALENTS) if (j.talents[t.id]) d.talents[t.id] = true;
       }
+      for (const l of LOCATIONS) {
+        if (j.bests && j.bests[l.id]) d.bests[l.id] = Math.max(1, j.bests[l.id] | 0);
+        if (j.cleared && j.cleared[l.id]) d.cleared[l.id] = Math.max(0, j.cleared[l.id] | 0);
+      }
+      // Saves from before locations: all of that progress happened in the Plaza.
+      if (!j.bests) {
+        d.bests.plaza = d.bestWave;
+        d.cleared.plaza = d.bestWave - 1;
+      }
+      const loc = LOCATIONS.find((l) => l.id === j.location);
+      if (loc && locationUnlocked(loc, d.cleared)) d.location = loc.id;
     }
   } catch { /* private mode, blocked storage — play on regardless */ }
   return d;
@@ -104,7 +118,11 @@ class Game {
   god = false;
 
   wave = 1;
-  bestWave = 1;
+  bestWave = 1;                // best wave reached anywhere
+  location: LocationDef = LOCATIONS[0];
+  bests: Record<string, number> = {};    // best wave reached, per location
+  cleared: Record<string, number> = {};  // highest wave cleared, per location
+  mapIndex = 0;
   restPoint = false;
   restTimer = 0;
   betweenWaves = 0;
@@ -127,7 +145,7 @@ class Game {
   touchSpell = 0;              // which spell the MAG button casts
 
   menuOpen = false;
-  menuTab = 0;                 // 0 gear · 1 synthesis · 2 talents · 3 status
+  menuTab = 0;                 // 0 gear · 1 synthesis · 2 talents · 3 status · 4 map
   gearIndex = 0;
   synthIndex = 0;
   talentBranch = 0;
@@ -150,6 +168,10 @@ class Game {
     const save = loadSave();
     applySave(this.player, save);
     this.bestWave = save.bestWave;
+    this.bests = { ...save.bests };
+    this.cleared = { ...save.cleared };
+    this.location = locationById(save.location);
+    this.mapIndex = LOCATIONS.indexOf(this.location);
 
     // Wave 1 spawns immediately but stays frozen behind the title screen,
     // so the menu has the arena as a backdrop instead of an empty box.
@@ -159,7 +181,7 @@ class Game {
 
   hasSave(): boolean {
     const p = this.player;
-    return p.level > 1 || this.bestWave > 1 || p.ownedWeapons.length > 1
+    return p.level > 1 || this.bestWave > 1 || this.location.id !== 'plaza' || p.ownedWeapons.length > 1
       || p.ownedArmors.length > 1 || Object.keys(p.talents).length > 0;
   }
 
@@ -320,6 +342,7 @@ class Game {
     if (this.input.wasPressed('menu') && this.player.alive) {
       this.menuOpen = !this.menuOpen;
       this.menuIndex = 0;
+      this.mapIndex = LOCATIONS.indexOf(this.location);
       this.input.clearBuffer();
     }
     this.syncMusic();
@@ -426,18 +449,28 @@ class Game {
 
   /* --------------------------------------------------------------- waves */
 
+  /** The wave number difficulty is computed from: local wave + location depth. */
+  effectiveWave(): number {
+    return this.wave + this.location.depth;
+  }
+
   waveScale(): number {
-    return 1 + TUNING.waveScaling * (this.wave - 1);
+    return 1 + TUNING.waveScaling * (this.effectiveWave() - 1);
   }
 
   private composition(wave: number): string[] {
     let budget = 3 + wave * 1.5;
-    const pool: { id: string; cost: number; min: number; cap: number }[] = [
+    const w = this.location.weights;
+    const pool: { id: string; cost: number; min: number; cap: number; weight: number }[] = [
       { id: 'shade', cost: 1, min: 1, cap: 6 },
       { id: 'caster', cost: 2.2, min: 3, cap: 3 },
       { id: 'flyer', cost: 2.4, min: 4, cap: 3 },
       { id: 'bruiser', cost: 4.5, min: 5, cap: 2 },
-    ].filter((p) => wave >= p.min);
+    ].map((p) => ({ ...p, weight: w[p.id] ?? 1 }))
+      // A location's favourite enemy is allowed to show up in larger numbers.
+      .map((p) => ({ ...p, cap: Math.round(p.cap * Math.max(1, p.weight * 0.75)) }))
+      .filter((p) => p.weight > 0 && wave >= p.min);
+    if (!pool.length) return ['shade'];
     const used: Record<string, number> = {};
 
     const out: string[] = [];
@@ -451,7 +484,7 @@ class Game {
     while (budget > 0.9 && out.length < 10 && guard++ < 60) {
       const affordable = pool.filter((p) => p.cost <= budget + 0.6 && (used[p.id] || 0) < p.cap);
       if (!affordable.length) break;
-      const choice = pick(affordable);
+      const choice = pickWeighted(affordable);
       out.push(choice.id);
       used[choice.id] = (used[choice.id] || 0) + 1;
       budget -= choice.cost;
@@ -467,7 +500,7 @@ class Game {
     this.enemies.length = 0;
     this.projectiles.length = 0;
     this.player.lock = null;
-    const ids = this.composition(n);
+    const ids = this.composition(this.effectiveWave());
     const scale = this.waveScale();
     for (let i = 0; i < ids.length; i++) {
       const pos = this.spawnPoint(i, ids.length);
@@ -476,6 +509,7 @@ class Game {
       this.ring(pos.x, pos.y, 0, 8, 60, '#8fb4ff');
     }
     if (n > this.bestWave) { this.bestWave = n; }
+    if (n > (this.bests[this.location.id] || 0)) this.bests[this.location.id] = n;
     this.save();
   }
 
@@ -505,6 +539,12 @@ class Game {
       // wave just cleared
       const isRest = this.wave % 5 === 0;
       this.sfx.wave();
+      const opened = this.markCleared(this.wave);
+      if (opened) {
+        // An unlock outranks the usual banner; the rest point still happens.
+        this.banner('NEW AREA', `${opened.name} — travel from the MAP tab`, opened.look.accent);
+        this.sfx.levelUp();
+      }
       if (isRest) {
         this.restPoint = true;
         this.restTimer = 5;
@@ -513,10 +553,10 @@ class Game {
         this.player.charging = false;
         this.player.potions = Math.max(this.player.potions, 3);
         this.player.ethers = Math.max(this.player.ethers, 2);
-        this.banner('REST POINT', 'HP / MP restored, items resupplied', '#7fe8ff');
+        if (!opened) this.banner('REST POINT', 'HP / MP restored, items resupplied', '#7fe8ff');
       } else {
-        this.betweenWaves = 2.2;
-        this.banner(`WAVE ${this.wave} CLEAR`, '', '#4fe08a');
+        this.betweenWaves = opened ? 3.2 : 2.2;
+        if (!opened) this.banner(`WAVE ${this.wave} CLEAR`, '', '#4fe08a');
       }
       this.save();
       return;
@@ -537,6 +577,33 @@ class Game {
       this.startWave(this.wave + 1);
       this.banner(`WAVE ${this.wave}`, 'Get ready', '#8fb4ff');
     }
+  }
+
+  /* ----------------------------------------------------------- locations */
+
+  /** Record a cleared wave; returns a location it just opened, if any. */
+  private markCleared(wave: number): LocationDef | null {
+    const before = LOCATIONS.filter((l) => locationUnlocked(l, this.cleared));
+    const id = this.location.id;
+    if (wave > (this.cleared[id] || 0)) this.cleared[id] = wave;
+    return LOCATIONS.find((l) => !before.includes(l) && locationUnlocked(l, this.cleared)) || null;
+  }
+
+  isUnlocked(loc: LocationDef): boolean {
+    return locationUnlocked(loc, this.cleared);
+  }
+
+  travel(loc: LocationDef) {
+    if (!this.isUnlocked(loc)) { this.toast(unlockText(loc).toUpperCase()); return; }
+    if (loc === this.location) { this.toast('ALREADY HERE'); return; }
+    this.location = loc;
+    this.menuOpen = false;
+    this.save();
+    // Travelling is a fresh run at wave 1 of the new place; like a retry,
+    // levels, gear, materials and talents all come with you.
+    this.restart();
+    this.banner(loc.name.toUpperCase(), loc.sub, loc.look.accent);
+    this.sfx.cast(640);
   }
 
   /* ---------------------------------------------------------- collisions */
@@ -766,11 +833,11 @@ class Game {
     if (tap && this.tapBigMenu(tap)) return;
     if (inp.wasPressed('cancel')) { this.menuOpen = false; return; }
 
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < MENU_TABS; i++) {
       if (inp.wasPressed(('spell' + (i + 1)) as Action)) this.menuTab = i;
     }
 
-    const cycle = (d: number) => { this.menuTab = (this.menuTab + d + 4) % 4; };
+    const cycle = (d: number) => { this.menuTab = (this.menuTab + d + MENU_TABS) % MENU_TABS; };
 
     if (this.menuTab === 2) {
       if (inp.wasPressed('left')) { this.talentBranch = (this.talentBranch + 2) % 3; this.talentIndex = 0; this.sfx.guard(); }
@@ -801,6 +868,11 @@ class Game {
         const e = this.synthEntries()[this.synthIndex];
         if (e) this.craft(e);
       }
+    } else if (this.menuTab === 4) {
+      const n = LOCATIONS.length;
+      if (inp.wasPressed('down')) { this.mapIndex = (this.mapIndex + 1) % n; this.sfx.guard(); }
+      if (inp.wasPressed('up')) { this.mapIndex = (this.mapIndex - 1 + n) % n; this.sfx.guard(); }
+      if (inp.wasPressed('confirm')) this.travel(LOCATIONS[this.mapIndex]);
     }
   }
 
@@ -916,7 +988,7 @@ class Game {
     if (this.player.lock === e) this.player.lock = null;
 
     const luck = TUNING.dropRate * (this.player.hasT('scavenger') ? 1.55 : 1);
-    for (const d of rollDrops(e.def.id, this.wave, luck)) {
+    for (const d of rollDrops(e.def.id, this.effectiveWave(), luck, this.location.matBias)) {
       this.pickups.push(new Pickup(e.x, e.y, e.z + 12, d.kind, d.id, d.count));
     }
     this.grantExp(e.exp, e.x, e.y, e.z);
@@ -967,14 +1039,14 @@ class Game {
     this.restPoint = false;
     this.betweenWaves = 0;
     this.startWave(1);
-    this.banner('WAVE 1', `Level ${this.player.level} — go again`, '#8fb4ff');
+    this.banner('WAVE 1', `${this.location.name}  ·  Level ${this.player.level} — go again`, '#8fb4ff');
   }
 
   /* --------------------------------------------------- touch menu taps */
 
   /** Hit-test a tap against the pause menu. Returns true if it was consumed. */
   private tapBigMenu(tap: { x: number; y: number }): boolean {
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < MENU_TABS; i++) {
       const tx = MENU_TAB.x + i * (MENU_TAB.w + MENU_TAB.gap);
       if (tap.x >= tx && tap.x <= tx + MENU_TAB.w && tap.y >= MENU_TAB.y && tap.y <= MENU_TAB.y + MENU_TAB.h) {
         this.menuTab = i; this.sfx.guard(); return true;
@@ -1003,6 +1075,13 @@ class Game {
         return true;
       }
     }
+    if (this.menuTab === 4 && inList) {
+      const i = rowIndex();
+      if (i >= 0 && i < LOCATIONS.length) {
+        if (this.mapIndex === i) this.travel(LOCATIONS[i]); else { this.mapIndex = i; this.sfx.guard(); }
+        return true;
+      }
+    }
     if (this.menuTab === 2) {
       const colW = (VIEW_W - 52 - 20) / 3;
       for (let b = 0; b < 3; b++) {
@@ -1027,12 +1106,17 @@ class Game {
       inv: p.inv, weapons: p.ownedWeapons, armors: p.ownedArmors,
       weapon: p.weapon.id, armor: p.armor.id, talents: p.talents,
       potions: p.potions, ethers: p.ethers,
+      location: this.location.id, bests: this.bests, cleared: this.cleared,
     });
   }
 
   resetSave() {
     writeSave(freshSave());
     this.bestWave = 1;
+    this.bests = {};
+    this.cleared = {};
+    this.location = LOCATIONS[0];
+    this.mapIndex = 0;
     this.restart();
     this.toast('SAVE RESET');
   }
@@ -1144,6 +1228,7 @@ function buildDebugPanel(g: Game) {
     + '<button data-act="skip">Skip to wave +5</button>'
     + '<button data-act="mats">+50 all materials</button>'
     + '<button data-act="ap">+10 AP (levels)</button>'
+    + '<button data-act="areas">Unlock all areas</button>'
     + '<button data-act="god">God mode: off</button>'
     + '<button data-act="reset">Reset save</button>'
     + '<button data-act="defaults">Reset tuning</button>'
@@ -1192,6 +1277,10 @@ function buildDebugPanel(g: Game) {
           break;
         case 'ap':
           for (let i = 0; i < 10; i++) g.grantExp(expToNext(g.player.level), g.player.x, g.player.y, 20);
+          break;
+        case 'areas':
+          for (const l of LOCATIONS) if (l.unlock) g.cleared[l.unlock.from] = Math.max(g.cleared[l.unlock.from] || 0, l.unlock.wave);
+          g.toast('ALL AREAS OPEN'); g.save();
           break;
         case 'god': g.god = !g.god; btn.textContent = `God mode: ${g.god ? 'on' : 'off'}`; break;
         case 'reset': g.resetSave(); break;

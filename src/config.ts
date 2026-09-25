@@ -336,6 +336,7 @@ const TOUCH_CHIPS = { x: 920, y: 186, dy: 38, r: 16 };
 // Menu geometry lives here because the renderer draws from it and the input
 // layer hit-tests against it — one source of truth or taps land in the wrong row.
 const MENU_TAB = { x: 26, y: 18, w: 116, h: 28, gap: 8 };
+const MENU_TABS = 5;  // gear · synth · talents · status · map
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };

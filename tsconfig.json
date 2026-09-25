@@ -20,6 +20,7 @@
     "src/core.ts",
     "src/items.ts",
     "src/talents.ts",
+    "src/locations.ts",
     "src/music.ts",
     "src/entities.ts",
     "src/render.ts",
