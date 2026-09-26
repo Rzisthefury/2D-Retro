@@ -369,6 +369,29 @@ const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
 
+/* ------------------------------------------------------ hero and blade */
+
+type HeroStyle = 'wayfarer' | 'dreamer' | 'paladin' | 'ronin' | 'knight';
+type BladeStyle = 'longsword' | 'katana' | 'crystal' | 'greatblade' | 'starlight' | 'key';
+
+// How the hero and the sword are drawn. Colours still come from the
+// equipped armour and weapon tier; these pick the silhouette.
+const HERO_STYLES: { id: HeroStyle; name: string }[] = [
+  { id: 'wayfarer', name: 'Wayfarer' },
+  { id: 'dreamer', name: 'Dreamer' },
+  { id: 'paladin', name: 'Paladin' },
+  { id: 'ronin', name: 'Ronin' },
+  { id: 'knight', name: 'Knight (original)' },
+];
+const BLADE_STYLES: { id: BladeStyle; name: string }[] = [
+  { id: 'longsword', name: 'Longsword' },
+  { id: 'katana', name: 'Katana' },
+  { id: 'crystal', name: 'Crystal Edge' },
+  { id: 'greatblade', name: 'Greatblade' },
+  { id: 'starlight', name: 'Starlight Saber' },
+  { id: 'key', name: 'Key (original)' },
+];
+
 /* --------------------------------------------------------------- palette */
 
 const PAL = {

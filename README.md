@@ -245,7 +245,12 @@ seeds, so it is the same every load; a flood fill keeps only spawn points
 and chests you can actually walk to. `MAP_VERSION` is saved with your
 position, so a save from an older map layout wakes you at the Haven.
 
-Every region has:
+The **Haven** is the exception: a 56x36-tile valley in the middle of its
+cell (`HAVEN_RECT`), ringed by mountains, with roads tunnelled out to the
+forest, the coast and the desert. It holds the Haven Forge, Harrow Inn,
+the colosseum and the Lantern Fountain.
+
+Every other region has:
 - a **dungeon** (the Haven has the **colosseum** instead)
 - **two towns** - rest stops, checkpoints and waypoints; the first has the
   region's forge where it has one
@@ -318,6 +323,22 @@ instrument; it fades out after the fight. Every third pass the melody
 rests. Themes crossfade on a fresh bar, and the menu ducks the music.
 Default volume is 20%; every theme measures ~-14 dBFS RMS at full volume.
 `Music.render(id, seconds, combat)` renders a theme offline for testing.
+
+## Hero and blade looks
+
+Options on the title screen picks how the hero and the sword are drawn,
+with a live preview (saved with your game). Colours still come from the
+equipped armour and weapon tier; the style is the silhouette.
+
+- Heroes (`HERO_STYLES`): **Wayfarer** (hooded, long split coat, trailing
+  scarf - the default), **Dreamer** (spiky hair, jacket, big shoes),
+  **Paladin** (winged helm, tabard, long cape), **Ronin** (wide sleeves,
+  hakama, headband tails), and the original **Knight**.
+- Blades (`BLADE_STYLES`): **Longsword** (the default), **Katana**,
+  **Crystal Edge**, **Greatblade**, **Starlight Saber**, and the original
+  key-toothed blade.
+
+Each is one drawing method in render.ts (`heroWayfarer`, `bladeKatana`...).
 
 ## Combat change
 

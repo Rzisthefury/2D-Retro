@@ -66,7 +66,10 @@ interface OverworldMap {
 interface Chest { id: string; region: string; x: number; y: number; }
 
 /** Map layout version: bumped when the world changes shape, so old saved positions are dropped. */
-const MAP_VERSION = 3;
+const MAP_VERSION = 4;
+
+/** The Haven is a small valley inside its grid cell; the rest is mountain. */
+const HAVEN_RECT = { x: 36, y: 22, w: 56, h: 36 };
 
 const REGION_IDS: string[] = REGION_GRID.flat().filter((id): id is string => !!id);
 
@@ -137,10 +140,12 @@ function buildOverworld(): OverworldMap {
     const id = REGION_GRID[ry][rx];
     if (!id) continue;
     const ox = rx * REG_W, oy = ry * REG_H;
+    const R = id === HUB_ID ? HAVEN_RECT : { x: 0, y: 0, w: REG_W, h: REG_H };
     for (let y = 0; y < REG_H; y++) for (let x = 0; x < REG_W; x++) {
       const i = at(ox + x, oy + y);
+      if (x < R.x || y < R.y || x >= R.x + R.w || y >= R.y + R.h) continue;   // mountain
       region[i] = REGION_IDS.indexOf(id);
-      const edge = x === 0 || y === 0 || x === REG_W - 1 || y === REG_H - 1;
+      const edge = x === R.x || y === R.y || x === R.x + R.w - 1 || y === R.y + R.h - 1;
       tiles[i] = edge ? T_WALL : T_GROUND;
     }
   }
@@ -152,6 +157,7 @@ function buildOverworld(): OverworldMap {
       if (k > 1 + (r() - 0.5) * 0.35) continue;
       const tx = cx + x, ty = cy + y;
       if (tx <= ox || ty <= oy || tx >= ox + REG_W - 1 || ty >= oy + REG_H - 1) continue;
+      if (tiles[at(tx, ty)] === T_WALL) continue;
       set(tx, ty, v);
     }
   };
@@ -219,6 +225,15 @@ function buildOverworld(): OverworldMap {
     }
   };
 
+  // A road cut through the mountains around the Haven: opens walls and claims the tiles.
+  const tunnel = (x0: number, y0: number, x1: number, y1: number) => {
+    const hub = REGION_IDS.indexOf(HUB_ID);
+    const open = (i: number) => { tiles[i] = T_PATH; if (region[i] < 0) region[i] = hub; };
+    const sx = Math.sign(x1 - x0) || 1, sy = Math.sign(y1 - y0) || 1;
+    for (let x = x0; x !== x1 + sx; x += sx) for (let d = -1; d <= 1; d++) open(at(x, y0 + d));
+    for (let y = y0; y !== y1 + sy; y += sy) for (let d = -1; d <= 1; d++) open(at(x1 + d, y));
+  };
+
   const buildings: Building[] = [];
   let townName = 0;
   function placeBuilding(kind: BuildingKind, id: string, name: string, tx: number, ty: number, tw: number, th: number, face: 'up' | 'down'): Building {
@@ -239,6 +254,26 @@ function buildOverworld(): OverworldMap {
     const ox = rx * REG_W, oy = ry * REG_H;
     const cx = ox + 64, cy = oy + 40;
     const loc = locById(id);
+    if (id === HUB_ID) {
+      // the Haven: roads tunnel in from each passage; everything sits in the valley
+      const ix = ox + HAVEN_RECT.x, iy = oy + HAVEN_RECT.y;
+      const hx = ix + HAVEN_RECT.w / 2, hy = iy + HAVEN_RECT.h / 2;
+      for (const d of doorsOf[id]) {
+        const inX = d.x === ox + REG_W - 1 ? ox + REG_W - 4 : d.x;
+        const inY = d.y === oy ? oy + 3 : d.y === oy + REG_H - 1 ? oy + REG_H - 4 : d.y;
+        tunnel(d.x, d.y, inX, inY);
+        tunnel(inX, inY, hx, hy);
+      }
+      placeBuilding('colosseum', id, 'Colosseum', ix + 38, iy + 3, 7, 5, 'down');
+      carve(ix + 41, iy + 9, hx, hy);
+      placeBuilding('forge', id, loc.stationName || 'Forge', ix + 6, iy + 26, 7, 4, 'up');
+      carve(ix + 9, iy + 23, hx, hy);
+      placeBuilding('town', id, 'Harrow Inn', ix + 40, iy + 26, 7, 4, 'up');
+      carve(ix + 43, iy + 23, hx, hy);
+      placeBuilding('landmark', id, LANDMARKS.Haven.name, ix + 8, iy + 4, 6, 5, 'down');
+      carve(ix + 11, iy + 10, hx, hy);
+      continue;
+    }
     for (const d of doorsOf[id]) {
       const inX = d.x === ox ? ox + 3 : d.x === ox + REG_W - 1 ? ox + REG_W - 4 : d.x;
       const inY = d.y === oy ? oy + 3 : d.y === oy + REG_H - 1 ? oy + REG_H - 4 : d.y;

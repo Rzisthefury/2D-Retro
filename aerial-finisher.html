@@ -453,6 +453,23 @@ const PROMPT_BTN = { x: 330, y: 470, w: 300, h: 40 }; // "ENTER: go in" for touc
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
+// How the hero and the sword are drawn. Colours still come from the
+// equipped armour and weapon tier; these pick the silhouette.
+const HERO_STYLES = [
+    { id: 'wayfarer', name: 'Wayfarer' },
+    { id: 'dreamer', name: 'Dreamer' },
+    { id: 'paladin', name: 'Paladin' },
+    { id: 'ronin', name: 'Ronin' },
+    { id: 'knight', name: 'Knight (original)' },
+];
+const BLADE_STYLES = [
+    { id: 'longsword', name: 'Longsword' },
+    { id: 'katana', name: 'Katana' },
+    { id: 'crystal', name: 'Crystal Edge' },
+    { id: 'greatblade', name: 'Greatblade' },
+    { id: 'starlight', name: 'Starlight Saber' },
+    { id: 'key', name: 'Key (original)' },
+];
 /* --------------------------------------------------------------- palette */
 const PAL = {
     floor: '#171a26',
@@ -1655,7 +1672,9 @@ const REGION_GRID = [
 ];
 const T_GROUND = 0, T_PATH = 1, T_SOLID = 2, T_WALL = 3, T_LIQUID = 4, T_BUILD = 5;
 /** Map layout version: bumped when the world changes shape, so old saved positions are dropped. */
-const MAP_VERSION = 3;
+const MAP_VERSION = 4;
+/** The Haven is a small valley inside its grid cell; the rest is mountain. */
+const HAVEN_RECT = { x: 36, y: 22, w: 56, h: 36 };
 const REGION_IDS = REGION_GRID.flat().filter((id) => !!id);
 function regionCell(id) {
     for (let ry = 0; ry < GRID_H; ry++)
@@ -1724,11 +1743,14 @@ function buildOverworld() {
             if (!id)
                 continue;
             const ox = rx * REG_W, oy = ry * REG_H;
+            const R = id === HUB_ID ? HAVEN_RECT : { x: 0, y: 0, w: REG_W, h: REG_H };
             for (let y = 0; y < REG_H; y++)
                 for (let x = 0; x < REG_W; x++) {
                     const i = at(ox + x, oy + y);
+                    if (x < R.x || y < R.y || x >= R.x + R.w || y >= R.y + R.h)
+                        continue; // mountain
                     region[i] = REGION_IDS.indexOf(id);
-                    const edge = x === 0 || y === 0 || x === REG_W - 1 || y === REG_H - 1;
+                    const edge = x === R.x || y === R.y || x === R.x + R.w - 1 || y === R.y + R.h - 1;
                     tiles[i] = edge ? T_WALL : T_GROUND;
                 }
         }
@@ -1741,6 +1763,8 @@ function buildOverworld() {
                     continue;
                 const tx = cx + x, ty = cy + y;
                 if (tx <= ox || ty <= oy || tx >= ox + REG_W - 1 || ty >= oy + REG_H - 1)
+                    continue;
+                if (tiles[at(tx, ty)] === T_WALL)
                     continue;
                 set(tx, ty, v);
             }
@@ -1822,6 +1846,19 @@ function buildOverworld() {
                     tiles[i] = T_PATH;
             }
     };
+    // A road cut through the mountains around the Haven: opens walls and claims the tiles.
+    const tunnel = (x0, y0, x1, y1) => {
+        const hub = REGION_IDS.indexOf(HUB_ID);
+        const open = (i) => { tiles[i] = T_PATH; if (region[i] < 0)
+            region[i] = hub; };
+        const sx = Math.sign(x1 - x0) || 1, sy = Math.sign(y1 - y0) || 1;
+        for (let x = x0; x !== x1 + sx; x += sx)
+            for (let d = -1; d <= 1; d++)
+                open(at(x, y0 + d));
+        for (let y = y0; y !== y1 + sy; y += sy)
+            for (let d = -1; d <= 1; d++)
+                open(at(x1 + d, y));
+    };
     const buildings = [];
     let townName = 0;
     function placeBuilding(kind, id, name, tx, ty, tw, th, face) {
@@ -1845,6 +1882,26 @@ function buildOverworld() {
         const ox = rx * REG_W, oy = ry * REG_H;
         const cx = ox + 64, cy = oy + 40;
         const loc = locById(id);
+        if (id === HUB_ID) {
+            // the Haven: roads tunnel in from each passage; everything sits in the valley
+            const ix = ox + HAVEN_RECT.x, iy = oy + HAVEN_RECT.y;
+            const hx = ix + HAVEN_RECT.w / 2, hy = iy + HAVEN_RECT.h / 2;
+            for (const d of doorsOf[id]) {
+                const inX = d.x === ox + REG_W - 1 ? ox + REG_W - 4 : d.x;
+                const inY = d.y === oy ? oy + 3 : d.y === oy + REG_H - 1 ? oy + REG_H - 4 : d.y;
+                tunnel(d.x, d.y, inX, inY);
+                tunnel(inX, inY, hx, hy);
+            }
+            placeBuilding('colosseum', id, 'Colosseum', ix + 38, iy + 3, 7, 5, 'down');
+            carve(ix + 41, iy + 9, hx, hy);
+            placeBuilding('forge', id, loc.stationName || 'Forge', ix + 6, iy + 26, 7, 4, 'up');
+            carve(ix + 9, iy + 23, hx, hy);
+            placeBuilding('town', id, 'Harrow Inn', ix + 40, iy + 26, 7, 4, 'up');
+            carve(ix + 43, iy + 23, hx, hy);
+            placeBuilding('landmark', id, LANDMARKS.Haven.name, ix + 8, iy + 4, 6, 5, 'down');
+            carve(ix + 11, iy + 10, hx, hy);
+            continue;
+        }
         for (const d of doorsOf[id]) {
             const inX = d.x === ox ? ox + 3 : d.x === ox + REG_W - 1 ? ox + REG_W - 4 : d.x;
             const inY = d.y === oy ? oy + 3 : d.y === oy + REG_H - 1 ? oy + REG_H - 4 : d.y;
@@ -4362,7 +4419,9 @@ function sy(y, z) { return y - z * Z_SCALE; }
 class Renderer {
     constructor(canvas) {
         this.dpr = 1;
+        this.bladeStyle = 'longsword';
         this.miniCache = {};
+        this.previewHero = null;
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
         this.resize();
@@ -4383,6 +4442,7 @@ class Renderer {
     /* ------------------------------------------------------------- frame */
     draw(g) {
         const c = this.ctx;
+        this.bladeStyle = g.bladeStyle;
         c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         c.clearRect(0, 0, VIEW_W, VIEW_H);
         c.save();
@@ -5164,6 +5224,54 @@ class Renderer {
         if (squash !== 1)
             c.scale(squash, 1 / squash);
         const outline = (w = 2) => { c.strokeStyle = ink; c.lineWidth = w; c.stroke(); };
+        const k = {
+            h, plate, trim, cape: hurt ? '#ffffff' : look.cape, look, hurt, away, fx, stride,
+            drag: clamp(-p.vx / 260, -0.5, 0.5), t: g.time, ink, outline,
+        };
+        switch (g.heroStyle) {
+            case 'wayfarer':
+                this.heroWayfarer(c, k);
+                break;
+            case 'dreamer':
+                this.heroDreamer(c, k);
+                break;
+            case 'paladin':
+                this.heroPaladin(c, k);
+                break;
+            case 'ronin':
+                this.heroRonin(c, k);
+                break;
+            default: this.heroKnight(c, k);
+        }
+        // ---- weapon arm and blade
+        if (p.state === 'attack' && p.attackDef)
+            this.drawBlade(c, p, h);
+        else
+            this.drawIdleBlade(c, p, h, fx);
+        c.restore();
+        if (p.charging) {
+            c.save();
+            c.globalAlpha = 0.5 + Math.sin(g.time * 12) * 0.2;
+            c.strokeStyle = PAL.mpCharge;
+            c.lineWidth = 2;
+            c.beginPath();
+            c.arc(px, py - 6, 28 + Math.sin(g.time * 6) * 3, 0, Math.PI * 2);
+            c.stroke();
+            c.restore();
+        }
+        // dash charge pips float above the helm
+        if (p.hasT('dash') && p.dashCharges < p.maxDash()) {
+            for (let i = 0; i < p.maxDash(); i++) {
+                c.fillStyle = i < p.dashCharges ? '#8fb4ff' : '#3a4260';
+                c.fillRect(px - p.maxDash() * 4 + i * 8, py - p.height - 30, 5, 3);
+            }
+        }
+    }
+    /** The original knight: dark plate, gold trim, half-cape, a lit visor slit. */
+    heroKnight(c, k) {
+        const { h, plate, trim, look, hurt, away, fx, stride, outline } = k;
+        void fx;
+        const p = { vx: -k.drag * 260 };
         // ---- cape, behind everything, dragged by movement
         const capeLen = look.capeLen * (away ? 1.15 : 1);
         const drag = clamp(-p.vx / 260, -0.5, 0.5);
@@ -5282,31 +5390,746 @@ class Renderer {
             c.fillStyle = trim;
             c.fillRect(-7, hy - 3, 14, 1.6);
         }
-        // ---- weapon arm and blade
-        if (p.state === 'attack' && p.attackDef)
-            this.drawBlade(c, p, h);
-        else
-            this.drawIdleBlade(c, p, h, fx);
-        c.restore();
-        if (p.charging) {
-            c.save();
-            c.globalAlpha = 0.5 + Math.sin(g.time * 12) * 0.2;
-            c.strokeStyle = PAL.mpCharge;
-            c.lineWidth = 2;
+    }
+    /** A hooded traveller in a long split coat, a scarf trailing behind. */
+    heroWayfarer(c, k) {
+        const { h, plate, trim, cape, look, away, fx, stride, drag, t, outline } = k;
+        const flutter = Math.sin(t * 9) * 3;
+        // scarf tail, behind everything
+        const tail = 14 + look.capeLen * 0.6;
+        c.beginPath();
+        c.moveTo(-3, -h * 0.93);
+        c.quadraticCurveTo(-10 + drag * 24, -h * 0.75 + flutter, -8 - fx * 6 + drag * 34, -h * 0.93 + tail);
+        c.lineTo(-2 - fx * 6 + drag * 34, -h * 0.93 + tail - 3);
+        c.quadraticCurveTo(-3 + drag * 18, -h * 0.72 - flutter, 4, -h * 0.9);
+        c.closePath();
+        c.fillStyle = cape;
+        c.fill();
+        outline(1.6);
+        // boots
+        for (const side of [-1, 1]) {
             c.beginPath();
-            c.arc(px, py - 6, 28 + Math.sin(g.time * 6) * 3, 0, Math.PI * 2);
-            c.stroke();
+            this.roundRect(c, side * 4.6 - 3.8, -h * 0.22 + side * stride * 0.4, 7.6, h * 0.22 - side * stride * 0.4, 2.5);
+            c.fillStyle = '#231e2c';
+            c.fill();
+            outline(1.4);
+        }
+        // the long coat, split up the front
+        c.beginPath();
+        c.moveTo(-9, -h * 0.9);
+        c.lineTo(9, -h * 0.9);
+        c.lineTo(13 + stride * 0.3, -h * 0.1);
+        c.lineTo(3, -h * 0.15);
+        c.lineTo(0, -h * 0.34);
+        c.lineTo(-3, -h * 0.15);
+        c.lineTo(-13 - stride * 0.3, -h * 0.1);
+        c.closePath();
+        c.fillStyle = plate;
+        c.fill();
+        outline(2);
+        c.save();
+        c.globalAlpha = 0.3;
+        c.fillStyle = '#000';
+        c.fillRect(6, -h * 0.88, 4, h * 0.7);
+        c.restore();
+        c.strokeStyle = trim;
+        c.lineWidth = 1.5;
+        c.beginPath();
+        c.moveTo(-13 - stride * 0.3, -h * 0.1);
+        c.lineTo(-3, -h * 0.15);
+        c.moveTo(13 + stride * 0.3, -h * 0.1);
+        c.lineTo(3, -h * 0.15);
+        if (!away) {
+            c.moveTo(0, -h * 0.84);
+            c.lineTo(0, -h * 0.34);
+        }
+        c.stroke();
+        // belt and buckle
+        c.fillStyle = '#2a2230';
+        c.fillRect(-10, -h * 0.54, 20, 3);
+        c.fillStyle = trim;
+        c.fillRect(-2, -h * 0.55, 4, 4);
+        // a single pauldron on the sword arm, growing with the armour tier
+        const sw = 4 + look.shoulder * 0.5;
+        const side = fx >= 0 ? 1 : -1;
+        c.beginPath();
+        c.ellipse(side * 9, -h * 0.86, sw, 4.5, 0, 0, Math.PI * 2);
+        c.fillStyle = trim;
+        c.fill();
+        outline(1.4);
+        for (let i = 0; i < look.spikes; i++) {
+            c.beginPath();
+            c.moveTo(side * (7 + i * 3), -h * 0.9);
+            c.lineTo(side * (8 + i * 3), -h * 0.9 - 6);
+            c.lineTo(side * (10 + i * 3), -h * 0.9);
+            c.fillStyle = trim;
+            c.fill();
+        }
+        // scarf wrap at the neck
+        c.beginPath();
+        this.roundRect(c, -8, -h * 0.97, 16, 6, 3);
+        c.fillStyle = cape;
+        c.fill();
+        outline(1.4);
+        // the hood
+        const hy = -h - 7;
+        c.beginPath();
+        c.moveTo(-9, hy + 9);
+        c.quadraticCurveTo(-12, hy - 9, 0, hy - 13 - look.crest * 0.4);
+        c.quadraticCurveTo(12, hy - 9, 9, hy + 9);
+        c.closePath();
+        c.fillStyle = plate;
+        c.fill();
+        outline(1.8);
+        c.save();
+        c.globalAlpha = 0.25;
+        c.fillStyle = '#000';
+        c.fill();
+        c.restore();
+        if (!away) {
+            c.beginPath();
+            c.ellipse(fx * 1.6, hy + 2, 6, 6.5, 0, 0, Math.PI * 2);
+            c.fillStyle = '#07080e';
+            c.fill();
+            c.save();
+            c.shadowColor = k.hurt ? '#fff' : '#8fe4ff';
+            c.shadowBlur = 6;
+            c.fillStyle = k.hurt ? '#fff' : '#bff0ff';
+            c.fillRect(fx * 2.2 - 3.6, hy + 1, 2.4, 2);
+            c.fillRect(fx * 2.2 + 1.2, hy + 1, 2.4, 2);
             c.restore();
         }
-        // dash charge pips float above the helm
-        if (p.hasT('dash') && p.dashCharges < p.maxDash()) {
-            for (let i = 0; i < p.maxDash(); i++) {
-                c.fillStyle = i < p.dashCharges ? '#8fb4ff' : '#3a4260';
-                c.fillRect(px - p.maxDash() * 4 + i * 8, py - p.height - 30, 5, 3);
-            }
+        else {
+            c.strokeStyle = trim;
+            c.lineWidth = 1.2;
+            c.beginPath();
+            c.moveTo(0, hy - 11);
+            c.lineTo(0, hy + 8);
+            c.stroke();
         }
     }
+    /** A spiky-haired young hero: short jacket, baggy shorts, big shoes. */
+    heroDreamer(c, k) {
+        const { h, plate, trim, cape, look, away, fx, stride, drag, outline, hurt } = k;
+        const skin = hurt ? '#ffffff' : '#f2cfa8';
+        const hair = hurt ? '#ffffff' : '#6a3c20';
+        // big shoes
+        for (const side of [-1, 1]) {
+            c.beginPath();
+            c.ellipse(side * 5.5 + fx * 2, -2.5 + side * stride * 0.2, 7, 3.8, 0, 0, Math.PI * 2);
+            c.fillStyle = cape;
+            c.fill();
+            outline(1.5);
+        }
+        // legs, then baggy shorts
+        c.fillStyle = skin;
+        for (const side of [-1, 1])
+            c.fillRect(side * 5 - 2, -h * 0.26, 4, h * 0.22 + side * stride * 0.3);
+        c.beginPath();
+        c.moveTo(-9, -h * 0.52);
+        c.lineTo(9, -h * 0.52);
+        c.lineTo(12, -h * 0.24);
+        c.lineTo(1, -h * 0.26);
+        c.lineTo(0, -h * 0.34);
+        c.lineTo(-1, -h * 0.26);
+        c.lineTo(-12, -h * 0.24);
+        c.closePath();
+        c.fillStyle = '#2b2f48';
+        c.fill();
+        outline(1.6);
+        // jacket with a hood-collar
+        c.beginPath();
+        c.moveTo(-9, -h * 0.9);
+        c.lineTo(9, -h * 0.9);
+        c.lineTo(10.5, -h * 0.5);
+        c.lineTo(-10.5, -h * 0.5);
+        c.closePath();
+        c.fillStyle = plate;
+        c.fill();
+        outline(1.8);
+        if (!away) {
+            c.fillStyle = '#16182a';
+            c.fillRect(-3.5, -h * 0.88, 7, h * 0.36);
+            // a small crown pendant
+            c.fillStyle = trim;
+            c.beginPath();
+            c.moveTo(-3, -h * 0.66);
+            c.lineTo(-3, -h * 0.72);
+            c.lineTo(-1.5, -h * 0.69);
+            c.lineTo(0, -h * 0.74);
+            c.lineTo(1.5, -h * 0.69);
+            c.lineTo(3, -h * 0.72);
+            c.lineTo(3, -h * 0.66);
+            c.closePath();
+            c.fill();
+        }
+        c.strokeStyle = trim;
+        c.lineWidth = 1.4;
+        c.beginPath();
+        c.moveTo(-10.5, -h * 0.5);
+        c.lineTo(10.5, -h * 0.5);
+        c.stroke();
+        // shoulder plates arrive with better armour
+        if (look.shoulder > 12) {
+            for (const side of [-1, 1]) {
+                c.beginPath();
+                c.ellipse(side * 10, -h * 0.86, look.shoulder * 0.35, 4, 0, 0, Math.PI * 2);
+                c.fillStyle = trim;
+                c.fill();
+                outline(1.2);
+            }
+        }
+        // collar
+        c.beginPath();
+        this.roundRect(c, -9, -h * 0.98, 18, 6, 3);
+        c.fillStyle = trim;
+        c.fill();
+        outline(1.2);
+        // head
+        const hy = -h - 8;
+        c.beginPath();
+        c.arc(0, hy + 2, 9, 0, Math.PI * 2);
+        c.fillStyle = skin;
+        c.fill();
+        outline(1.6);
+        if (!away) {
+            c.fillStyle = '#1a2a4a';
+            c.beginPath();
+            c.ellipse(fx * 2 - 3.4, hy + 2, 1.7, 2.4, 0, 0, Math.PI * 2);
+            c.ellipse(fx * 2 + 3.4, hy + 2, 1.7, 2.4, 0, 0, Math.PI * 2);
+            c.fill();
+            c.fillStyle = '#ffffff';
+            c.fillRect(fx * 2 - 3.8, hy + 0.6, 1, 1);
+            c.fillRect(fx * 2 + 3, hy + 0.6, 1, 1);
+        }
+        // spiky hair, swept by movement
+        const sweep = drag * 6;
+        const spikes = [[-11, hy + 4], [-15 + sweep, hy - 4], [-9, hy - 6], [-10 + sweep, hy - 15], [-3, hy - 9],
+            [0 + sweep, hy - 18 - look.crest * 0.3], [3, hy - 9], [9 + sweep, hy - 15], [8, hy - 6], [14 + sweep, hy - 3], [10, hy + 4]];
+        c.beginPath();
+        c.moveTo(-10, hy + (away ? 8 : 0));
+        for (const [x, y] of spikes)
+            c.lineTo(x, y);
+        c.lineTo(10, hy + (away ? 8 : 0));
+        if (!away) {
+            c.lineTo(6, hy - 3);
+            c.lineTo(2, hy);
+            c.lineTo(-2, hy - 3);
+            c.lineTo(-6, hy);
+        }
+        c.closePath();
+        c.fillStyle = hair;
+        c.fill();
+        outline(1.6);
+    }
+    /** A lighter knight: tabard, long cape, a winged helm. */
+    heroPaladin(c, k) {
+        const { h, plate, trim, cape, look, away, fx, stride, drag, t, outline, hurt } = k;
+        // long cape
+        const len = Math.min(look.capeLen + 12, h * 0.95);
+        const wave = Math.sin(t * 5) * 2;
+        c.beginPath();
+        c.moveTo(-10, -h * 0.88);
+        c.quadraticCurveTo(-16 + drag * 18, -h * 0.3, -11 + drag * 30 + wave, -h * 0.9 + len);
+        c.lineTo(11 + drag * 30 - wave, -h * 0.9 + len);
+        c.quadraticCurveTo(16 + drag * 18, -h * 0.3, 10, -h * 0.88);
+        c.closePath();
+        c.fillStyle = cape;
+        c.fill();
+        outline(1.8);
+        // legs
+        for (const side of [-1, 1]) {
+            c.beginPath();
+            this.roundRect(c, side * 4.5 - 3.6, -h * 0.46, 7.2, h * 0.46 + side * stride * 0.5, 2.5);
+            c.fillStyle = plate;
+            c.fill();
+            outline(1.5);
+            c.fillStyle = trim;
+            c.beginPath();
+            c.arc(side * 4.5, -h * 0.24, 2.2, 0, Math.PI * 2);
+            c.fill();
+        }
+        // slim cuirass
+        c.beginPath();
+        c.moveTo(-10, -h * 0.9);
+        c.lineTo(10, -h * 0.9);
+        c.lineTo(7, -h * 0.62);
+        c.lineTo(8.5, -h * 0.44);
+        c.lineTo(-8.5, -h * 0.44);
+        c.lineTo(-7, -h * 0.62);
+        c.closePath();
+        c.fillStyle = plate;
+        c.fill();
+        outline(1.8);
+        // tabard with an emblem
+        c.beginPath();
+        c.moveTo(-5, -h * 0.66);
+        c.lineTo(5, -h * 0.66);
+        c.lineTo(5.5, -h * 0.14);
+        c.lineTo(0, -h * 0.08);
+        c.lineTo(-5.5, -h * 0.14);
+        c.closePath();
+        c.fillStyle = cape;
+        c.fill();
+        outline(1.3);
+        if (!away) {
+            c.strokeStyle = trim;
+            c.lineWidth = 1.6;
+            c.beginPath();
+            c.moveTo(0, -h * 0.58);
+            c.lineTo(0, -h * 0.3);
+            c.moveTo(-3, -h * 0.48);
+            c.lineTo(3, -h * 0.48);
+            c.stroke();
+        }
+        c.fillStyle = trim;
+        c.fillRect(-9, -h * 0.47, 18, 2.4);
+        // rounded pauldrons with fins
+        for (const side of [-1, 1]) {
+            const w = 5 + look.shoulder * 0.45;
+            c.beginPath();
+            c.ellipse(side * 10, -h * 0.84, w, 5.5, side * 0.2, 0, Math.PI * 2);
+            c.fillStyle = plate;
+            c.fill();
+            outline(1.5);
+            c.strokeStyle = trim;
+            c.lineWidth = 1.2;
+            c.beginPath();
+            c.ellipse(side * 10, -h * 0.84, w - 2, 3.5, side * 0.2, Math.PI, Math.PI * 2);
+            c.stroke();
+            for (let i = 0; i < Math.min(3, look.spikes); i++) {
+                c.fillStyle = trim;
+                c.beginPath();
+                c.moveTo(side * (8 + i * 3), -h * 0.9);
+                c.lineTo(side * (10 + i * 3), -h * 0.9 - 5 - i);
+                c.lineTo(side * (11 + i * 3), -h * 0.88);
+                c.fill();
+            }
+        }
+        // helm with wings
+        const hy = -h - 8;
+        const wing = 7 + look.crest * 0.5;
+        for (const side of [-1, 1]) {
+            c.beginPath();
+            c.moveTo(side * 7, hy - 1);
+            c.quadraticCurveTo(side * (9 + wing), hy - 4 - wing * 0.4, side * (8 + wing), hy - 10 - wing * 0.6);
+            c.quadraticCurveTo(side * (9 + wing * 0.4), hy - 6, side * 7, hy - 5);
+            c.closePath();
+            c.fillStyle = trim;
+            c.fill();
+            outline(1.2);
+        }
+        c.beginPath();
+        c.arc(0, hy + 1, 8.5, 0, Math.PI * 2);
+        c.fillStyle = plate;
+        c.fill();
+        outline(1.8);
+        if (!away) {
+            const glow = hurt ? '#ffffff' : '#bff0ff';
+            c.save();
+            c.shadowColor = glow;
+            c.shadowBlur = 6;
+            c.fillStyle = glow;
+            c.fillRect(-5 + fx * 1.4, hy, 10, 2.2);
+            c.fillRect(-1 + fx * 1.4, hy, 2, 7);
+            c.restore();
+        }
+    }
+    /** A wandering swordsman: wide sleeves, flared hakama, a headband that trails. */
+    heroRonin(c, k) {
+        const { h, plate, trim, cape, look, away, fx, stride, drag, t, outline, hurt } = k;
+        const skin = hurt ? '#ffffff' : '#eac4a0';
+        const flutter = Math.sin(t * 10) * 2.5;
+        // sash tail behind
+        c.beginPath();
+        c.moveTo(-6, -h * 0.5);
+        c.quadraticCurveTo(-12 + drag * 20, -h * 0.35 + flutter, -14 + drag * 30, -h * 0.1);
+        c.lineTo(-10 + drag * 30, -h * 0.1);
+        c.quadraticCurveTo(-8 + drag * 16, -h * 0.3, -2, -h * 0.48);
+        c.closePath();
+        c.fillStyle = cape;
+        c.fill();
+        outline(1.3);
+        // hakama
+        c.beginPath();
+        c.moveTo(-8, -h * 0.5);
+        c.lineTo(8, -h * 0.5);
+        c.lineTo(13 + stride * 0.4, -1);
+        c.lineTo(1, -1);
+        c.lineTo(0, -h * 0.2);
+        c.lineTo(-1, -1);
+        c.lineTo(-13 - stride * 0.4, -1);
+        c.closePath();
+        c.fillStyle = '#23273a';
+        c.fill();
+        outline(1.7);
+        c.strokeStyle = 'rgba(255,255,255,0.12)';
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(-6, -h * 0.45);
+        c.lineTo(-9, -3);
+        c.moveTo(6, -h * 0.45);
+        c.lineTo(9, -3);
+        c.stroke();
+        // wide sleeves
+        for (const side of [-1, 1]) {
+            c.beginPath();
+            c.moveTo(side * 8, -h * 0.9);
+            c.lineTo(side * (16 + look.shoulder * 0.2), -h * 0.72);
+            c.lineTo(side * (15 + look.shoulder * 0.2), -h * 0.5);
+            c.lineTo(side * 9, -h * 0.56);
+            c.closePath();
+            c.fillStyle = plate;
+            c.fill();
+            outline(1.5);
+        }
+        // haori body with a crossed collar
+        c.beginPath();
+        c.moveTo(-9, -h * 0.92);
+        c.lineTo(9, -h * 0.92);
+        c.lineTo(9, -h * 0.48);
+        c.lineTo(-9, -h * 0.48);
+        c.closePath();
+        c.fillStyle = plate;
+        c.fill();
+        outline(1.8);
+        if (!away) {
+            c.strokeStyle = trim;
+            c.lineWidth = 2;
+            c.beginPath();
+            c.moveTo(-6, -h * 0.92);
+            c.lineTo(3, -h * 0.6);
+            c.moveTo(6, -h * 0.92);
+            c.lineTo(-1, -h * 0.72);
+            c.stroke();
+        }
+        // armour plates on the shoulders at higher tiers
+        if (look.spikes > 0) {
+            for (const side of [-1, 1]) {
+                c.fillStyle = trim;
+                c.fillRect(side > 0 ? 8 : -16, -h * 0.9, 8, 4);
+                c.fillStyle = plate;
+                c.fillRect(side > 0 ? 8 : -16, -h * 0.84, 8, 3);
+            }
+        }
+        // obi
+        c.fillStyle = cape;
+        c.fillRect(-9.5, -h * 0.54, 19, 5);
+        c.fillStyle = trim;
+        c.fillRect(-9.5, -h * 0.53, 19, 1);
+        // head: face, hair, topknot, headband with trailing tails
+        const hy = -h - 7;
+        c.beginPath();
+        c.arc(0, hy + 2, 7.5, 0, Math.PI * 2);
+        c.fillStyle = away ? '#15131c' : skin;
+        c.fill();
+        outline(1.6);
+        c.beginPath();
+        c.arc(0, hy - 1, 7.8, Math.PI, Math.PI * 2);
+        c.fillStyle = '#15131c';
+        c.fill();
+        c.beginPath();
+        c.arc(-fx * 2, hy - 10, 3.5, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = trim;
+        c.fillRect(-fx * 2 - 1.5, hy - 8, 3, 2);
+        c.fillStyle = hurt ? '#fff' : cape;
+        c.fillRect(-8, hy - 3, 16, 2.6);
+        c.strokeStyle = hurt ? '#fff' : cape;
+        c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(-fx * 7, hy - 2);
+        c.quadraticCurveTo(-fx * 13 + drag * 12, hy + flutter, -fx * 18 + drag * 22, hy + 4 + flutter);
+        c.moveTo(-fx * 7, hy - 1);
+        c.quadraticCurveTo(-fx * 12 + drag * 12, hy + 4 - flutter, -fx * 15 + drag * 20, hy + 9 - flutter);
+        c.stroke();
+        if (!away) {
+            c.strokeStyle = '#15131c';
+            c.lineWidth = 1.4;
+            c.beginPath();
+            c.moveTo(fx * 2 - 4.5, hy + 2);
+            c.lineTo(fx * 2 - 1.5, hy + 2.6);
+            c.moveTo(fx * 2 + 1.5, hy + 2.6);
+            c.lineTo(fx * 2 + 4.5, hy + 2);
+            c.stroke();
+        }
+        void look.crest;
+    }
+    /** The sword, laid along +x from the hilt; the shape comes from the chosen blade style. */
     bladeGeom(c, p, len) {
+        switch (this.bladeStyle) {
+            case 'longsword': return this.bladeLongsword(c, p, len);
+            case 'katana': return this.bladeKatana(c, p, len);
+            case 'crystal': return this.bladeCrystal(c, p, len);
+            case 'greatblade': return this.bladeGreat(c, p, len);
+            case 'starlight': return this.bladeStarlight(c, p, len);
+            default: return this.bladeKey(c, p, len);
+        }
+    }
+    bladeGlow(c, p, extra = 0) {
+        const b = p.weapon.blade;
+        if (b.glow + extra > 0) {
+            c.shadowColor = b.edge;
+            c.shadowBlur = 10 * (b.glow + extra);
+        }
+    }
+    grip(c, from, to, w, wrap, pommel) {
+        c.fillStyle = '#2a2230';
+        c.fillRect(from, -w / 2, to - from, w);
+        c.fillStyle = wrap;
+        for (let x = from + 1.5; x < to - 1; x += 3.5)
+            c.fillRect(x, -w / 2, 1.5, w);
+        c.fillStyle = pommel;
+        c.beginPath();
+        c.arc(from - 2, 0, w * 0.6, 0, Math.PI * 2);
+        c.fill();
+    }
+    bladeLongsword(c, p, len) {
+        const b = p.weapon.blade;
+        const w = b.width + 1;
+        const trim = p.armor.look.trim;
+        this.grip(c, -8, 8, 4.5, '#5a4232', trim);
+        // crossguard with flared tips
+        c.fillStyle = trim;
+        c.beginPath();
+        c.moveTo(8, -w - 4);
+        c.lineTo(11.5, -w - 2);
+        c.lineTo(11.5, w + 2);
+        c.lineTo(8, w + 4);
+        c.lineTo(9.5, 0);
+        c.closePath();
+        c.fill();
+        c.strokeStyle = '#080a11';
+        c.lineWidth = 1;
+        c.stroke();
+        // blade
+        c.save();
+        this.bladeGlow(c, p);
+        c.beginPath();
+        c.moveTo(11.5, -w / 2);
+        c.lineTo(len - w * 1.6, -w * 0.42);
+        c.lineTo(len, 0);
+        c.lineTo(len - w * 1.6, w * 0.42);
+        c.lineTo(11.5, w / 2);
+        c.closePath();
+        c.fillStyle = b.color;
+        c.fill();
+        c.restore();
+        c.beginPath();
+        c.moveTo(11.5, -w / 2);
+        c.lineTo(len - w * 1.6, -w * 0.42);
+        c.lineTo(len, 0);
+        c.lineTo(11.5, 0);
+        c.closePath();
+        c.fillStyle = this.alpha(b.edge, 0.55);
+        c.fill();
+        c.strokeStyle = this.mix(b.color, '#000000', 0.45);
+        c.lineWidth = Math.max(1, w * 0.18);
+        c.beginPath();
+        c.moveTo(14, 0);
+        c.lineTo(len * 0.62, 0);
+        c.stroke();
+        c.strokeStyle = '#080a11';
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(11.5, -w / 2);
+        c.lineTo(len - w * 1.6, -w * 0.42);
+        c.lineTo(len, 0);
+        c.lineTo(len - w * 1.6, w * 0.42);
+        c.lineTo(11.5, w / 2);
+        c.stroke();
+    }
+    bladeKatana(c, p, len) {
+        const b = p.weapon.blade;
+        const w = Math.max(4, b.width * 0.75);
+        const bend = len * 0.07;
+        this.grip(c, -14, 8, 4.2, p.armor.look.trim, '#2a2230');
+        // tsuba and collar
+        c.fillStyle = '#2a2a34';
+        c.beginPath();
+        c.ellipse(10, 0, 2.6, w + 3, 0, 0, Math.PI * 2);
+        c.fill();
+        c.strokeStyle = p.armor.look.trim;
+        c.lineWidth = 1;
+        c.stroke();
+        c.fillStyle = p.armor.look.trim;
+        c.fillRect(12, -w / 2, 3, w);
+        // curved blade: spine on top, edge below, rising to the tip
+        c.save();
+        this.bladeGlow(c, p);
+        c.beginPath();
+        c.moveTo(15, -w / 2);
+        c.quadraticCurveTo(len * 0.6, -w / 2 - bend * 0.4, len, -bend * 1.5);
+        c.quadraticCurveTo(len * 0.62, w / 2 - bend * 0.7, 15, w / 2);
+        c.closePath();
+        c.fillStyle = b.color;
+        c.fill();
+        c.restore();
+        // the hamon: a bright line near the edge
+        c.strokeStyle = b.edge;
+        c.lineWidth = 1.6;
+        c.beginPath();
+        c.moveTo(16, w / 2 - 1.4);
+        c.quadraticCurveTo(len * 0.62, w / 2 - bend * 0.7 - 1.4, len - 2, -bend * 1.5);
+        c.stroke();
+        c.strokeStyle = '#080a11';
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(15, -w / 2);
+        c.quadraticCurveTo(len * 0.6, -w / 2 - bend * 0.4, len, -bend * 1.5);
+        c.quadraticCurveTo(len * 0.62, w / 2 - bend * 0.7, 15, w / 2);
+        c.stroke();
+    }
+    bladeCrystal(c, p, len) {
+        const b = p.weapon.blade;
+        const w = b.width + 2;
+        const trim = p.armor.look.trim;
+        this.grip(c, -7, 7, 4, trim, trim);
+        // winged guard
+        c.fillStyle = trim;
+        c.beginPath();
+        c.moveTo(6, -w - 5);
+        c.lineTo(12, -2.5);
+        c.lineTo(12, 2.5);
+        c.lineTo(6, w + 5);
+        c.lineTo(9, 0);
+        c.closePath();
+        c.fill();
+        // faceted blade: a lit upper face and a darker lower face around a ridge
+        c.save();
+        this.bladeGlow(c, p, 0.5);
+        c.beginPath();
+        c.moveTo(12, -w * 0.5);
+        c.lineTo(len * 0.58, -w * 0.72);
+        c.lineTo(len, 0);
+        c.lineTo(12, 0);
+        c.closePath();
+        c.fillStyle = this.alpha(b.edge, 0.85);
+        c.fill();
+        c.restore();
+        c.beginPath();
+        c.moveTo(12, w * 0.5);
+        c.lineTo(len * 0.58, w * 0.72);
+        c.lineTo(len, 0);
+        c.lineTo(12, 0);
+        c.closePath();
+        c.fillStyle = this.alpha(b.color, 0.9);
+        c.fill();
+        c.strokeStyle = this.alpha(b.edge, 0.9);
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(12, -w * 0.5);
+        c.lineTo(len * 0.58, -w * 0.72);
+        c.lineTo(len, 0);
+        c.lineTo(len * 0.58, w * 0.72);
+        c.lineTo(12, w * 0.5);
+        c.closePath();
+        c.stroke();
+        c.beginPath();
+        c.moveTo(12, 0);
+        c.lineTo(len, 0);
+        c.stroke();
+        // a glint that runs along the blade
+        const glint = ((performance.now() / 900) % 1) * (len - 16) + 14;
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        c.moveTo(glint, -3);
+        c.lineTo(glint + 1, 0);
+        c.lineTo(glint, 3);
+        c.lineTo(glint - 1, 0);
+        c.closePath();
+        c.fill();
+    }
+    bladeGreat(c, p, len) {
+        const b = p.weapon.blade;
+        const W = b.width * 1.9 + 3;
+        this.grip(c, -14, 7, 5, '#5a4232', '#4a5068');
+        // heavy guard
+        c.fillStyle = '#3a3e52';
+        c.fillRect(7, -W / 2 - 3, 6, W + 6);
+        c.fillStyle = p.armor.look.trim;
+        c.fillRect(7, -W / 2 - 3, 6, 2);
+        c.fillRect(7, W / 2 + 1, 6, 2);
+        // broad blade with a chisel tip
+        c.save();
+        this.bladeGlow(c, p);
+        c.beginPath();
+        c.moveTo(13, -W / 2);
+        c.lineTo(len - W * 0.55, -W / 2);
+        c.lineTo(len, -W * 0.12);
+        c.lineTo(len - W * 0.3, W / 2);
+        c.lineTo(13, W / 2);
+        c.closePath();
+        c.fillStyle = b.color;
+        c.fill();
+        c.restore();
+        c.strokeStyle = b.edge;
+        c.lineWidth = 2.2;
+        c.beginPath();
+        c.moveTo(15, W / 2 - 1);
+        c.lineTo(len - W * 0.3, W / 2 - 1);
+        c.lineTo(len - 1, -W * 0.12);
+        c.stroke();
+        c.fillStyle = this.mix(b.color, '#000000', 0.4);
+        c.fillRect(17, -W / 2 + 2.5, len * 0.45, 2);
+        c.fillStyle = p.armor.look.trim;
+        c.beginPath();
+        c.arc(19, -W * 0.18, 1.6, 0, Math.PI * 2);
+        c.arc(19, W * 0.18, 1.6, 0, Math.PI * 2);
+        c.fill();
+        c.strokeStyle = '#080a11';
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(13, -W / 2);
+        c.lineTo(len - W * 0.55, -W / 2);
+        c.lineTo(len, -W * 0.12);
+        c.lineTo(len - W * 0.3, W / 2);
+        c.lineTo(13, W / 2);
+        c.closePath();
+        c.stroke();
+    }
+    bladeStarlight(c, p, len) {
+        const b = p.weapon.blade;
+        const trim = p.armor.look.trim;
+        this.grip(c, -8, 7, 3.6, trim, trim);
+        // crescent guard
+        c.strokeStyle = trim;
+        c.lineWidth = 2.6;
+        c.beginPath();
+        c.arc(8, 0, b.width * 0.9 + 3, -Math.PI / 2, Math.PI / 2);
+        c.stroke();
+        // a slim, softly curved blade of light
+        const bend = len * 0.08;
+        c.save();
+        c.shadowColor = b.edge;
+        c.shadowBlur = 12 + b.glow * 8;
+        c.strokeStyle = b.edge;
+        c.lineWidth = Math.max(2.5, b.width * 0.5);
+        c.lineCap = 'round';
+        c.beginPath();
+        c.moveTo(10, 0);
+        c.quadraticCurveTo(len * 0.6, -bend * 0.2, len, -bend);
+        c.stroke();
+        c.strokeStyle = '#ffffff';
+        c.lineWidth = 1.2;
+        c.beginPath();
+        c.moveTo(12, 0);
+        c.quadraticCurveTo(len * 0.6, -bend * 0.2, len - 2, -bend);
+        c.stroke();
+        c.restore();
+        // a star at the tip
+        const tx = len, ty = -bend;
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2, r = i % 2 ? 1.6 : 5;
+            c.lineTo(tx + Math.cos(a) * r, ty + Math.sin(a) * r);
+        }
+        c.closePath();
+        c.fill();
+    }
+    /** The original key-toothed blade. */
+    bladeKey(c, p, len) {
         const b = p.weapon.blade;
         // grip
         c.strokeStyle = '#4a5470';
@@ -6870,10 +7693,23 @@ class Renderer {
                 c.textAlign = 'center';
                 c.font = '700 17px ui-monospace, Menlo, Consolas, monospace';
             }
+            else if (g.titleMode === 'options' && i < 4) {
+                c.textAlign = 'left';
+                c.font = '700 14px ui-monospace, Menlo, Consolas, monospace';
+                c.fillText(rows[i], TITLE_ROW.x + 16, y + 25);
+                const name = i === 2 ? HERO_STYLES.find((h) => h.id === g.heroStyle).name : BLADE_STYLES.find((b) => b.id === g.bladeStyle).name;
+                c.textAlign = 'right';
+                c.fillStyle = PAL.mpCharge;
+                c.fillText(`\u25C0 ${name} \u25B6`, TITLE_ROW.x + TITLE_ROW.w - 14, y + 25);
+                c.textAlign = 'center';
+                c.font = '700 17px ui-monospace, Menlo, Consolas, monospace';
+            }
             else {
                 c.fillText(rows[i], VIEW_W / 2, y + 26);
             }
         }
+        if (g.titleMode === 'options')
+            this.drawHeroPreview(c, g, 800, 430, 2.4);
         c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
         if (g.titleMode === 'options') {
@@ -6888,6 +7724,49 @@ class Renderer {
             c.fillText(IS_TOUCH ? 'tap an option to begin' : 'arrow keys and ENTER, or click', VIEW_W / 2, VIEW_H - 46);
         }
         c.textAlign = 'left';
+        c.restore();
+    }
+    /** The hero, big, standing then swinging: for choosing a look. */
+    drawHeroPreview(c, g, x, y, scale) {
+        if (!this.previewHero)
+            this.previewHero = new Player();
+        const p = this.previewHero;
+        p.weapon = g.player.weapon;
+        p.armor = g.player.armor;
+        p.x = 0;
+        p.y = 0;
+        p.z = 0;
+        p.vx = 0;
+        p.vy = 0;
+        p.facing = 0.35;
+        const cycle = g.time % 2.4;
+        const def = GROUND_COMBO[1];
+        const total = def.startup + def.active + def.recovery;
+        if (cycle > 1.4) {
+            p.state = 'attack';
+            p.attackDef = def;
+            p.attackFrame = Math.min(total, Math.floor(((cycle - 1.4) / 0.6) * total));
+        }
+        else {
+            p.state = 'idle';
+            p.attackDef = null;
+        }
+        c.save();
+        const glow = c.createRadialGradient(x, y - 50, 10, x, y - 50, 140);
+        glow.addColorStop(0, 'rgba(111,155,255,0.18)');
+        glow.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = glow;
+        c.fillRect(x - 150, y - 200, 300, 260);
+        c.translate(x, y);
+        c.scale(scale, scale);
+        c.fillStyle = 'rgba(0,0,0,0.4)';
+        c.beginPath();
+        c.ellipse(0, 0, 18, 6, 0, 0, Math.PI * 2);
+        c.fill();
+        const saved = this.bladeStyle;
+        this.bladeStyle = g.bladeStyle;
+        this.drawPlayer(c, p, g);
+        this.bladeStyle = saved;
         c.restore();
     }
     drawHelpScreen(c, g) {
@@ -7005,6 +7884,7 @@ function freshSave() {
         weapon: 'w1', armor: 'a1', talents: {},
         potions: 3, ethers: 2,
         world: worldToSave(freshWorld()),
+        hero: 'wayfarer', blade: 'longsword',
     };
 }
 function loadSave() {
@@ -7044,6 +7924,10 @@ function loadSave() {
             // Saves from before the open world have no `world`: they start at the hub
             // with their level, gear and materials intact.
             d.world = worldToSave(worldFromSave(j.world));
+            if (HERO_STYLES.some((h) => h.id === j.hero))
+                d.hero = j.hero;
+            if (BLADE_STYLES.some((b) => b.id === j.blade))
+                d.blade = j.blade;
         }
     }
     catch { /* private mode, blocked storage — play on regardless */ }
@@ -7091,6 +7975,9 @@ class Game {
         this.shakeAmount = 0;
         this.paused = false;
         this.god = false;
+        // how the hero and sword are drawn (Options on the title screen)
+        this.heroStyle = 'wayfarer';
+        this.bladeStyle = 'longsword';
         // ---- the world
         this.world = freshWorld();
         this.spawners = makeSpawners();
@@ -7145,6 +8032,8 @@ class Game {
         applySave(this.player, save);
         this.bestWave = save.bestWave;
         this.world = worldFromSave(save.world);
+        this.heroStyle = save.hero;
+        this.bladeStyle = save.blade;
         this.player.x = this.world.pos.x;
         this.player.y = this.world.pos.y;
         this.mapIndex = this.nearestWaypoint();
@@ -7198,7 +8087,7 @@ class Game {
     }
     titleRows() {
         if (this.titleMode === 'options')
-            return ['Music volume', 'Sound volume', 'Back'];
+            return ['Music volume', 'Sound volume', 'Hero', 'Blade', 'Back'];
         if (this.titleMode === 'help')
             return ['Back'];
         return this.hasSave() ? ['Continue', 'New Game', 'Options', 'How to Play']
@@ -7274,6 +8163,18 @@ class Game {
             TUNING.sfxVolume = clamp(+(TUNING.sfxVolume + dir * 0.05).toFixed(2), 0, 1);
             this.sfx.guard();
         }
+        else if (row === 2) {
+            const i = HERO_STYLES.findIndex((h) => h.id === this.heroStyle);
+            this.heroStyle = HERO_STYLES[(i + dir + HERO_STYLES.length) % HERO_STYLES.length].id;
+            this.sfx.guard();
+            this.save();
+        }
+        else if (row === 3) {
+            const i = BLADE_STYLES.findIndex((b) => b.id === this.bladeStyle);
+            this.bladeStyle = BLADE_STYLES[(i + dir + BLADE_STYLES.length) % BLADE_STYLES.length].id;
+            this.sfx.guard();
+            this.save();
+        }
     }
     pickTitle(label) {
         this.sfx.cast(560);
@@ -7303,6 +8204,12 @@ class Game {
                 break;
             case 'Sound volume':
                 this.nudgeOption(1, 1);
+                break;
+            case 'Hero':
+                this.nudgeOption(2, 1);
+                break;
+            case 'Blade':
+                this.nudgeOption(3, 1);
                 break;
         }
     }
@@ -8818,6 +9725,7 @@ class Game {
             weapon: p.weapon.id, armor: p.armor.id, talents: p.talents,
             potions: p.potions, ethers: p.ethers,
             world: worldToSave(this.world),
+            hero: this.heroStyle, blade: this.bladeStyle,
         });
     }
     resetSave() {

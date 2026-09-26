@@ -43,6 +43,7 @@ interface SaveData {
   weapon: string; armor: string; talents: TalentSet;
   potions: number; ethers: number;
   world: WorldSave;
+  hero: HeroStyle; blade: BladeStyle;
 }
 
 const SAVE_KEY = 'aerial-finisher-save-v2';
@@ -54,6 +55,7 @@ function freshSave(): SaveData {
     weapon: 'w1', armor: 'a1', talents: {},
     potions: 3, ethers: 2,
     world: worldToSave(freshWorld()),
+    hero: 'wayfarer', blade: 'longsword',
   };
 }
 
@@ -87,6 +89,8 @@ function loadSave(): SaveData {
       // Saves from before the open world have no `world`: they start at the hub
       // with their level, gear and materials intact.
       d.world = worldToSave(worldFromSave(j.world));
+      if (HERO_STYLES.some((h) => h.id === j.hero)) d.hero = j.hero;
+      if (BLADE_STYLES.some((b) => b.id === j.blade)) d.blade = j.blade;
     }
   } catch { /* private mode, blocked storage — play on regardless */ }
   return d;
@@ -136,6 +140,10 @@ class Game {
   shakeAmount = 0;
   paused = false;
   god = false;
+
+  // how the hero and sword are drawn (Options on the title screen)
+  heroStyle: HeroStyle = 'wayfarer';
+  bladeStyle: BladeStyle = 'longsword';
 
   // ---- the world
   world: WorldState = freshWorld();
@@ -201,6 +209,8 @@ class Game {
     applySave(this.player, save);
     this.bestWave = save.bestWave;
     this.world = worldFromSave(save.world);
+    this.heroStyle = save.hero;
+    this.bladeStyle = save.blade;
     this.player.x = this.world.pos.x;
     this.player.y = this.world.pos.y;
     this.mapIndex = this.nearestWaypoint();
@@ -258,7 +268,7 @@ class Game {
   }
 
   titleRows(): string[] {
-    if (this.titleMode === 'options') return ['Music volume', 'Sound volume', 'Back'];
+    if (this.titleMode === 'options') return ['Music volume', 'Sound volume', 'Hero', 'Blade', 'Back'];
     if (this.titleMode === 'help') return ['Back'];
     return this.hasSave() ? ['Continue', 'New Game', 'Options', 'How to Play']
                           : ['Start', 'Options', 'How to Play'];
@@ -321,6 +331,16 @@ class Game {
     } else if (row === 1) {
       TUNING.sfxVolume = clamp(+(TUNING.sfxVolume + dir * 0.05).toFixed(2), 0, 1);
       this.sfx.guard();
+    } else if (row === 2) {
+      const i = HERO_STYLES.findIndex((h) => h.id === this.heroStyle);
+      this.heroStyle = HERO_STYLES[(i + dir + HERO_STYLES.length) % HERO_STYLES.length].id;
+      this.sfx.guard();
+      this.save();
+    } else if (row === 3) {
+      const i = BLADE_STYLES.findIndex((b) => b.id === this.bladeStyle);
+      this.bladeStyle = BLADE_STYLES[(i + dir + BLADE_STYLES.length) % BLADE_STYLES.length].id;
+      this.sfx.guard();
+      this.save();
     }
   }
 
@@ -346,6 +366,8 @@ class Game {
         break;
       case 'Music volume': this.nudgeOption(0, 1); break;
       case 'Sound volume': this.nudgeOption(1, 1); break;
+      case 'Hero': this.nudgeOption(2, 1); break;
+      case 'Blade': this.nudgeOption(3, 1); break;
     }
   }
 
@@ -1665,6 +1687,7 @@ class Game {
       weapon: p.weapon.id, armor: p.armor.id, talents: p.talents,
       potions: p.potions, ethers: p.ethers,
       world: worldToSave(this.world),
+      hero: this.heroStyle, blade: this.bladeStyle,
     });
   }
 
