@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{color-scheme:dark}body{margin:0}img{max-width:100%}</style>
+<title>Emberhold Soundtrack Audition</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pirata+One&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: a rack of six track modules in one column; each module is a wide row
+   with its number and identity on the left, a transport and channel meters on
+   the right, and its loop position drawn underneath as a seek bar. */
+:root{
+  color-scheme: dark;
+  --ink:#0e0f15;
+  --panel:#161822;
+  --panel2:#1d202d;
+  --line:#2a2e41;
+  --bone:#d3cbb2;
+  --dim:#7b8299;
+  --ember:#e07b39;
+  --gold:#e8c15c;
+  --mix:#e8c15c;
+  --dor:#6fa8d8;
+  --lyd:#a98ad8;
+  --phr:#d8604f;
+  --display:"Pirata One", "Papyrus", fantasy;
+  --mono:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+*{box-sizing:border-box}
+html,body{background:var(--ink)}
+body{
+  margin:0; color:var(--bone); font-family:var(--mono); font-size:14px; line-height:1.55;
+  background:
+    radial-gradient(900px 420px at 12% -8%, rgba(224,123,57,.10), transparent 62%),
+    radial-gradient(760px 380px at 92% 4%, rgba(111,168,216,.08), transparent 60%),
+    var(--ink);
+  background-attachment: fixed;
+}
+.wrap{max-width:940px; margin:0 auto; padding-block:28px 56px; padding-left:18px; padding-right:18px;}
+
+header{border-bottom:1px solid var(--line); padding-bottom:18px; margin-bottom:22px;}
+.kicker{font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--ember); margin:0 0 6px;}
+h1{
+  font-family:var(--display); font-weight:400; font-size:clamp(40px,8vw,66px);
+  line-height:.95; margin:0 0 10px; color:var(--bone); text-wrap:balance;
+  text-shadow:0 0 26px rgba(224,123,57,.22);
+}
+.lede{margin:0; max-width:64ch; color:var(--dim);}
+.lede strong{color:var(--bone); font-weight:600;}
+
+.bar{
+  display:flex; flex-wrap:wrap; gap:14px 20px; align-items:center;
+  border:1px solid var(--line); background:var(--panel); border-radius:3px;
+  padding:12px 14px; margin-bottom:22px;
+}
+.bar .lab{font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim);}
+.vol{flex:1 1 200px; min-width:150px; display:flex; align-items:center; gap:10px;}
+input[type=range]{flex:1; min-width:0; accent-color:var(--ember);}
+.stopall{
+  font:inherit; font-size:12px; letter-spacing:.1em; text-transform:uppercase;
+  background:transparent; color:var(--dim); border:1px solid var(--line);
+  border-radius:2px; padding:6px 14px; cursor:pointer;
+}
+.stopall:hover{color:var(--bone); border-color:var(--dim);}
+.stopall:focus-visible, .play:focus-visible, .sting:focus-visible{outline:2px solid var(--ember); outline-offset:2px;}
+
+.rack{display:flex; flex-direction:column; gap:10px;}
+.mod{
+  border:1px solid var(--line); background:var(--panel); border-radius:3px;
+  display:grid; grid-template-columns:54px 1fr auto; gap:0 16px; align-items:start;
+  padding:14px 16px 0; position:relative; overflow:hidden;
+}
+.mod.on{border-color:color-mix(in srgb, var(--accent) 55%, var(--line));
+        background:linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--panel)), var(--panel));}
+.num{
+  font-family:var(--display); font-size:40px; line-height:.9; color:var(--line);
+  padding-top:2px;
+}
+.mod.on .num{color:color-mix(in srgb, var(--accent) 70%, var(--line));}
+.idy{min-width:0;}
+.name{font-size:17px; font-weight:600; letter-spacing:.01em; margin:0; color:var(--bone);}
+.chips{display:flex; flex-wrap:wrap; gap:6px; margin:7px 0 0;}
+.chip{
+  font-size:10.5px; letter-spacing:.11em; text-transform:uppercase;
+  border:1px solid var(--line); border-radius:2px; padding:2px 7px; color:var(--dim);
+}
+.chip.mode{color:var(--accent); border-color:color-mix(in srgb, var(--accent) 40%, var(--line));}
+.note{margin:10px 0 0; color:var(--dim); font-size:13px; max-width:58ch;}
+.note b{color:var(--bone); font-weight:500;}
+
+.side{display:flex; align-items:center; gap:14px;}
+.meters{display:flex; align-items:flex-end; gap:4px; height:34px;}
+.meters i{
+  display:block; width:7px; height:6px; background:var(--line); border-radius:1px;
+  transition:height .09s linear, background .09s linear;
+}
+.play{
+  font:inherit; font-size:12px; letter-spacing:.14em; text-transform:uppercase; font-weight:600;
+  background:transparent; color:var(--bone); border:1px solid var(--dim);
+  border-radius:2px; padding:9px 16px; cursor:pointer; white-space:nowrap; min-width:92px;
+}
+.play:hover{border-color:var(--bone);}
+.mod.on .play{background:var(--accent); border-color:var(--accent); color:#12131a;}
+.seek{grid-column:1 / -1; height:3px; background:var(--panel2); margin:14px -16px 0; position:relative;}
+.seek span{position:absolute; inset:0 auto 0 0; width:0; background:var(--accent);}
+
+.stings{margin-top:26px; border:1px solid var(--line); background:var(--panel); border-radius:3px; padding:14px 16px;}
+.stings h2{font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--dim); margin:0 0 4px; font-weight:600;}
+.stings p{margin:0 0 12px; color:var(--dim); font-size:13px; max-width:62ch;}
+.stingrow{display:flex; flex-wrap:wrap; gap:8px;}
+.sting{
+  font:inherit; font-size:12px; letter-spacing:.1em; text-transform:uppercase;
+  background:var(--panel2); color:var(--bone); border:1px solid var(--line);
+  border-radius:2px; padding:8px 14px; cursor:pointer;
+}
+.sting:hover{border-color:var(--dim);}
+
+footer{margin-top:30px; padding-top:18px; border-top:1px solid var(--line); color:var(--dim); font-size:13px;}
+footer p{margin:0 0 8px; max-width:64ch;}
+footer b{color:var(--bone); font-weight:600;}
+.hint{font-size:12px; color:var(--dim); margin-top:14px;}
+
+@media (max-width:560px){
+  .mod{grid-template-columns:40px 1fr; padding:12px 14px 0;}
+  .num{font-size:30px}
+  .side{grid-column:1 / -1; justify-content:space-between; margin-top:12px;}
+  .seek{margin:12px -14px 0;}
+}
+@media (prefers-reduced-motion: reduce){ .meters i{transition:none} }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="kicker">Emberhold · soundtrack</p>
+    <h1>Six Candidates</h1>
+    <p class="lede">Melodic death metal built on Zelda's modal bones, voiced like a 16-bit console. Everything here is
+      synthesised live in the page — no samples, no files — which is exactly how it will run inside the game.
+      <strong>Play them, then tell me which survive.</strong></p>
+  </header>
+
+  <div class="bar">
+    <div class="vol">
+      <span class="lab">Volume</span>
+      <input id="vol" type="range" min="0" max="100" value="62" aria-label="Master volume">
+    </div>
+    <button class="stopall" id="stopall" type="button">Stop</button>
+    <span class="lab" id="now">Nothing playing</span>
+  </div>
+
+  <div class="rack" id="rack"></div>
+
+  <section class="stings">
+    <h2>Stingers</h2>
+    <p>Two seconds each. In Zelda these do more work per note than anything else in the score — the reward phrase you
+      hear a hundred times and never tire of.</p>
+    <div class="stingrow">
+      <button class="sting" type="button" data-sting="victory">Road held</button>
+      <button class="sting" type="button" data-sting="defeat">Gate broken</button>
+      <button class="sting" type="button" data-sting="star">Star earned</button>
+    </div>
+  </section>
+
+  <footer>
+    <p><b>What I need back.</b> Which of the six to keep, which to cut, and whether the balance between guitars and
+      melody is right. Rough reactions are more useful than precise ones — "3 is too busy" tells me plenty.</p>
+    <p>Each track loops seamlessly, so leave one running a while. A theme that survives three minutes on repeat is the
+      one that belongs in a map you will replay for stars.</p>
+    <p class="hint">Tracks 2 and 3 would alternate across Greenwood, 4 and 5 across Frostgate, 6 on the two boss maps,
+      1 on the title and menus.</p>
+  </footer>
+</div>
+
+<script>
+"use strict";
+
+/* ----------------------------------------------------------
+   Modes. The whole Zelda trick is here: same notes, different
+   centre. Mixolydian for heroism, Dorian for ceremony, Lydian
+   for unease, Phrygian dominant when the boss walks in.
+---------------------------------------------------------- */
+const MODES = {
+  mixolydian:[0,2,4,5,7,9,10],
+  dorian:    [0,2,3,5,7,9,10],
+  lydian:    [0,2,4,6,7,9,11],
+  aeolian:   [0,2,3,5,7,8,10],
+  phrygdom:  [0,1,4,5,7,8,10],
+};
+const MODE_HUE = { mixolydian:"var(--mix)", dorian:"var(--dor)", lydian:"var(--lyd)",
+                   aeolian:"var(--dor)", phrygdom:"var(--phr)" };
+
+const NOTE = {C:0,"C#":1,D:2,"D#":3,E:4,F:5,"F#":6,G:7,"G#":8,A:9,"A#":10,B:11};
+function rootHz(name, oct){ return 440 * Math.pow(2, (NOTE[name] - 9)/12 + (oct - 4)); }
+function degHz(base, mode, deg){
+  const sc = MODES[mode], n = sc.length;
+  const oct = Math.floor(deg / n), idx = ((deg % n) + n) % n;
+  return base * Math.pow(2, (oct*12 + sc[idx]) / 12);
+}
+
+/* ----------------------------------------------------------
+   Audio
+---------------------------------------------------------- */
+let AC = null, master = null, comp = null, started = false;
+const chanHit = {lead:0, harm:0, bass:0, drum:0};
+
+function ensureAudio(){
+  if(AC) return true;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if(!Ctx) return false;
+  try{ AC = new Ctx(); }catch(e){ return false; }
+  comp = AC.createDynamicsCompressor();
+  comp.threshold.value = -16; comp.ratio.value = 6; comp.attack.value = 0.004; comp.release.value = 0.18;
+  master = AC.createGain();
+  master.gain.value = volEl.value/100 * 0.8;
+  master.connect(comp); comp.connect(AC.destination);
+  started = true;
+  return true;
+}
+function resume(){ if(AC && AC.state !== "running"){ try{ AC.resume(); }catch(e){} } }
+
+let noiseBuf = null;
+function noise(){
+  if(noiseBuf) return noiseBuf;
+  const n = Math.floor(AC.sampleRate * 0.6);
+  noiseBuf = AC.createBuffer(1, n, AC.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i] = Math.random()*2-1;
+  return noiseBuf;
+}
+const shaperCurves = {};
+function curve(amount){
+  if(shaperCurves[amount]) return shaperCurves[amount];
+  const n = 1024, c = new Float32Array(n), k = amount;
+  for(let i=0;i<n;i++){ const x = i*2/n - 1; c[i] = (1+k) * x / (1 + k*Math.abs(x)); }
+  shaperCurves[amount] = c; return c;
+}
+
+/* distorted rhythm guitar: two detuned saws, soft clip, lowpass */
+function guitar(t, hz, dur, gain, bright){
+  const g = AC.createGain(), sh = AC.createWaveShaper(), lp = AC.createBiquadFilter();
+  sh.curve = curve(14); sh.oversample = "2x";
+  lp.type = "lowpass";
+  lp.frequency.setValueAtTime(bright ? 2600 : 1500, t);
+  lp.frequency.exponentialRampToValueAtTime(bright ? 1500 : 700, t + dur);
+  lp.Q.value = 0.8;
+  for(const cents of [-7, 7]){
+    const o = AC.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.value = hz * Math.pow(2, cents/1200);
+    o.connect(sh); o.start(t); o.stop(t + dur + 0.03);
+  }
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), t + 0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  sh.connect(lp); lp.connect(g); g.connect(master);
+}
+/* singing lead: detuned saws with vibrato, brighter, longer tail */
+function lead(t, hz, dur, gain){
+  const g = AC.createGain(), sh = AC.createWaveShaper(), lp = AC.createBiquadFilter();
+  sh.curve = curve(8); sh.oversample = "2x";
+  lp.type = "lowpass"; lp.frequency.value = 3400; lp.Q.value = 1.1;
+  const lfo = AC.createOscillator(), lg = AC.createGain();
+  lfo.frequency.value = 5.4; lg.gain.value = hz * 0.006;
+  lfo.connect(lg); lfo.start(t); lfo.stop(t + dur + 0.05);
+  for(const cents of [-5, 6]){
+    const o = AC.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(hz * Math.pow(2, cents/1200), t);
+    lg.connect(o.frequency);
+    o.connect(sh); o.start(t); o.stop(t + dur + 0.05);
+  }
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), t + 0.018);
+  g.gain.setValueAtTime(Math.max(0.0002, gain), t + Math.max(0.03, dur*0.6));
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.04);
+  sh.connect(lp); lp.connect(g); g.connect(master);
+}
+/* bass: saw through a tight lowpass with a sine underneath */
+function bass(t, hz, dur, gain){
+  const g = AC.createGain(), lp = AC.createBiquadFilter();
+  lp.type = "lowpass"; lp.frequency.value = 520; lp.Q.value = 1.4;
+  const o = AC.createOscillator(); o.type = "sawtooth"; o.frequency.value = hz;
+  const s = AC.createOscillator(); s.type = "sine"; s.frequency.value = hz/2;
+  const sg = AC.createGain(); sg.gain.value = 0.6;
+  o.connect(lp); s.connect(sg); sg.connect(lp);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), t + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  lp.connect(g); g.connect(master);
+  o.start(t); o.stop(t + dur + 0.02); s.start(t); s.stop(t + dur + 0.02);
+}
+/* bell / harp: the one clean colour, straight out of the ocarina tradition */
+function bell(t, hz, dur, gain){
+  const g = AC.createGain();
+  const a = AC.createOscillator(); a.type = "triangle"; a.frequency.value = hz;
+  const b = AC.createOscillator(); b.type = "sine"; b.frequency.value = hz*2.004;
+  const bg = AC.createGain(); bg.gain.value = 0.35;
+  a.connect(g); b.connect(bg); bg.connect(g);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), t + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  g.connect(master);
+  a.start(t); a.stop(t+dur+0.02); b.start(t); b.stop(t+dur+0.02);
+}
+function kick(t, gain){
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = "sine";
+  o.frequency.setValueAtTime(150, t);
+  o.frequency.exponentialRampToValueAtTime(44, t + 0.09);
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.18);
+  const c = AC.createBufferSource(); c.buffer = noise();
+  const cf = AC.createBiquadFilter(); cf.type = "lowpass"; cf.frequency.value = 2600;
+  const cg = AC.createGain();
+  cg.gain.setValueAtTime(gain*0.5, t); cg.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+  c.connect(cf); cf.connect(cg); cg.connect(master); c.start(t); c.stop(t + 0.05);
+}
+function snare(t, gain){
+  const s = AC.createBufferSource(); s.buffer = noise();
+  const f = AC.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = 1900; f.Q.value = 0.7;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + 0.2);
+  const o = AC.createOscillator(), og = AC.createGain();
+  o.type = "triangle"; o.frequency.setValueAtTime(220, t);
+  o.frequency.exponentialRampToValueAtTime(150, t + 0.08);
+  og.gain.setValueAtTime(gain*0.5, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+  o.connect(og); og.connect(master); o.start(t); o.stop(t + 0.11);
+}
+function hat(t, gain, open){
+  const s = AC.createBufferSource(); s.buffer = noise();
+  const f = AC.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 7200;
+  const g = AC.createGain();
+  const d = open ? 0.20 : 0.045;
+  g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + d + 0.02);
+}
+function crash(t, gain){
+  const s = AC.createBufferSource(); s.buffer = noise();
+  const f = AC.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 4200;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + 1.2);
+}
+
+/* ----------------------------------------------------------
+   The six candidates.
+   Melodies are written as scale degrees, not notes, so every
+   line sits in its mode by construction and the harmony part
+   is just the same line two degrees up.
+   note = [step, lengthInSteps, degree]
+---------------------------------------------------------- */
+const TRACKS = [
+{
+  id:"title", n:"01", name:"Emberhold", role:"Title & menus",
+  mode:"mixolydian", key:"D", oct:3, bpm:104, sub:4, beats:4, bars:8,
+  drums:"stately", gtr:"whole", leadInst:"bell", harm:true, crashBars:[0,4],
+  note:"The main theme, stated plainly. <b>Mixolydian</b> — the flat seventh is why it sounds like setting out rather than arriving. Bars 5-8 restate bars 1-4 a step higher, which is Kondo's favourite device and the reason the tune feels like it climbs.",
+  chords:[0,5,3,4, 1,5,4,0],
+  melody:[
+    [0,4,0],[4,4,4],[8,4,6],[12,4,4],
+    [16,8,3],[24,8,2],
+    [32,4,2],[36,4,6],[40,4,5],[44,4,4],
+    [48,14,3],
+    [64,4,1],[68,4,5],[72,4,7],[76,4,5],
+    [80,8,4],[88,8,3],
+    [96,4,3],[100,4,7],[104,4,6],[108,4,5],
+    [112,16,4],
+  ],
+},
+{
+  id:"green1", n:"02", name:"The Greenwood Road", role:"Act I field",
+  mode:"mixolydian", key:"E", oct:2, bpm:150, sub:4, beats:4, bars:8,
+  drums:"drive", gtr:"gallop", leadInst:"lead", harm:true, crashBars:[0,4],
+  note:"The overworld tune, and the one that has to carry the most listening. Gallop rhythm under a <b>harmonised twin lead</b> — the melody and a line two degrees above it, which is the single most recognisable sound in melodic death metal.",
+  chords:[0,0,6,6, 5,5,4,4],
+  melody:[
+    [0,2,4],[2,2,5],[4,4,6],[8,2,5],[10,2,4],[12,4,2],
+    [16,2,4],[18,2,5],[20,4,6],[24,4,8],[28,4,7],
+    [32,2,6],[34,2,5],[36,4,4],[40,2,3],[42,2,4],[44,4,5],
+    [48,8,4],[56,4,2],[60,4,3],
+    [64,2,4],[66,2,5],[68,4,6],[72,2,5],[74,2,4],[76,4,2],
+    [80,2,7],[82,2,8],[84,4,9],[88,4,8],[92,4,7],
+    [96,2,6],[98,2,7],[100,4,8],[104,4,6],[108,4,5],
+    [112,12,4],
+  ],
+},
+{
+  id:"green2", n:"03", name:"Millrun", role:"Act I field",
+  mode:"dorian", key:"A", oct:2, bpm:164, sub:3, beats:2, bars:16,
+  drums:"lilt", gtr:"lilt", leadInst:"lead", harm:true, crashBars:[0,8],
+  note:"A troubadour dance dragged through a distortion pedal — <b>6/8</b>, so it lilts rather than marches. <b>Dorian</b> keeps it minor without turning mournful, which is the mode's whole job in this series. Sixteen bars: the second strain answers the first a third higher before falling back.",
+  chords:[0,6,5,4, 0,6,4,0],
+  melody:[
+    [0,2,0],[2,1,2],[3,3,4],
+    [6,2,3],[8,1,2],[9,3,0],
+    [12,2,4],[14,1,5],[15,3,6],
+    [18,3,5],[21,3,4],
+    [24,2,0],[26,1,2],[27,3,4],
+    [30,2,6],[32,1,5],[33,3,4],
+    [36,2,7],[38,1,6],[39,3,5],
+    [42,6,4],
+    [48,2,2],[50,1,4],[51,3,6],
+    [54,2,5],[56,1,4],[57,3,2],
+    [60,2,6],[62,1,7],[63,3,8],
+    [66,3,7],[69,3,6],
+    [72,2,9],[74,1,8],[75,3,7],
+    [78,2,6],[80,1,5],[81,3,4],
+    [84,2,5],[86,1,4],[87,3,2],
+    [90,6,0],
+  ],
+},
+{
+  id:"frost1", n:"04", name:"Frostgate", role:"Act II field",
+  mode:"dorian", key:"C", oct:2, bpm:138, sub:4, beats:4, bars:8,
+  drums:"half", gtr:"chug", leadInst:"lead", harm:true, crashBars:[0,4],
+  note:"Half-time drums under a slow, heavy chug. The lead sits high and sustains rather than running, so the weight comes from the guitars and not from speed. This is the one that should feel like a long cold walk.",
+  chords:[0,0,5,5, 3,3,6,4],
+  melody:[
+    [0,8,4],[8,4,3],[12,4,2],
+    [16,12,0],[28,4,2],
+    [32,8,3],[40,4,5],[44,4,6],
+    [48,16,5],
+    [64,8,7],[72,4,6],[76,4,5],
+    [80,12,4],[92,4,3],
+    [96,8,2],[104,4,4],[108,4,5],
+    [112,16,4],
+  ],
+},
+{
+  id:"frost2", n:"05", name:"The Rimeward", role:"Act II field",
+  mode:"lydian", key:"G", oct:2, bpm:124, sub:4, beats:4, bars:8,
+  drums:"sparse", gtr:"drone", leadInst:"bell", harm:false, crashBars:[0],
+  note:"<b>Lydian</b>, the raised fourth. That interval is the old <i>diabolus in musica</i>, and it reads as dreamlike with something wrong underneath. Bells over a sustained guitar drone, the sparsest of the six — the breathing room in the rotation.",
+  chords:[0,0,1,1, 0,0,6,6],
+  melody:[
+    [0,6,4],[8,4,3],[14,6,2],
+    [24,8,3],
+    [32,6,6],[40,4,5],[46,6,4],
+    [56,8,3],
+    [64,6,7],[72,4,6],[78,6,5],
+    [88,8,4],
+    [96,4,3],[100,4,2],[104,4,3],[108,4,5],
+    [112,12,4],
+  ],
+},
+{
+  id:"boss", n:"06", name:"The Pale Throne", role:"Boss maps",
+  mode:"phrygdom", key:"D", oct:2, bpm:176, sub:4, beats:4, bars:8,
+  drums:"blast", gtr:"gallop", leadInst:"lead", harm:true, crashBars:[0,4],
+  note:"<b>Phrygian dominant</b> — flat second against a major third, which is where metal and old liturgical music happen to meet. Fastest and ugliest of the six, with the bass walking chromatically under the riff.",
+  chords:[0,1,0,6, 0,1,4,0],
+  melody:[
+    [0,2,0],[2,2,1],[4,2,2],[6,2,1],[8,4,0],[12,4,6],
+    [16,2,0],[18,2,1],[20,2,2],[22,2,4],[24,8,3],
+    [32,2,4],[34,2,3],[36,2,2],[38,2,1],[40,4,2],[44,4,0],
+    [48,2,6],[50,2,0],[52,2,1],[54,2,0],[56,8,6],
+    [64,2,7],[66,2,8],[68,2,9],[70,2,8],[72,4,7],[76,4,6],
+    [80,2,7],[82,2,8],[84,2,9],[86,2,11],[88,8,10],
+    [96,2,9],[98,2,8],[100,2,7],[102,2,6],[104,4,5],[108,4,4],
+    [112,16,0],
+  ],
+},
+];
+
+/* ---------- build a step-indexed event table for a track ---------- */
+function buildEvents(t){
+  const stepsPerBar = t.sub * t.beats;
+  const len = stepsPerBar * t.bars;
+  const ev = Array.from({length:len}, ()=>[]);
+  const base = rootHz(t.key, t.oct);
+  const chordAt = bar => t.chords[bar % t.chords.length];
+
+  // melody + harmony a third above, inside the mode
+  for(const [s, d, deg] of t.melody){
+    if(s >= len) continue;
+    const inst = t.leadInst;
+    ev[s].push({inst, deg:deg+7, dur:d, gain:inst==="bell"?0.30:0.20, ch:"lead"});
+    if(t.harm) ev[s].push({inst, deg:deg+9, dur:d, gain:inst==="bell"?0.17:0.12, ch:"harm"});
+  }
+
+  // guitars and bass, driven by the bar's chord
+  for(let bar=0; bar<t.bars; bar++){
+    const root = chordAt(bar);
+    const at = i => bar*stepsPerBar + i;
+    const pushG = (i, dur, g, bright) => {
+      if(i>=stepsPerBar) return;
+      ev[at(i)].push({inst:"guitar", deg:root, dur, gain:g, ch:"bass", bright});
+      ev[at(i)].push({inst:"guitar", deg:root+4, dur, gain:g*0.7, ch:"bass", bright});
+    };
+    const pushB = (i, dur, g, deg) => {
+      if(i>=stepsPerBar) return;
+      ev[at(i)].push({inst:"bass", deg:(deg===undefined?root:deg)-7, dur, gain:g, ch:"bass"});
+    };
+    if(t.gtr === "gallop"){
+      for(let b=0;b<t.beats;b++){
+        const i=b*t.sub;
+        pushG(i,0.12,0.13); pushG(i+2,0.07,0.10); pushG(i+3,0.07,0.10);
+        pushB(i,0.14,0.26); pushB(i+2,0.08,0.20); pushB(i+3,0.08,0.20);
+      }
+    } else if(t.gtr === "chug"){
+      for(let b=0;b<t.beats;b++){
+        const i=b*t.sub;
+        pushG(i,0.26,0.15); pushG(i+2,0.14,0.11);
+        pushB(i,0.30,0.28); pushB(i+2,0.16,0.20);
+      }
+    } else if(t.gtr === "lilt"){
+      pushG(0,0.30,0.14); pushG(3,0.22,0.11);
+      pushB(0,0.32,0.28); pushB(3,0.24,0.22);
+    } else if(t.gtr === "drone"){
+      pushG(0, (60/t.bpm)*t.beats*0.98, 0.075, true);
+      pushB(0, (60/t.bpm)*t.beats*0.95, 0.20);
+    } else { // whole
+      pushG(0, (60/t.bpm)*t.beats*0.9, 0.10, true);
+      pushB(0, (60/t.bpm)*(t.beats/2)*0.9, 0.24);
+      pushB(t.sub*2, (60/t.bpm)*(t.beats/2)*0.9, 0.22);
+    }
+
+    // drums
+    const D = (i, fn) => { if(i<stepsPerBar) ev[at(i)].push({drum:fn, ch:"drum"}); };
+    if(t.drums === "drive"){
+      for(let b=0;b<t.beats;b++){
+        D(b*t.sub, "kick");
+        D(b*t.sub+2, "hat");
+        D(b*t.sub, "hat");
+        if(b%2===1) D(b*t.sub, "snare");
+      }
+      D(t.sub*3+2, "kick");
+    } else if(t.drums === "blast"){
+      for(let i=0;i<stepsPerBar;i+=2){ D(i, i%4===0 ? "kick" : "snare"); D(i, "hat"); }
+    } else if(t.drums === "half"){
+      D(0,"kick"); D(t.sub*2,"snare"); D(t.sub*3+2,"kick");
+      for(let b=0;b<t.beats;b++) D(b*t.sub,"hat");
+    } else if(t.drums === "lilt"){
+      D(0,"kick"); D(3,"snare"); D(0,"hat"); D(2,"hat"); D(4,"hat");
+    } else if(t.drums === "sparse"){
+      D(0,"kick"); D(t.sub*2,"snare");
+    } else { // stately
+      D(0,"kick"); D(t.sub*2,"snare"); D(t.sub*1,"hat"); D(t.sub*3,"hat");
+    }
+    if(t.crashBars && t.crashBars.indexOf(bar) >= 0) ev[at(0)].push({drum:"crash", ch:"drum"});
+  }
+  return {ev, len, base};
+}
+TRACKS.forEach(t => { const b = buildEvents(t); t._ev = b.ev; t._len = b.len; t._base = b.base; });
+
+/* ---------- transport ---------- */
+let cur = null, timer = null;
+const volEl = document.getElementById("vol");
+const nowEl = document.getElementById("now");
+
+function stopAll(){
+  if(timer){ clearInterval(timer); timer = null; }
+  cur = null;
+  document.querySelectorAll(".mod").forEach(m => m.classList.remove("on"));
+  document.querySelectorAll(".play").forEach(b => b.textContent = "Play");
+  nowEl.textContent = "Nothing playing";
+}
+
+function playTrack(id){
+  if(!ensureAudio()) return;
+  resume();
+  const wasSame = cur && cur.t.id === id;
+  stopAll();
+  if(wasSame) return;
+  const t = TRACKS.find(x => x.id === id);
+  cur = { t, step:0, next: AC.currentTime + 0.12 };
+  const mod = document.getElementById("mod-" + id);
+  mod.classList.add("on");
+  mod.querySelector(".play").textContent = "Stop";
+  nowEl.textContent = t.n + " · " + t.name + " · " + t.bpm + " bpm";
+  timer = setInterval(tick, 25);
+}
+
+function tick(){
+  if(!cur) return;
+  const t = cur.t;
+  const stepDur = 60 / t.bpm / t.sub;
+  while(cur.next < AC.currentTime + 0.18){
+    fire(t, cur.step, cur.next);
+    cur.step = (cur.step + 1) % t._len;
+    cur.next += stepDur;
+  }
+}
+
+function fire(t, step, when){
+  const list = t._ev[step];
+  if(!list || !list.length) return;
+  const stepDur = 60 / t.bpm / t.sub;
+  for(const e of list){
+    if(e.drum){
+      if(e.drum === "kick") kick(when, 0.55);
+      else if(e.drum === "snare") snare(when, 0.34);
+      else if(e.drum === "hat") hat(when, 0.10, false);
+      else if(e.drum === "crash") crash(when, 0.17);
+      chanHit.drum = when;
+      continue;
+    }
+    const hz = degHz(t._base, t.mode, e.deg);
+    const dur = e.dur > 4 ? e.dur : e.dur * stepDur * 0.94;
+    if(e.inst === "guitar") guitar(when, hz, e.dur > 4 ? e.dur : e.dur, e.gain, e.bright);
+    else if(e.inst === "bass") bass(when, hz, e.dur > 4 ? e.dur : e.dur, e.gain);
+    else if(e.inst === "lead") lead(when, hz, dur, e.gain);
+    else if(e.inst === "bell") bell(when, hz, Math.max(0.35, dur*1.6), e.gain);
+    chanHit[e.ch] = when;
+  }
+}
+
+/* ---------- stingers ---------- */
+function stinger(kind){
+  if(!ensureAudio()) return;
+  resume();
+  const t0 = AC.currentTime + 0.04;
+  if(kind === "victory"){
+    const base = rootHz("D",4);
+    const seq = [[0,0],[0.10,2],[0.20,4],[0.30,7],[0.46,6],[0.62,7]];
+    for(const [dt,deg] of seq) lead(t0+dt, degHz(base,"mixolydian",deg), 0.28, 0.22);
+    for(const [dt,deg] of seq) bell(t0+dt, degHz(base,"mixolydian",deg+7), 0.4, 0.14);
+    kick(t0,0.5); crash(t0,0.16); snare(t0+0.46,0.3); kick(t0+0.62,0.5);
+  } else if(kind === "defeat"){
+    const base = rootHz("D",3);
+    const seq = [[0,4],[0.18,2],[0.38,0],[0.62,-3]];
+    for(const [dt,deg] of seq){
+      guitar(t0+dt, degHz(base,"aeolian",deg), 0.5, 0.16);
+      bass(t0+dt, degHz(base,"aeolian",deg-7), 0.55, 0.26);
+    }
+    kick(t0,0.5); crash(t0+0.62,0.2);
+  } else {
+    const base = rootHz("A",4);
+    const seq = [[0,0],[0.08,4],[0.16,7],[0.26,11]];
+    for(const [dt,deg] of seq) bell(t0+dt, degHz(base,"lydian",deg), 0.55, 0.26);
+  }
+}
+
+/* ---------- build the rack ---------- */
+const rack = document.getElementById("rack");
+for(const t of TRACKS){
+  const el = document.createElement("div");
+  el.className = "mod";
+  el.id = "mod-" + t.id;
+  el.style.setProperty("--accent", MODE_HUE[t.mode]);
+  el.innerHTML =
+    '<div class="num">' + t.n + '</div>' +
+    '<div class="idy">' +
+      '<p class="name">' + t.name + '</p>' +
+      '<div class="chips">' +
+        '<span class="chip">' + t.role + '</span>' +
+        '<span class="chip mode">' + t.mode.replace("phrygdom","phrygian dominant") + " on " + t.key + '</span>' +
+        '<span class="chip">' + t.bpm + ' bpm</span>' +
+        '<span class="chip">' + (t.sub === 3 ? "6/8" : "4/4") + '</span>' +
+      '</div>' +
+      '<p class="note">' + t.note + '</p>' +
+    '</div>' +
+    '<div class="side">' +
+      '<div class="meters" aria-hidden="true"><i data-ch="lead"></i><i data-ch="harm"></i><i data-ch="bass"></i><i data-ch="drum"></i></div>' +
+      '<button class="play" type="button" data-id="' + t.id + '">Play</button>' +
+    '</div>' +
+    '<div class="seek"><span></span></div>';
+  rack.appendChild(el);
+}
+
+rack.addEventListener("click", e => {
+  const b = e.target.closest(".play");
+  if(b) playTrack(b.dataset.id);
+});
+document.getElementById("stopall").addEventListener("click", stopAll);
+document.querySelectorAll("[data-sting]").forEach(b =>
+  b.addEventListener("click", () => stinger(b.dataset.sting)));
+volEl.addEventListener("input", () => {
+  if(master) master.gain.value = volEl.value/100 * 0.8;
+});
+
+/* ---------- meters and seek bar ---------- */
+const meterEls = Array.from(document.querySelectorAll(".meters i")).map(m => ({
+  el:m, ch:m.dataset.ch, mod:m.closest(".mod"),
+}));
+const seekEls = Array.from(document.querySelectorAll(".mod")).map(mod => ({
+  mod, fill:mod.querySelector(".seek span"),
+}));
+function frame(){
+  const now = AC ? AC.currentTime : 0;
+  const liveId = cur ? "mod-" + cur.t.id : null;
+  for(const m of meterEls){
+    const live = m.mod.id === liveId;
+    const age = now - (chanHit[m.ch] || 0);
+    const amt = live && age >= 0 && age < 0.22 ? 1 - age/0.22 : 0;
+    m.el.style.height = (6 + amt*26) + "px";
+    // --accent is declared on .mod and inherits, so no computed-style read needed
+    m.el.style.background = amt > 0.05 ? "var(--accent)" : "var(--line)";
+  }
+  for(const s of seekEls){
+    s.fill.style.width = (s.mod.id === liveId) ? (cur.step / cur.t._len * 100) + "%" : "0%";
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+
+</body>
+</html>
