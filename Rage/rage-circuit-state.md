@@ -4,7 +4,17 @@
 
 ## Current build: BUILD 14.1 — THE BAND (2026-09-26)
 - **Published artifact:** https://claude.ai/artifact/BMTcYjZFL3ivGBu94w3Php — **Version 16**. Republish `dist/rage-circuit-artifact.html` (same session) or pass that URL as `url` from another session. The URL must never change: the save lives in localStorage, which is per-origin.
-- Folder `Desktop\Claude\Rage`: `rage-circuit.html`, `rage-circuit-src.zip`, `rage-circuit-plan.md`, `rage-circuit-state.md`, cast and stage sheets, and `soundtrack/` (all 35 mp3s, numbered in game order).
+- **Where builds go (set 2026-09-29): BOTH of these folders, every time.** Michael asked for the GitHub folder from Build 14.1 on and to keep the old one in sync, so a build is not delivered until it is in both:
+  - `Documents\GitHub\Retro Games\Rage`  ← the one he works from now
+  - `Desktop\Claude\Rage`  ← kept in sync
+  **Write the files only. Do not run git** — no `add`, no `commit`, no `push`. He stages and commits himself, and the repo root is a level above the connected folder anyway, so `.git` is not reachable from here.
+  Each folder holds: `rage-circuit.html`, `rage-circuit-src.zip`, `rage-circuit-plan.md`, `rage-circuit-state.md`, the cast and stage PNGs, and `soundtrack/` (all 35 mp3s, numbered in game order) — 50 files, verified identical in both on 2026-09-29.
+  **How to deliver to both — use this recipe, and verify:**
+  1. `device_commit_files` the file to a **filename that does not exist yet** in `Desktop\Claude\Rage` (e.g. `rage-circuit.html.new`).
+  2. `device_bash`: `mv -f` it over the real name, then `cp` it into `Retro Games\Rage`.
+  3. Verify: `find . -type f -printf "%p %s\n" | sort` in both folders and diff the two.
+
+  **Why the detour: `device_commit_files` onto a path that already has a file is not reliable here.** On 2026-09-29 it repeatedly returned `{"written":[...]}` with no rejection, gave the file a fresh mtime, and left the **previous content in place** — a silent wrong-content write, which is the worst kind, and it happened in both folders, sometimes succeeding and sometimes not on the very same path. Committing to a filename that does not exist yet worked first time, every time. So write to a new name and `mv` it into place, and never treat `{"written":[...]}` as proof: step 3 is what tells you the file actually changed. `cp` and `mv -f` inside the device VM are reliable in both directions.
 - Single HTML file, **backbuffer 854×480**, no assets, no build step at runtime. `build.sh` concatenates `p0_*` + `p1_core p2_audio p2b_band p3_poses p3b_pix p3c_props p4_data p5_fight p6_stage p6b_city p7_game` + tail.
 - **Tests: 236 checks across 9 suites, all passing, zero page errors.** `verify.js` 55 · `newfeat.js` 46 · `flow.js` 40 · `chars.js` 26 · `boss.js` 21 · `music.js` 19 · `mastery.js` 15 · `wakeloop.js` 14. Plus `playthrough.js <diff> [ally] [stage] [char]`, `playlong.js`, `pt_long.js` (same as `playthrough.js` with a 700-step budget — stage 8 needs it to reach the tally), `smoke.js`, and the screen-inspection scripts (`stageshots.js`, `pick7shot.js`, `s7shot.js`, `s7cap.js`, `s7haz.js`, `pick8shot.js`, `s8shot.js`, `s8pad.js`, `cast3.js`, `zoomfig.js`), `perf.js`.
 - **Perf at the new resolution:** ~598–627 tick+render/s headless (was ~1224 at 426×240), prewarm ~3.1 s (was ~1.55 s). Comfortably above the 60/s the game needs. The music costs nothing measurable: ~570-604/s with all 35 tracks and the master limiter in the file.
