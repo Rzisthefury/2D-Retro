@@ -2,8 +2,8 @@
 
 **Direction:** Streets of Rage 3-style beat 'em up with Turtles in Time elements. Design: `claude/rage-circuit-plan.md`.
 
-## Current build: BUILD 15 — TOUCH (2026-09-30)
-- **Published artifact:** https://claude.ai/artifact/BMTcYjZFL3ivGBu94w3Php — **Version 17**. Republish `dist/rage-circuit-artifact.html` (same session) or pass that URL as `url` from another session. The URL must never change: the save lives in localStorage, which is per-origin.
+## Current build: BUILD 15.1 — TOUCH (2026-09-30)
+- **Published artifact:** https://claude.ai/artifact/BMTcYjZFL3ivGBu94w3Php — **Version 18**. Republish `dist/rage-circuit-artifact.html` (same session) or pass that URL as `url` from another session. The URL must never change: the save lives in localStorage, which is per-origin.
 - **Where builds go (set 2026-09-29): BOTH of these folders, every time.** Michael asked for the GitHub folder from Build 14.1 on and to keep the old one in sync, so a build is not delivered until it is in both:
   - `Documents\GitHub\Retro Games\Rage`  ← the one he works from now
   - `Desktop\Claude\Rage`  ← kept in sync
@@ -16,7 +16,7 @@
 
   **Why the detour: `device_commit_files` onto a path that already has a file is not reliable here.** On 2026-09-29 it repeatedly returned `{"written":[...]}` with no rejection, gave the file a fresh mtime, and left the **previous content in place** — a silent wrong-content write, which is the worst kind, and it happened in both folders, sometimes succeeding and sometimes not on the very same path. Committing to a filename that does not exist yet worked first time, every time. So write to a new name and `mv` it into place, and never treat `{"written":[...]}` as proof: step 3 is what tells you the file actually changed. `cp` and `mv -f` inside the device VM are reliable in both directions.
 - Single HTML file, **backbuffer 854×480**, no assets, no build step at runtime. `build.sh` concatenates `p0_*` + `p1_core p1b_touch p2_audio p2b_band p3_poses p3b_pix p3c_props p4_data p5_fight p6_stage p6b_city p7_game` + tail.
-- **Tests: 261 checks across 10 suites, all passing, zero page errors.** `verify.js` 55 · `newfeat.js` 46 · `flow.js` 40 · `chars.js` 26 · `touch.js` 25 · `boss.js` 21 · `music.js` 19 · `mastery.js` 15 · `wakeloop.js` 14. Plus `playthrough.js <diff> [ally] [stage] [char]`, `playlong.js`, `pt_long.js` (same as `playthrough.js` with a 700-step budget — stage 8 needs it to reach the tally), `smoke.js`, and the screen-inspection scripts (`stageshots.js`, `pick7shot.js`, `s7shot.js`, `s7cap.js`, `s7haz.js`, `pick8shot.js`, `s8shot.js`, `s8pad.js`, `cast3.js`, `zoomfig.js`), `perf.js`.
+- **Tests: 265 checks across 10 suites, all passing, zero page errors.** `verify.js` 55 · `newfeat.js` 46 · `flow.js` 40 · `chars.js` 26 · `touch.js` 29 · `boss.js` 21 · `music.js` 19 · `mastery.js` 15 · `wakeloop.js` 14. Plus `playthrough.js <diff> [ally] [stage] [char]`, `playlong.js`, `pt_long.js` (same as `playthrough.js` with a 700-step budget — stage 8 needs it to reach the tally), `smoke.js`, and the screen-inspection scripts (`stageshots.js`, `pick7shot.js`, `s7shot.js`, `s7cap.js`, `s7haz.js`, `pick8shot.js`, `s8shot.js`, `s8pad.js`, `cast3.js`, `zoomfig.js`), `perf.js`.
 - **Perf at the new resolution:** ~598–627 tick+render/s headless (was ~1224 at 426×240), prewarm ~3.1 s (was ~1.55 s). Comfortably above the 60/s the game needs. The music and the touch layer cost nothing measurable: 638-748/s at Build 15. Single runs vary by well over 100/s on this container, so never read one number as a regression - take three.
 - **`perf.js` must drain the prewarm queue before it starts timing.** Without the drain loop it reports ~44/s and looks like a catastrophic regression. This trap was documented after Build 5 but the fix had never actually been applied to the script; it is applied now.
 
@@ -48,8 +48,23 @@ Keyboard and pad double taps are untouched.
 - **The pause button sat directly on top of attack** in the first layout. It lives top-left in bars mode now, the only genuinely empty corner.
 - A row of five buttons must be **sized to the width it is given** or the last one hangs off the edge, which is what portrait did.
 
-### `test/touch.js` — 25 checks
-The suite exists because a touch bug is invisible everywhere else: every other test drives `Input.keys` directly, so the entire layer could be dead and the other 236 checks would still pass. It runs in a phone-sized context with `hasTouch`, dispatches **real pointer events at the real elements**, and then looks at what the game did — walking, running only past the threshold, diagonals, attack, jump, roll direction, two thumbs at once, pause, menus, the option turning it off. It also **measures the layout**: no visible control overlaps the canvas in bars mode, attack is nearer the thumb than back attack, everything is on screen, and the pause button is not on top of anything.
+### Build 15.1 — the double-tap zoomed the page
+
+Michael: *"when double clicking to run, the screen zoomed in to the lower right hand side and i was unable to pull it back."* The browser took the double tap as zoom-to-element, and with the page unzoomable afterwards that is the worst possible failure - the game becomes unusable until you reload.
+
+**Cause: `touch-action` is not inherited.** It was set on `body.touch` and nowhere else, so every control a finger actually lands on - the stick zone, the buttons, the canvas - was still on the default `auto`, and the browser was entitled to the gesture. The viewport meta `boot()` writes does not help either: **the published artifact runs in an iframe**, so there is no parent viewport meta to control. Per-element `touch-action` is the only lever that works there.
+
+Fixed three ways, because a page you cannot zoom back out of is not worth being clever about:
+- `touch-action: none` on `#wrap`, the canvas, `#tc` and every child, the buttons, the ring and the rotate overlay.
+- A document-level `touchend` handler that cancels the second tap of any pair inside 320ms, for browsers that ignore parts of `touch-action`.
+- `gesturestart` / `gesturechange` / `gestureend` and `dblclick` cancelled outright — Safari's pinch is not a touch event at all.
+
+**Double tap to run came back with it.** It was removed in Build 15 because a stick re-centres constantly while you weave and that read as a double tap, causing accidental runs. The version that is safe needs the finger to **leave the glass** between taps, which never happens on an accidental re-centre: lift, press again within 260 ms, push, and you run on a gentle push. Pushing to the edge still runs without any tapping.
+
+**Attack is now 1.42x the other buttons** and keeps the bottom corner. The cluster fit maths accounts for it (`TOUCH_SPAN`) so nothing overflows on a small screen.
+
+### `test/touch.js` — 29 checks
+The suite exists because a touch bug is invisible everywhere else: every other test drives `Input.keys` directly, so the entire layer could be dead and the other 236 checks would still pass. It runs in a phone-sized context with `hasTouch`, dispatches **real pointer events at the real elements**, and then looks at what the game did — walking, running only past the threshold, diagonals, attack, jump, roll direction, two thumbs at once, pause, menus, the option turning it off. It also **measures the layout**: no visible control overlaps the canvas in bars mode, attack is nearer the thumb than back attack and clearly bigger than it, everything is on screen, and the pause button is not on top of anything. And it asserts **every surface a finger can land on has `touch-action: none`** — reverting the CSS makes that check report `auto` across the board, which is exactly what shipped in Build 15.
 
 ## The music overhaul (BUILD 14 — in the game)
 

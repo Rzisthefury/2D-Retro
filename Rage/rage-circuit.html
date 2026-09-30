@@ -15,8 +15,17 @@ canvas{image-rendering:pixelated;image-rendering:crisp-edges;display:block;backg
 /* ---- touch controls -------------------------------------------------------
    Only live once body.touch is set. They are deliberately OUTSIDE the canvas
    in the default layout, so nothing sits over the picture. */
+/* touch-action is NOT inherited, so it has to go on every element a finger can
+   land on. Setting it only on body left the stick and the buttons on the
+   default, which is what let a double tap zoom the page - and in the published
+   artifact the game runs in an iframe, so there is no parent viewport meta to
+   fix it with. Per-element touch-action is the thing that actually works. */
 body.touch{padding-inline:0;touch-action:none;-webkit-user-select:none;user-select:none;
   -webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+body.touch #wrap,body.touch canvas,body.touch #tc,body.touch #tc>*,
+body.touch .tbtn,body.touch #tring,body.touch #tknob,body.touch #trot{
+  touch-action:none;-webkit-user-select:none;user-select:none;
+  -webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
 body.touch #hint{display:none}
 #tc{display:none;position:fixed;inset:0;z-index:5;pointer-events:none;
   padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
@@ -369,6 +378,13 @@ const TOUCH_R = 52;          // stick throw, in CSS pixels
 const TOUCH_DEAD = 0.24;     // below this the stick reads as centred
 const TOUCH_RUN = 0.72;      // push past this and you run
 const TOUCH_MIN_BAR = 88;    // a side bar narrower than this cannot hold controls
+const TOUCH_ATK = 1.42;      // attack is this much bigger than the other buttons
+// Lift-and-press-again inside this many ms on the stick counts as a deliberate
+// double tap, and runs. Kept short: repositioning a thumb takes longer, and an
+// accidental run is worse than a missed one.
+const TOUCH_DBL = 260;
+// how many button-widths a cluster of five needs, attack and the roll included
+const TOUCH_SPAN = TOUCH_ATK + 1 + 0.72 + 1 + 1;
 
 const Touch = {
   built: false, on: false, mode: 'off',
@@ -377,6 +393,8 @@ const Touch = {
   st: {}, latch: {}, down: {},
   stick: { id: null, ox: 0, oy: 0, dx: 0, dy: 0 },
   dodgeQ: false, seen: false,
+  lastZoneDown: 0, tapRun: false,   // a deliberate double tap on the stick
+  lastTouchEnd: 0,                  // for killing the browser's double-tap zoom
 
   // ---- is this a touch device at all -------------------------------------
   capable() {
@@ -459,6 +477,9 @@ const Touch = {
       e.preventDefault();
       this.wake();
       if (this.stick.id !== null) return;
+      const now = Date.now();
+      this.tapRun = (now - this.lastZoneDown) < TOUCH_DBL;
+      this.lastZoneDown = now;
       this.stick.id = e.pointerId;
       this.stick.ox = e.clientX; this.stick.oy = e.clientY;
       this.stick.dx = 0; this.stick.dy = 0;
@@ -479,7 +500,7 @@ const Touch = {
     });
     const release = e => {
       if (e.pointerId !== this.stick.id) return;
-      this.stick.id = null; this.stick.dx = 0; this.stick.dy = 0;
+      this.stick.id = null; this.stick.dx = 0; this.stick.dy = 0; this.tapRun = false;
       this.ring.classList.remove('lit');
       this.drawKnob();
     };
@@ -488,6 +509,22 @@ const Touch = {
 
     this.rot.addEventListener('pointerdown', e => { e.preventDefault(); this.rot.classList.add('gone'); });
     window.addEventListener('orientationchange', () => setTimeout(() => this.layout(), 120));
+
+    // Belt and braces on the double-tap zoom. touch-action in the stylesheet
+    // is the real fix, but iOS Safari has historically ignored bits of it, and
+    // a page you cannot zoom back out of is the worst possible outcome - so the
+    // second tap of a quick pair gets cancelled outright.
+    document.addEventListener('touchend', e => {
+      if (!this.on) return;
+      const now = Date.now();
+      if (now - this.lastTouchEnd < 320) e.preventDefault();
+      this.lastTouchEnd = now;
+    }, { passive: false });
+    // Safari's pinch gestures, which are not touch events at all
+    for (const g of ['gesturestart', 'gesturechange', 'gestureend']) {
+      document.addEventListener(g, e => { if (this.on) e.preventDefault(); }, { passive: false });
+    }
+    document.addEventListener('dblclick', e => { if (this.on) e.preventDefault(); }, { passive: false });
   },
 
   // first touch anywhere is also what unlocks audio on iOS
@@ -547,8 +584,8 @@ const Touch = {
       // corner: anything up by the top edge needs a second hand to reach.
       const reach = Math.min(H2 - 56, 360);
       const size = column
-        ? Math.max(44, Math.min(68, Math.floor((reach - 4 * 7) / 5), bar - 10))
-        : Math.max(46, Math.min(72, bar - 12));
+        ? Math.max(40, Math.min(64, Math.floor((reach - 4 * 7) / TOUCH_SPAN), Math.floor((bar - 10) / TOUCH_ATK)))
+        : Math.max(44, Math.min(68, Math.floor((bar - 12) / TOUCH_ATK)));
       this.btns.style.cssText = `right:5px;bottom:6px;width:${bar}px`;
       this.setSize(size, column);
     } else if (mode === 'below') {
@@ -558,12 +595,12 @@ const Touch = {
       // hangs off the edge - which is exactly what portrait did.
       const aw = Math.round(W2 * 0.60) - 8;
       this.btns.style.cssText = `right:8px;bottom:8px;width:${aw}px`;
-      this.setSize(Math.max(40, Math.min(70, Math.floor((aw - 4 * 9) / 5.2), Math.round(h / 2) - 8)), false);
+      this.setSize(Math.max(38, Math.min(66, Math.floor((aw - 4 * 9) / TOUCH_SPAN), Math.floor((h / 2 - 8) / TOUCH_ATK))), false);
     } else {
       this.zone.style.cssText = 'left:0;top:22%;width:40%;height:78%';
       const aw2 = Math.min(240, Math.round(W2 * 0.56));
       this.btns.style.cssText = `right:6px;bottom:6px;width:${aw2}px`;
-      this.setSize(Math.max(40, Math.min(62, Math.floor((aw2 - 4 * 8) / 5.2))), false);
+      this.setSize(Math.max(38, Math.min(58, Math.floor((aw2 - 4 * 8) / TOUCH_SPAN))), false);
     }
     // portrait is playable but tiny, so say so rather than silently shipping it
     const portrait = H2 > W2 * 1.1;
@@ -577,11 +614,17 @@ const Touch = {
   // the entire inline declaration and would throw these away.
   setSize(px, column) {
     for (const el of this.btnEls) {
-      const wide = el.dataset.act === 'dodge';
-      el.style.width = (wide ? Math.round(px * 1.15) : px) + 'px';
-      el.style.height = (wide ? Math.round(px * 0.72) : px) + 'px';
-      el.style.borderRadius = (wide ? Math.round(px * 0.36) : Math.round(px / 2)) + 'px';
-      el.style.fontSize = Math.max(9, Math.round(px * 0.19)) + 'px';
+      const act = el.dataset.act;
+      const wide = act === 'dodge';
+      // Attack is the one you hold down for the whole game, so it gets to be
+      // noticeably bigger than the rest and sits in the corner.
+      const k = act === 'attack' ? TOUCH_ATK : 1;
+      const w = wide ? px * 1.15 : px * k;
+      const hh = wide ? px * 0.72 : px * k;
+      el.style.width = Math.round(w) + 'px';
+      el.style.height = Math.round(hh) + 'px';
+      el.style.borderRadius = (wide ? Math.round(px * 0.36) : Math.round(w / 2)) + 'px';
+      el.style.fontSize = Math.max(9, Math.round(w * 0.21)) + 'px';
     }
     // reversed so the first button in the list is the one nearest the thumb.
     // flex-wrap has to be off: wrapping a reversed column re-orders it.
@@ -619,7 +662,8 @@ const Touch = {
       // works - the stick generates real direction presses, so a flick out and
       // back twice reads as one. But double tapping a stick you are already
       // holding is genuinely awkward, so pushing it to the edge runs as well.
-      if (m > TOUCH_RUN && ax > ay) s.runX = dx < 0 ? -1 : 1;
+      // run: push it to the edge, OR double tap the stick and push
+      if ((m > TOUCH_RUN || this.tapRun) && ax > ay) s.runX = dx < 0 ? -1 : 1;
     }
 
     // Dodge. The roll wants a direction and the game only rolls when the held
@@ -14996,7 +15040,7 @@ function drawLightning() {
 let SCREEN = 'boot';
 let S = {};                      // per-screen state
 const SESSION = { unlocked: {}, introSeen: false };
-const BUILD = 'BUILD 15 - TOUCH';
+const BUILD = 'BUILD 15.1 - TOUCH';
 function go(name, st = {}) { SCREEN = name; S = Object.assign({ t: 0, cur: 0 }, st); Input.clearAll(); }
 
 // ------------------------------------------------------------ glyph text
