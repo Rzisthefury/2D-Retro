@@ -92,9 +92,15 @@ AS     = Spd - max(0, Weight - Con)
 Two triangles: sword > axe > lance > sword, and anima > light > dark > anima.
 Bows and staves sit outside both. Bows deal triple damage to fliers.
 
-**Undo** — unlimited, step by step, during your own turn. The RNG stream is part
-of the snapshot, so replaying the same attack gives the same result. Undo fixes
-positioning, not luck.
+**Undo** — step by step, and it crosses turn boundaries. A snapshot is taken
+before every action and once more the instant before you end your turn, and the
+stack is never cleared, so keep pressing and undo walks back through the enemy
+phase into the turn before it: a unit lost to a counterattack you did not see
+coming can be un-lost by not making the move that caused it. The RNG stream is
+part of every snapshot, so a rewound enemy phase replays exactly as it did unless
+you change something — undo fixes positioning, not luck. History is bounded by
+bytes (8 MB, ~18 KB a snapshot on the largest chapter), which in practice is the
+whole chapter, and it is not written into the suspend file.
 
 **Levels** — cap 20 per tier, per-stat growth rates rolled independently, with a
 guard so a level can never grant nothing. Promotion from level 10 into one of two

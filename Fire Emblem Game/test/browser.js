@@ -875,6 +875,71 @@ const SHOTS = path.join(__dirname, '..', 'dist', 'shots');
     if (afterEnemy.busy) errors.push(label + ': still busy after the enemy phase - it hung');
     await shot('14-turn2');
 
+    // ---- undo must reach back over the enemy phase into the turn before it
+    const rewind = await page.evaluate(async () => {
+      const FE = window.FE, G = FE.G;
+      const btn = document.getElementById('btn-undo');
+      const out = {
+        turn: G.state.turn,
+        enabled: !btn.disabled,
+        label: btn.textContent,
+        crosses: FE.Undo.crossesTurn(G.state),
+        thisTurn: FE.Undo.thisTurn(G.state),
+        depth: FE.Undo.depth(G.state)
+      };
+      if (btn.disabled) return out;
+      /* remember the board as the enemy left it */
+      const wasHp = G.state.units.filter(u => u.faction === 'player')
+        .map(u => u.id + ':' + u.hp + ':' + (u.alive ? 1 : 0)).join(',');
+      btn.click();
+      await new Promise(r => setTimeout(r, 400));
+      out.turnAfter = G.state.turn;
+      out.phaseAfter = G.state.phase;
+      out.busyAfter = G.busy;
+      out.hpChanged = wasHp !== G.state.units.filter(u => u.faction === 'player')
+        .map(u => u.id + ':' + u.hp + ':' + (u.alive ? 1 : 0)).join(',');
+      out.endEnabled = !document.getElementById('btn-end').disabled;
+      /* and the board still draws */
+      const cv = document.getElementById('map');
+      const g = cv.getContext('2d');
+      const d = g.getImageData(0, 0, cv.width, cv.height).data;
+      const seen = {};
+      for (let i = 0; i < d.length; i += 4 * 97) seen[d[i] + ',' + d[i + 1] + ',' + d[i + 2]] = 1;
+      out.drew = Object.keys(seen).length;
+      return out;
+    });
+    if (!rewind.enabled) {
+      errors.push(label + ': undo was disabled at the start of turn ' + rewind.turn
+        + ' (depth ' + rewind.depth + ') - it cannot reach the previous turn');
+    } else {
+      if (!rewind.crosses) errors.push(label + ': undo at turn start did not report crossing a turn');
+      if (rewind.thisTurn !== 0) errors.push(label + ': ' + rewind.thisTurn + ' actions counted in a turn nothing has happened in');
+      if (!/Turn/.test(rewind.label)) errors.push(label + ': the undo button did not say it would undo a turn (got "' + rewind.label + '")');
+      if (rewind.turnAfter !== rewind.turn - 1) {
+        errors.push(label + ': undo left the game on turn ' + rewind.turnAfter + ', expected ' + (rewind.turn - 1));
+      }
+      if (rewind.phaseAfter !== 'player') errors.push(label + ': undo across a turn left the phase as ' + rewind.phaseAfter);
+      if (rewind.busyAfter) errors.push(label + ': the game was still busy after undoing a turn');
+      if (!rewind.endEnabled) errors.push(label + ': End Turn was unavailable after undoing back a turn');
+      if (rewind.drew < 8) errors.push(label + ': the map went blank after undoing a turn');
+    }
+    await shot('14b-undoturn');
+
+    // put the game back where the rest of the run expects it
+    if (rewind.enabled && rewind.turnAfter === rewind.turn - 1) {
+      await page.getByRole('button', { name: 'End Turn' }).click();
+      for (let i = 0; i < 60; i++) {
+        const t = await page.evaluate(() => window.FE.G.state.turn + ':' + (window.FE.G.busy ? 1 : 0));
+        if (t === rewind.turn + ':0') break;
+        await page.waitForTimeout(100);
+      }
+      const back = await page.evaluate(() => ({ turn: window.FE.G.state.turn, busy: window.FE.G.busy }));
+      if (back.turn !== rewind.turn || back.busy) {
+        errors.push(label + ': replaying the rewound turn did not land back on turn ' + rewind.turn
+          + ' (got ' + back.turn + ', busy ' + back.busy + ')');
+      }
+    }
+
     // ---- the fair must not carry late-game stock early
     const stock = await page.evaluate(() => {
       const FE = window.FE;

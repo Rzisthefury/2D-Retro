@@ -155,7 +155,7 @@
       ['The triangle', 'Swords beat axes, axes beat lances, lances beat swords. Winning the matchup is +1 damage and +15 hit. Magic has its own: anima beats light, light beats dark, dark beats anima.'],
       ['Doubling', 'If your attack speed is 4 or more above theirs, you hit twice. Heavy weapons cut your attack speed unless your build (Con) can carry them.'],
       ['The forecast', 'Select a target and the panel shows damage, hit chance, crit chance and whether either side doubles. Hit rolls are averaged over two dice, so 85 behaves like 85.'],
-      ['Undo', 'Unlimited, step by step, during your own turn. The dice are locked — redo the same attack the same way and you get the same result. Undo fixes bad positioning, not bad luck.'],
+      ['Undo', 'Step by step, and it does not stop at the start of your turn — keep pressing and it walks back through the enemy phase into the turn before it, so a unit lost to something you did not see coming can be un-lost. The dice go back with the board: end the same turn again without changing anything and you get the same enemy phase. Undo fixes bad positioning, not bad luck.'],
       ['Supply', 'Seren carries the convoy. She can reach it anywhere, and so can any unit standing next to her — pick Supply from the action menu to swap weapons mid-battle. It costs that unit its turn.'],
       ['The world map', 'Between chapters you stand on the map of the marches. Chapters move the campaign; skirmishes, the fair and the Hollow Spire are optional and always there.'],
       ['Danger zone', 'The red button paints every tile the enemy can reach next turn. Use it before you move, not after.'],
@@ -930,7 +930,6 @@
     G.selected = null; G.selectedUnit = null;
     G.overlay = null; G.path = null;
     FE.Undo.reset(G.state);
-    FE.Undo.push(G.state, 'turn start');
     var first = G.state.units.filter(function (u) { return u.faction === 'player'; })[0];
     if (first) { G.cursor = { x: first.x, y: first.y }; }
     /* show the battle chrome FIRST so the canvas is measured at its real size */
@@ -970,7 +969,14 @@
     $('hud-turn').className = s.phase === 'player' ? 'player-phase' : 'enemy-phase';
     var undoBtn = $('btn-undo');
     undoBtn.disabled = !FE.Undo.canUndo(G.state) || G.busy;
-    undoBtn.textContent = 'Undo' + (FE.Undo.depth(G.state) > 1 ? ' (' + (FE.Undo.depth(G.state) - 1) + ')' : '');
+    if (FE.Undo.crossesTurn(G.state)) {
+      undoBtn.textContent = '\u21b6 Turn';
+      undoBtn.title = 'Undo back into turn ' + (G.state.turn - 1) + ', before the enemy phase';
+    } else {
+      var n = FE.Undo.thisTurn(G.state);
+      undoBtn.textContent = 'Undo' + (n > 1 ? ' (' + n + ')' : '');
+      undoBtn.title = 'Undo your last action';
+    }
     $('btn-end').disabled = s.phase !== 'player' || G.busy;
   }
 
@@ -2523,9 +2529,13 @@
     if (G.state.phase !== 'player' || G.busy) return;
     closeActionMenu();
     clearSelection();
+    /* the last snapshot of your own turn, taken before anything the enemy
+       does. This is what makes undo able to walk back over the enemy phase:
+       one press from the next turn lands you here, with your units where you
+       left them and whatever the enemy did erased. */
+    FE.Undo.push(G.state, 'end of turn ' + G.state.turn);
     FE.tickSupports(G.state, 2);
     FE.beginEnemyPhase(G.state);
-    FE.Undo.clear(G.state);
     updateHud();
     FE.Music.play('enemy');
     flashBanner('ENEMY PHASE', 'enemy', function () { runEnemyPhase(); });
@@ -2610,8 +2620,7 @@
     r = FE.checkResult(G.state);
     if (r) { endBattle(r); return; }
     FE.beginPlayerPhase(G.state);
-    FE.Undo.reset(G.state);
-    FE.Undo.push(G.state, 'turn start');
+    /* deliberately no reset: the stack carries across the turn boundary */
     G.busy = false;
     updateHud();
     updateTileInfo();
@@ -2792,8 +2801,9 @@
         G.scene = 'battle';
         G.mode = 'idle';
         G.ended = false; G.busy = false;
+        /* the history is not written into the save, so a resumed battle
+           starts with nothing to undo rather than pretending otherwise */
         FE.Undo.reset(G.state);
-        FE.Undo.push(G.state, 'turn start');
         $('game').classList.add('in-battle');
         FE.resizeCanvas();
         fitZoom();
@@ -2925,12 +2935,25 @@
     if (!FE.Undo.canUndo(G.state) || G.busy) return;
     hideForecast();
     closeActionMenu();
+    var crossed = FE.Undo.crossesTurn(G.state);
     FE.Undo.pop(G.state);
     G.selected = null; G.selectedUnit = null;
     G.mode = 'idle';
     G.overlay = G.danger ? dangerOverlay() : null;
     G.path = null;
     FE.Sfx.cancel();
+    if (crossed) {
+      /* say it plainly: the dice went back with the board, so ending the turn
+         again without changing anything gets the same enemy phase */
+      UI.toast('Back in turn ' + G.state.turn + '. The enemy phase will play out the '
+        + 'same way unless you change something.', 'good');
+      FE.Music.play('player');
+      var back = G.state.units.filter(function (u) {
+        return u.faction === 'player' && u.alive;
+      })[0];
+      if (back) { G.cursor = { x: back.x, y: back.y }; FE.ensureVisible(G.state, back.x, back.y); }
+      autoSave();
+    }
     updateHud();
     updateTileInfo();
   }

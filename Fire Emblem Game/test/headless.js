@@ -216,6 +216,151 @@ console.log('\n== undo determinism ==');
   eq('same attack after undo gives the same rolls', after2, after1);
 }
 
+console.log('\n== undo across the enemy phase ==');
+{
+  /* one enemy phase, driven the way the simulator drives it */
+  function runEnemyPhase(st) {
+    FE.beginEnemyPhase(st);
+    st.units.filter(u => u.alive && u.faction === 'enemy').forEach(u => {
+      if (!u.alive) return;
+      const act = FE.aiDecide(st, u);
+      if (!act) return;
+      if (act.type === 'attack') { u.x = act.x; u.y = act.y; FE.resolveCombat(st, u, act.target, act.item); }
+      else if (act.type === 'staff') { u.x = act.x; u.y = act.y; FE.useStaff(st, u, act.target, act.item); }
+      else if (act.type === 'move') { u.x = act.x; u.y = act.y; }
+    });
+    FE.endTurn(st);
+    FE.beginPlayerPhase(st);
+  }
+  /* exactly what main.js does when you press End Turn */
+  function endTurn(st) {
+    FE.Undo.push(st, 'end of turn ' + st.turn);
+    FE.tickSupports(st, 2);
+    runEnemyPhase(st);
+  }
+
+  const campaign = FE.newCampaign('normal');
+  campaign.seed = 4242;
+  const st = FE.startChapter(campaign, ['seren', 'dorn', 'mira', 'bram']);
+  FE.Undo.reset(st);
+
+  ok('nothing to undo at the start of a chapter', !FE.Undo.canUndo(st));
+  eq('the history starts empty', FE.Undo.depth(st), 0);
+
+  /* walk a unit into trouble on purpose, at one hit point */
+  const bait = st.units.find(u => u.id === 'bram');
+  const foe = st.units.find(u => u.faction === 'enemy');
+  FE.Undo.push(st, 'move bram');
+  bait.x = foe.x; bait.y = foe.y + 1;
+  bait.hp = 1;
+  bait.acted = true;
+  FE.recomputeSupports(st);
+
+  eq('one action undoable this turn', FE.Undo.thisTurn(st), 1);
+  ok('that action does not cross a turn', !FE.Undo.crossesTurn(st));
+
+  const turnBefore = st.turn;
+  endTurn(st);
+
+  eq('the turn advanced', st.turn, turnBefore + 1);
+  ok('the bait died in the enemy phase', !bait.alive);
+  ok('undo is still available on the new turn', FE.Undo.canUndo(st));
+  ok('the next undo crosses the enemy phase', FE.Undo.crossesTurn(st));
+  eq('nothing has been done yet this turn', FE.Undo.thisTurn(st), 0);
+  eq('the history reaches back one turn', FE.Undo.turnsBack(st), 1);
+
+  /* the whole point: go back and un-kill him */
+  FE.Undo.pop(st);
+  eq('undo went back a turn', st.turn, turnBefore);
+  eq('it is your phase again', st.phase, 'player');
+  const raised = st.units.find(u => u.id === 'bram');
+  ok('the unit that died is alive again', raised.alive);
+  eq('and at the hit points it had before the enemy moved', raised.hp, 1);
+  ok('the enemy went back with it', st.units.filter(u => u.faction === 'enemy' && u.alive).length > 0);
+
+  /* the dice went back too: replaying the same turn kills him the same way */
+  const replay = JSON.parse(JSON.stringify({
+    x: raised.x, y: raised.y, hp: raised.hp
+  }));
+  endTurn(st);
+  const again = st.units.find(u => u.id === 'bram');
+  ok('replaying an unchanged turn gives the same outcome', !again.alive,
+     'bait was at ' + replay.x + ',' + replay.y);
+
+  /* and a second undo goes back to before the move that caused it */
+  FE.Undo.pop(st);
+  eq('back in the earlier turn again', st.turn, turnBefore);
+  eq('one action still undoable', FE.Undo.thisTurn(st), 1);
+  FE.Undo.pop(st);
+  const home = st.units.find(u => u.id === 'bram');
+  ok('the move that started it is undone too', home.hp === home.maxhp && !home.acted);
+  ok('and now there is nothing left to undo', !FE.Undo.canUndo(st));
+
+  /* Undo-all stops at the turn boundary rather than running off the end */
+  const st2 = FE.startChapter(campaign, ['seren', 'dorn', 'mira', 'bram']);
+  FE.Undo.reset(st2);
+  const a1 = st2.units.find(u => u.id === 'dorn');
+  FE.Undo.push(st2, 'move 1'); a1.x += 1; a1.acted = true;
+  endTurn(st2);
+  const t2 = st2.turn;
+  const b1 = st2.units.find(u => u.id === 'seren');
+  const b2 = st2.units.find(u => u.id === 'mira');
+  const seren0 = { x: b1.x, y: b1.y };
+  FE.Undo.push(st2, 'move seren'); b1.x += 1; b1.acted = true;
+  FE.Undo.push(st2, 'move mira');  b2.x += 1; b2.acted = true;
+  eq('two actions this turn', FE.Undo.thisTurn(st2), 2);
+  FE.Undo.all(st2);
+  eq('undo-all stays inside this turn', st2.turn, t2);
+  eq('undo-all rewound both actions', FE.Undo.thisTurn(st2), 0);
+  const b1b = st2.units.find(u => u.id === 'seren');
+  eq('and put the unit back', b1b.x, seren0.x);
+  ok('the previous turn is still reachable after undo-all', FE.Undo.crossesTurn(st2));
+  FE.Undo.pop(st2);
+  eq('and one more press crosses it', st2.turn, t2 - 1);
+
+  /* many turns, not just one: the claim is that you can walk all the way back */
+  const st4 = FE.startChapter(campaign, ['seren', 'dorn', 'mira', 'bram']);
+  FE.Undo.reset(st4);
+  const startHp = st4.units.filter(u => u.faction === 'player')
+    .map(u => u.id + ':' + u.hp).join(',');
+  const startPos = st4.units.filter(u => u.faction === 'player')
+    .map(u => u.id + ':' + u.x + ',' + u.y).join(',');
+  let played = 0;
+  for (let t = 0; t < 6; t++) {
+    if (FE.checkResult(st4)) break;
+    /* nudge somebody so the turn is not empty, then hand it over */
+    const mover = st4.units.find(u => u.faction === 'player' && u.alive);
+    if (mover) {
+      FE.Undo.push(st4, 'shuffle ' + t);
+      mover.acted = true;
+    }
+    endTurn(st4);
+    played++;
+  }
+  ok('several turns were played', played >= 3, String(played));
+  eq('the history spans them', FE.Undo.turnsBack(st4), played);
+
+  let presses = 0;
+  while (FE.Undo.canUndo(st4) && presses < 500) { FE.Undo.pop(st4); presses++; }
+  eq('undo walked all the way back to turn 1', st4.turn, 1);
+  eq('and to the board as it was deployed',
+     st4.units.filter(u => u.faction === 'player').map(u => u.id + ':' + u.x + ',' + u.y).join(','),
+     startPos);
+  eq('with everybody at the health they started on',
+     st4.units.filter(u => u.faction === 'player').map(u => u.id + ':' + u.hp).join(','),
+     startHp);
+  ok('it took about two presses a turn, not hundreds', presses <= played * 3 + 2, String(presses));
+
+  /* the history is bounded: a long chapter must not grow without limit */
+  const st3 = FE.startChapter(campaign, ['seren', 'dorn', 'mira', 'bram']);
+  FE.Undo.reset(st3);
+  for (let i = 0; i < 1200; i++) FE.Undo.push(st3, 'spam ' + i);
+  ok('the undo stack is capped', FE.Undo.depth(st3) <= 900, String(FE.Undo.depth(st3)));
+  ok('but it still holds plenty', FE.Undo.depth(st3) >= 40, String(FE.Undo.depth(st3)));
+  ok('the oldest entries are the ones dropped',
+     FE.Undo.lastLabel(st3) === 'spam 1199');
+}
+
 console.log('\n== supports ==');
 {
   const campaign = FE.newCampaign('normal');
