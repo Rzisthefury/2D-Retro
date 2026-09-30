@@ -11,6 +11,48 @@ body{padding-inline:16px;box-sizing:border-box;display:flex;flex-direction:colum
 #wrap{position:relative;line-height:0}
 canvas{image-rendering:pixelated;image-rendering:crisp-edges;display:block;background:#000}
 #hint{height:18px;line-height:18px;text-align:center;font-size:11px;opacity:.6;white-space:nowrap;overflow:hidden;max-width:100vw}
+
+/* ---- touch controls -------------------------------------------------------
+   Only live once body.touch is set. They are deliberately OUTSIDE the canvas
+   in the default layout, so nothing sits over the picture. */
+body.touch{padding-inline:0;touch-action:none;-webkit-user-select:none;user-select:none;
+  -webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+body.touch #hint{display:none}
+#tc{display:none;position:fixed;inset:0;z-index:5;pointer-events:none;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+#tc>*{pointer-events:auto;position:absolute}
+/* the region the thumbstick answers to. Invisible: the ring is the feedback. */
+#tzone{background:transparent}
+#tring{width:104px;height:104px;margin:-52px 0 0 -52px;border-radius:50%;
+  border:2px solid rgba(216,208,232,.22);background:rgba(20,16,32,.30);
+  opacity:0;transition:opacity .12s;pointer-events:none}
+#tring.lit{opacity:1}
+#tknob{position:absolute;left:50%;top:50%;width:46px;height:46px;border-radius:50%;
+  background:rgba(232,40,58,.55);border:2px solid rgba(255,255,255,.35);transform:translate(-50%,-50%)}
+#tbtns{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end;align-items:flex-end;pointer-events:none}
+.tbtn{pointer-events:auto;width:66px;height:66px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-family:monospace;font-size:12px;font-weight:bold;letter-spacing:.5px;
+  color:#fff;background:rgba(36,30,52,.62);border:2px solid rgba(216,208,232,.30);
+  text-shadow:0 1px 2px rgba(0,0,0,.8)}
+.tbtn.lit{transform:scale(.93);filter:brightness(1.5)}
+.b-atk{background:rgba(232,40,58,.62);border-color:rgba(255,120,130,.5)}
+.b-jmp{background:rgba(58,184,74,.58);border-color:rgba(140,240,150,.5)}
+.b-sp{background:rgba(200,106,255,.55);border-color:rgba(226,180,255,.5)}
+.b-bck{background:rgba(232,192,32,.52);border-color:rgba(255,232,140,.5);color:#1a1a1e;text-shadow:none}
+.b-dodge{background:rgba(74,192,232,.50);border-color:rgba(170,226,255,.5);width:78px;height:52px;border-radius:26px}
+#tpause{pointer-events:auto;right:8px;top:8px;width:44px;height:36px;border-radius:8px;
+  display:flex;align-items:center;justify-content:center;font-size:13px;color:#d8d0e8;
+  background:rgba(36,30,52,.55);border:1px solid rgba(216,208,232,.25)}
+/* fallback layout: controls over the picture, so pull them back a little */
+#tc[data-mode="over"] .tbtn{opacity:.78}
+#tc[data-mode="over"] #tring{background:rgba(20,16,32,.22)}
+/* portrait: playable, but small enough to be worth saying something about */
+#trot{display:none;position:fixed;inset:0;z-index:9;align-items:center;justify-content:center;
+  text-align:center;font-family:monospace;font-size:14px;letter-spacing:1px;color:#f2c94c;
+  background:rgba(7,6,11,.92);padding:24px;box-sizing:border-box}
+body.touch #trot{display:flex}
+#trot.gone{display:none!important}
 </style>
 <div id="wrap"><canvas id="cv" width="426" height="240" tabindex="0"></canvas></div>
 <div id="hint">Xbox controller or keyboard &mdash; Arrows/WASD move &middot; J attack &middot; K jump &middot; L special &middot; U back attack &middot; I pick up &middot; O ally command &middot; Enter start</div>
@@ -40,15 +82,22 @@ const DEG = Math.PI / 180;
 
 // ------------------------------------------------------------ canvas fit
 function fitCanvas() {
-  const sw = window.innerWidth - 32, sh = window.innerHeight - 20;
+  // On a touch device the page has no padding and no hint line, so the picture
+  // gets the whole viewport. Fitting by the smaller axis is what leaves the
+  // bars at the sides that the touch controls sit in.
+  const touch = typeof Touch !== 'undefined' && Touch.on;
+  const sw = window.innerWidth - (touch ? 0 : 32), sh = window.innerHeight - (touch ? 0 : 20);
   let s = Math.min(sw / W, sh / H);
   if (s >= 1) s = Math.floor(s * PX) / PX;
   s = Math.max(s, 0.5);
   cv.style.width = Math.round(W * s) + 'px';
   cv.style.height = Math.round(H * s) + 'px';
+  if (touch) Touch.layout();
 }
 window.addEventListener('resize', fitCanvas);
-fitCanvas();
+// NOT called here. fitCanvas() checks `Touch`, which is a const declared in a
+// later file, and `typeof` does not protect against the temporal dead zone for
+// let/const - it throws. boot() calls it once Touch exists.
 
 // ------------------------------------------------------------ bitmap font 5x7
 const GLYPHS = {
@@ -134,7 +183,7 @@ function defaultSave() {
     bossRushTimes: {},
     stats: { kos: 0, clears: 0 },
     options: { music: 7, sfx: 8, vibration: true, friendly: false, scanlines: false, flashing: true,
-      pad: null, keys: null },
+      touch: 'auto', pad: null, keys: null },
   };
 }
 let SAVE = defaultSave();
@@ -213,9 +262,13 @@ const Input = {
       now[a] = k.has(km[a]) || pb(pm[a]);
       edge[a] = e.has(km[a]);
     }
-    now.confirm = kk('Enter','Space') || k.has(km.jump) || k.has(km.attack) || pb(0);
+    // The touch layer is just a third input device. It sets the same flags, so
+    // nothing downstream - moves, menus, tests - needs to know it exists.
+    const T = typeof Touch !== 'undefined' ? Touch.take() : null;
+    if (T) for (const a of ACTIONS) if (T[a]) now[a] = true;
+    now.confirm = kk('Enter','Space') || k.has(km.jump) || k.has(km.attack) || pb(0) || !!(T && (T.attack || T.jump));
     edge.confirm = ke('Enter','Space') || e.has(km.jump) || e.has(km.attack);
-    now.cancel = kk('Escape','Backspace') || k.has(km.special) || pb(1);
+    now.cancel = kk('Escape','Backspace') || k.has(km.special) || pb(1) || !!(T && T.special);
     edge.cancel = ke('Escape','Backspace') || e.has(km.special);
     if (now.start === false && k.has('Escape')) now.start = false;
     this.anyEdge = false;
@@ -230,9 +283,16 @@ const Input = {
     }
     // escape doubles as pause
     if (e.has('Escape')) this.pressed.start = true;
-    // double taps
+    // Double taps. Directions coming from the thumbstick are deliberately
+    // EXCLUDED: a stick returns to centre constantly while you weave, and two
+    // pushes inside a fifth of a second is a normal thing to do, so counting
+    // them as a double tap breaks you into a run - or worse, a roll - when you
+    // meant to sidestep. On touch, running comes from how far the stick is
+    // pushed and rolling comes from its own button, both set explicitly below.
+    const tDir = T ? { left: T.left, right: T.right, up: T.up, down: T.down } : {};
     for (const d of ['left','right','up','down']) {
       this.dbl[d] = false;
+      if (tDir[d]) { this.lastTap[d] = undefined; continue; }
       if (this.pressed[d]) {
         const last = this.lastTap[d];
         if (last !== undefined && this.frame - last <= 14) { this.dbl[d] = true; this.lastTap[d] = undefined; }
@@ -240,6 +300,13 @@ const Input = {
         const opp = { left:'right', right:'left', up:'down', down:'up' }[d];
         this.lastTap[opp] = undefined;
       }
+    }
+    // Run and roll are read out of Input.dbl by the fight code. Pushing the
+    // stick to its edge, and the dodge button, set those flags directly rather
+    // than asking the player to double tap glass.
+    if (T) {
+      if (T.runX) this.dbl[T.runX < 0 ? 'left' : 'right'] = true;
+      if (T.dodgeY) this.dbl[T.dodgeY < 0 ? 'up' : 'down'] = true;
     }
     if (this.padNow.some((v, i) => v && !this.padPrev[i])) { this.lastDevice = 'pad'; tryResumeAudio(); }
     e.clear();
@@ -284,6 +351,291 @@ function rumble(strong, weak, ms) {
       p.vibrationActuator.playEffect('dual-rumble', { duration: ms, strongMagnitude: strong, weakMagnitude: weak });
   } catch (e) {}
 }
+// ============================================================ TOUCH CONTROLS
+// Playing this on a phone. The controls are DOM elements rather than something
+// drawn into the canvas, for two reasons: they have to sit in the black bars
+// OUTSIDE the 426x240 picture, and they must not scale with the pixel art - a
+// button that is 12 game-pixels wide is unusable however crisp it looks.
+//
+// Nothing in the fight code knows this exists. The whole layer does one job:
+// set flags that Input.poll() ORs in alongside the keyboard and the pad. So
+// every move, every menu and every test keeps working off the same `Input`.
+//
+// Michael's choices (2026-09-30): floating thumbstick, four buttons (attack,
+// jump, special, back attack) plus a dedicated dodge and a pause, controls in
+// the side bars so they never cover the picture.
+
+const TOUCH_R = 52;          // stick throw, in CSS pixels
+const TOUCH_DEAD = 0.24;     // below this the stick reads as centred
+const TOUCH_RUN = 0.72;      // push past this and you run
+const TOUCH_MIN_BAR = 88;    // a side bar narrower than this cannot hold controls
+
+const Touch = {
+  built: false, on: false, mode: 'off',
+  // st: what the game sees this frame. latch: a tap that started and finished
+  // between two ticks, which would otherwise be dropped entirely.
+  st: {}, latch: {}, down: {},
+  stick: { id: null, ox: 0, oy: 0, dx: 0, dy: 0 },
+  dodgeQ: false, seen: false,
+
+  // ---- is this a touch device at all -------------------------------------
+  capable() {
+    return ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+  },
+  wanted() {
+    const pref = SAVE.options.touch || 'auto';
+    if (pref === 'off') return false;
+    if (pref === 'on') return true;
+    return this.capable();
+  },
+
+  // ---- build the DOM once ------------------------------------------------
+  build() {
+    if (this.built) return;
+    this.built = true;
+    const mk = (tag, id, cls, parent, txt) => {
+      const e = document.createElement(tag);
+      if (id) e.id = id;
+      if (cls) e.className = cls;
+      if (txt !== undefined) e.textContent = txt;
+      (parent || document.body).appendChild(e);
+      return e;
+    };
+    const root = mk('div', 'tc', null, document.body);
+    this.root = root;
+    // the stick: a ring that appears where the thumb lands
+    this.zone = mk('div', 'tzone', null, root);
+    this.ring = mk('div', 'tring', null, root);
+    this.knob = mk('div', 'tknob', null, this.ring);
+    // the buttons. Order is the order they are laid out in the cluster.
+    this.btns = mk('div', 'tbtns', null, root);
+    // Listed nearest-thumb first, and the cluster is laid out reversed, so
+    // attack ends up in the corner where the thumb rests and back attack -
+    // the one you reach for least - ends up furthest away. Roll sits third
+    // because it is a panic button: it has to be reachable without looking.
+    const B = [
+      ['attack', 'ATK', 'b-atk'], ['jump', 'JMP', 'b-jmp'],
+      ['dodge', 'ROLL', 'b-dodge'], ['special', 'SP', 'b-sp'],
+      ['back', 'BCK', 'b-bck'],
+    ];
+    this.btnEls = B.map(([act, label, cls]) => {
+      const e = mk('div', null, 'tbtn ' + cls, this.btns, label);
+      e.dataset.act = act;
+      return e;
+    });
+    this.pause = mk('div', 'tpause', null, root, '❚❚');
+    this.pause.dataset.act = 'start';
+    this.rot = mk('div', 'trot', null, document.body, 'TURN YOUR PHONE SIDEWAYS');
+
+    // ---- input plumbing --------------------------------------------------
+    // Pointer events cover touch and mouse together, and pointerId is what
+    // makes two thumbs at once work.
+    const stop = e => { e.preventDefault(); };
+    root.addEventListener('contextmenu', stop);
+
+    const btnTargets = this.btnEls.concat([this.pause]);
+    for (const el of btnTargets) {
+      el.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        this.wake();
+        const a = el.dataset.act;
+        this.down[e.pointerId] = a;
+        this.latch[a] = true;
+        if (a === 'dodge') this.dodgeQ = true;
+        el.classList.add('lit');
+        try { el.setPointerCapture(e.pointerId); } catch (_) {}
+      });
+      const up = e => {
+        const a = this.down[e.pointerId];
+        if (a === undefined) return;
+        delete this.down[e.pointerId];
+        el.classList.remove('lit');
+      };
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+    }
+
+    this.zone.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      this.wake();
+      if (this.stick.id !== null) return;
+      this.stick.id = e.pointerId;
+      this.stick.ox = e.clientX; this.stick.oy = e.clientY;
+      this.stick.dx = 0; this.stick.dy = 0;
+      this.ring.style.left = e.clientX + 'px';
+      this.ring.style.top = e.clientY + 'px';
+      this.ring.classList.add('lit');
+      this.drawKnob();
+      try { this.zone.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    this.zone.addEventListener('pointermove', e => {
+      if (e.pointerId !== this.stick.id) return;
+      e.preventDefault();
+      let dx = e.clientX - this.stick.ox, dy = e.clientY - this.stick.oy;
+      const m = Math.hypot(dx, dy);
+      if (m > TOUCH_R) { dx = dx / m * TOUCH_R; dy = dy / m * TOUCH_R; }
+      this.stick.dx = dx; this.stick.dy = dy;
+      this.drawKnob();
+    });
+    const release = e => {
+      if (e.pointerId !== this.stick.id) return;
+      this.stick.id = null; this.stick.dx = 0; this.stick.dy = 0;
+      this.ring.classList.remove('lit');
+      this.drawKnob();
+    };
+    this.zone.addEventListener('pointerup', release);
+    this.zone.addEventListener('pointercancel', release);
+
+    this.rot.addEventListener('pointerdown', e => { e.preventDefault(); this.rot.classList.add('gone'); });
+    window.addEventListener('orientationchange', () => setTimeout(() => this.layout(), 120));
+  },
+
+  // first touch anywhere is also what unlocks audio on iOS
+  wake() {
+    tryResumeAudio();
+    Input.lastDevice = 'touch';
+    this.seen = true;
+  },
+  drawKnob() {
+    this.knob.style.transform = `translate(calc(-50% + ${this.stick.dx}px), calc(-50% + ${this.stick.dy}px))`;
+  },
+
+  // ---- show / hide and place ---------------------------------------------
+  apply() {
+    const want = this.wanted();
+    if (want) this.build();
+    this.on = want;
+    if (!this.built) return;
+    document.body.classList.toggle('touch', want);
+    this.root.style.display = want ? 'block' : 'none';
+    if (want) this.layout();
+    else this.rot.classList.add('gone');
+  },
+  // Put the stick and the buttons in whatever dead space the screen has. In
+  // landscape on a phone the picture is 16:9-ish and the screen is wider, so
+  // there is a bar each side wide enough to hold them without covering
+  // anything. A squarer screen has bars top and bottom instead. If neither is
+  // big enough the controls go over the picture, translucent, as a fallback.
+  layout() {
+    if (!this.built || !this.on) return;
+    const r = cv.getBoundingClientRect();
+    const W2 = window.innerWidth, H2 = window.innerHeight;
+    const left = r.left, right = W2 - r.right, below = H2 - r.bottom;
+    let mode;
+    if (Math.min(left, right) >= TOUCH_MIN_BAR) mode = 'bars';
+    else if (below >= 120) mode = 'below';
+    else mode = 'over';
+    this.mode = mode;
+    this.root.dataset.mode = mode;
+    // Pause lives top-left in bars mode - the top of the left bar is the only
+    // truly empty space, and the first version of this sat straight on top of
+    // the attack button.
+    this.pause.style.cssText = mode === 'bars'
+      ? 'left:6px;top:6px;right:auto'
+      : 'right:6px;top:6px;left:auto';
+
+    if (mode === 'bars') {
+      // The stick zone reaches a little over the edge of the picture on purpose:
+      // thumb reach beats purity, and there is nothing else on the canvas that
+      // wants those touches. Only the VISIBLE controls stay clear of the game.
+      this.zone.style.cssText = `left:0;top:0;width:${Math.round(r.left + 44)}px;height:100%`;
+      // A phone's side bar is about 100px, so the buttons size themselves to it
+      // and stack in one column rather than insisting on a two-wide cluster.
+      const bar = Math.round(right) - 10;
+      const column = bar < 150;
+      // Five buttons stacked have to fit the screen AND stay near the bottom
+      // corner: anything up by the top edge needs a second hand to reach.
+      const reach = Math.min(H2 - 56, 360);
+      const size = column
+        ? Math.max(44, Math.min(68, Math.floor((reach - 4 * 7) / 5), bar - 10))
+        : Math.max(46, Math.min(72, bar - 12));
+      this.btns.style.cssText = `right:5px;bottom:6px;width:${bar}px`;
+      this.setSize(size, column);
+    } else if (mode === 'below') {
+      const h = Math.round(below);
+      this.zone.style.cssText = `left:0;bottom:0;width:38%;height:${h}px`;
+      // A row of five has to fit the width it is given, or the last button
+      // hangs off the edge - which is exactly what portrait did.
+      const aw = Math.round(W2 * 0.60) - 8;
+      this.btns.style.cssText = `right:8px;bottom:8px;width:${aw}px`;
+      this.setSize(Math.max(40, Math.min(70, Math.floor((aw - 4 * 9) / 5.2), Math.round(h / 2) - 8)), false);
+    } else {
+      this.zone.style.cssText = 'left:0;top:22%;width:40%;height:78%';
+      const aw2 = Math.min(240, Math.round(W2 * 0.56));
+      this.btns.style.cssText = `right:6px;bottom:6px;width:${aw2}px`;
+      this.setSize(Math.max(40, Math.min(62, Math.floor((aw2 - 4 * 8) / 5.2))), false);
+    }
+    // portrait is playable but tiny, so say so rather than silently shipping it
+    const portrait = H2 > W2 * 1.1;
+    if (portrait) this.rot.classList.remove('gone');
+    else this.rot.classList.add('gone');
+  },
+
+  // Buttons scale to whatever room there is. `column` stacks them vertically,
+  // which is what a ~100px phone bar needs.
+  // Call this AFTER any style.cssText assignment on #tbtns - cssText replaces
+  // the entire inline declaration and would throw these away.
+  setSize(px, column) {
+    for (const el of this.btnEls) {
+      const wide = el.dataset.act === 'dodge';
+      el.style.width = (wide ? Math.round(px * 1.15) : px) + 'px';
+      el.style.height = (wide ? Math.round(px * 0.72) : px) + 'px';
+      el.style.borderRadius = (wide ? Math.round(px * 0.36) : Math.round(px / 2)) + 'px';
+      el.style.fontSize = Math.max(9, Math.round(px * 0.19)) + 'px';
+    }
+    // reversed so the first button in the list is the one nearest the thumb.
+    // flex-wrap has to be off: wrapping a reversed column re-orders it.
+    this.btns.style.flexWrap = 'nowrap';
+    this.btns.style.flexDirection = column ? 'column-reverse' : 'row-reverse';
+    this.btns.style.alignItems = column ? 'flex-end' : 'flex-end';
+    this.btns.style.gap = (column ? 7 : 10) + 'px';
+  },
+
+  // ---- what the game reads ----------------------------------------------
+  // Called once per tick from Input.poll(). Returns the flags to OR in, and
+  // clears the one-shot latches so a tap counts exactly once.
+  take() {
+    const s = this.st;
+    for (const a of ACTIONS) s[a] = false;
+    s.runX = 0; s.dodgeY = 0;
+    if (!this.on) return s;
+
+    // buttons: held right now, plus anything tapped since the last tick
+    const heldActs = {};
+    for (const id in this.down) heldActs[this.down[id]] = true;
+    for (const a of ['attack', 'jump', 'special', 'back', 'start']) {
+      if (heldActs[a] || this.latch[a]) s[a] = true;
+    }
+
+    // stick: direction, and run from how far it is pushed
+    const dx = this.stick.dx, dy = this.stick.dy;
+    const m = Math.hypot(dx, dy) / TOUCH_R;
+    if (m > TOUCH_DEAD) {
+      const ax = Math.abs(dx), ay = Math.abs(dy);
+      // generous diagonals: a lane change while walking should not need care
+      if (ax > ay * 0.45) s[dx < 0 ? 'left' : 'right'] = true;
+      if (ay > ax * 0.45) s[dy < 0 ? 'up' : 'down'] = true;
+      // Running. Michael asked to keep run on a double tap, and that still
+      // works - the stick generates real direction presses, so a flick out and
+      // back twice reads as one. But double tapping a stick you are already
+      // holding is genuinely awkward, so pushing it to the edge runs as well.
+      if (m > TOUCH_RUN && ax > ay) s.runX = dx < 0 ? -1 : 1;
+    }
+
+    // Dodge. The roll wants a direction and the game only rolls when the held
+    // direction matches the double tap, so the button supplies both: whichever
+    // way the stick is leaning, or toward the camera if it is centred.
+    if (this.dodgeQ || heldActs.dodge) {
+      const dir = (m > TOUCH_DEAD && Math.abs(dy) > Math.abs(dx) * 0.6) ? (dy < 0 ? -1 : 1) : 1;
+      s.dodgeY = dir;
+      s[dir < 0 ? 'up' : 'down'] = true;
+    }
+
+    for (const k in this.latch) this.latch[k] = false;
+    this.dodgeQ = false;
+    return s;
+  },
+};
 // ============================================================ AUDIO
 let AC = null, masterMusic = null, masterSfx = null, noiseBuf = null;
 function initAudio() {
@@ -14644,15 +14996,17 @@ function drawLightning() {
 let SCREEN = 'boot';
 let S = {};                      // per-screen state
 const SESSION = { unlocked: {}, introSeen: false };
-const BUILD = 'BUILD 14.1 - THE BAND';
+const BUILD = 'BUILD 15 - TOUCH';
 function go(name, st = {}) { SCREEN = name; S = Object.assign({ t: 0, cur: 0 }, st); Input.clearAll(); }
 
 // ------------------------------------------------------------ glyph text
 const PAD_GLYPH = { X: '#3a7ae8', Y: '#e8c020', A: '#3ab84a', B: '#e8283a' };
 function keyLabel(code) { return code.replace('Key', '').replace('Arrow', '').replace('Digit', '').replace('Enter', 'ENT').slice(0, 5); }
+const TOUCH_LABELS = { attack: 'ATK', back: 'BCK', jump: 'JMP', special: 'SP', pick: 'ATK', ally: 'PAUSE' };
 function glyphFor(tok) {
   const map = { X: 'attack', Y: 'back', A: 'jump', B: 'special', LB: 'pick', RB: 'ally' };
   const act = map[tok];
+  if (Input.lastDevice === 'touch') return { pad: false, label: TOUCH_LABELS[act] || tok };
   if (Input.lastDevice === 'pad') {
     const idx = Input.padMap()[act];
     return { pad: true, label: PAD_NAMES[idx] || tok };
@@ -15224,6 +15578,7 @@ function optionRows() {
     { id: 'friendly', label: 'FRIENDLY FIRE', val: o.friendly ? 'ON' : 'OFF' },
     { id: 'scanlines', label: 'SCANLINES', val: o.scanlines ? 'ON' : 'OFF' },
     { id: 'flashing', label: 'FLASHING LIGHTS', val: o.flashing ? 'ON' : 'OFF' },
+    { id: 'touch', label: 'TOUCH CONTROLS', val: (o.touch || 'auto').toUpperCase() },
     { id: 'controls', label: 'CONTROLS', val: '>' },
     { id: 'erase', label: 'ERASE SAVE', val: '>' },
     { id: 'back', label: 'BACK', val: '' },
@@ -15244,6 +15599,12 @@ function updateOptions() {
   if (r.id === 'friendly') { o.friendly = !o.friendly; sfx('move'); }
   if (r.id === 'scanlines') { o.scanlines = !o.scanlines; sfx('move'); }
   if (r.id === 'flashing') { o.flashing = !o.flashing; sfx('move'); }
+  if (r.id === 'touch') {
+    const seq = ['auto', 'on', 'off'];
+    const i = Math.max(0, seq.indexOf(o.touch || 'auto'));
+    o.touch = seq[(i + (h > 0 ? 1 : h < 0 ? seq.length - 1 : 1)) % seq.length];
+    Touch.apply(); fitCanvas(); sfx('move');
+  }
   if (Input.pressed.confirm) {
     if (r.id === 'controls') { sfx('ok'); go('controls', { from: S.from }); return; }
     if (r.id === 'erase') { sfx('ok'); go('erase', { from: S.from, cur: 1 }); return; }
@@ -15263,7 +15624,8 @@ function renderOptions() {
     else text(String(r.val), 304, y, '#a8a8c8', 1, 2);
     if (sel) text('→', 114, y, '#f2c94c');
   });
-  const desc = { flashing: 'STROBE AND PULSING LIGHT IN THE CLUB STAGES - TURN OFF IF IT BOTHERS YOU',
+  const desc = { touch: 'ON-SCREEN STICK AND BUTTONS FOR PHONES - AUTO SHOWS THEM ON TOUCH SCREENS ONLY',
+    flashing: 'STROBE AND PULSING LIGHT IN THE CLUB STAGES - TURN OFF IF IT BOTHERS YOU',
     friendly: 'YOU AND THE CPU PARTNER CAN HIT EACH OTHER (HALF DAMAGE)', vibration: 'XBOX CONTROLLER RUMBLE (CHROME / EDGE)', controls: 'REMAP BUTTONS AND KEYS', erase: 'DELETE ALL PROGRESS, BANK AND UPGRADES' }[rows[S.cur].id];
   if (desc) text(desc, W / 2, 200, '#8a88a8', 1, 1);
   text(Input.pad ? 'CONTROLLER: ' + Input.pad.id.slice(0, 40).toUpperCase().replace(/[^A-Z0-9 ()-]/g, '') : 'NO CONTROLLER DETECTED - PRESS A BUTTON ON IT', W / 2, 220, Input.pad ? '#5ad06a' : '#6a6688', 1, 1);
@@ -15809,6 +16171,16 @@ function frame(ts) {
 }
 function boot() {
   loadSave();
+  // The viewport meta decides whether a phone lets the page be pinched and
+  // double-tap zoomed, which would fight every swipe. The artifact build does
+  // not own the document head, so set it here either way.
+  try {
+    let mv = document.querySelector('meta[name="viewport"]');
+    if (!mv) { mv = document.createElement('meta'); mv.name = 'viewport'; document.head.appendChild(mv); }
+    mv.content = 'width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover';
+  } catch (_) {}
+  Touch.apply();
+  fitCanvas();
   clearCheats();
   go('title');
   cv.focus();

@@ -2,8 +2,8 @@
 
 **Direction:** Streets of Rage 3-style beat 'em up with Turtles in Time elements. Design: `claude/rage-circuit-plan.md`.
 
-## Current build: BUILD 14.1 — THE BAND (2026-09-26)
-- **Published artifact:** https://claude.ai/artifact/BMTcYjZFL3ivGBu94w3Php — **Version 16**. Republish `dist/rage-circuit-artifact.html` (same session) or pass that URL as `url` from another session. The URL must never change: the save lives in localStorage, which is per-origin.
+## Current build: BUILD 15 — TOUCH (2026-09-30)
+- **Published artifact:** https://claude.ai/artifact/BMTcYjZFL3ivGBu94w3Php — **Version 17**. Republish `dist/rage-circuit-artifact.html` (same session) or pass that URL as `url` from another session. The URL must never change: the save lives in localStorage, which is per-origin.
 - **Where builds go (set 2026-09-29): BOTH of these folders, every time.** Michael asked for the GitHub folder from Build 14.1 on and to keep the old one in sync, so a build is not delivered until it is in both:
   - `Documents\GitHub\Retro Games\Rage`  ← the one he works from now
   - `Desktop\Claude\Rage`  ← kept in sync
@@ -15,10 +15,41 @@
   3. Verify: `find . -type f -printf "%p %s\n" | sort` in both folders and diff the two.
 
   **Why the detour: `device_commit_files` onto a path that already has a file is not reliable here.** On 2026-09-29 it repeatedly returned `{"written":[...]}` with no rejection, gave the file a fresh mtime, and left the **previous content in place** — a silent wrong-content write, which is the worst kind, and it happened in both folders, sometimes succeeding and sometimes not on the very same path. Committing to a filename that does not exist yet worked first time, every time. So write to a new name and `mv` it into place, and never treat `{"written":[...]}` as proof: step 3 is what tells you the file actually changed. `cp` and `mv -f` inside the device VM are reliable in both directions.
-- Single HTML file, **backbuffer 854×480**, no assets, no build step at runtime. `build.sh` concatenates `p0_*` + `p1_core p2_audio p2b_band p3_poses p3b_pix p3c_props p4_data p5_fight p6_stage p6b_city p7_game` + tail.
-- **Tests: 236 checks across 9 suites, all passing, zero page errors.** `verify.js` 55 · `newfeat.js` 46 · `flow.js` 40 · `chars.js` 26 · `boss.js` 21 · `music.js` 19 · `mastery.js` 15 · `wakeloop.js` 14. Plus `playthrough.js <diff> [ally] [stage] [char]`, `playlong.js`, `pt_long.js` (same as `playthrough.js` with a 700-step budget — stage 8 needs it to reach the tally), `smoke.js`, and the screen-inspection scripts (`stageshots.js`, `pick7shot.js`, `s7shot.js`, `s7cap.js`, `s7haz.js`, `pick8shot.js`, `s8shot.js`, `s8pad.js`, `cast3.js`, `zoomfig.js`), `perf.js`.
-- **Perf at the new resolution:** ~598–627 tick+render/s headless (was ~1224 at 426×240), prewarm ~3.1 s (was ~1.55 s). Comfortably above the 60/s the game needs. The music costs nothing measurable: ~570-604/s with all 35 tracks and the master limiter in the file.
+- Single HTML file, **backbuffer 854×480**, no assets, no build step at runtime. `build.sh` concatenates `p0_*` + `p1_core p1b_touch p2_audio p2b_band p3_poses p3b_pix p3c_props p4_data p5_fight p6_stage p6b_city p7_game` + tail.
+- **Tests: 261 checks across 10 suites, all passing, zero page errors.** `verify.js` 55 · `newfeat.js` 46 · `flow.js` 40 · `chars.js` 26 · `touch.js` 25 · `boss.js` 21 · `music.js` 19 · `mastery.js` 15 · `wakeloop.js` 14. Plus `playthrough.js <diff> [ally] [stage] [char]`, `playlong.js`, `pt_long.js` (same as `playthrough.js` with a 700-step budget — stage 8 needs it to reach the tally), `smoke.js`, and the screen-inspection scripts (`stageshots.js`, `pick7shot.js`, `s7shot.js`, `s7cap.js`, `s7haz.js`, `pick8shot.js`, `s8shot.js`, `s8pad.js`, `cast3.js`, `zoomfig.js`), `perf.js`.
+- **Perf at the new resolution:** ~598–627 tick+render/s headless (was ~1224 at 426×240), prewarm ~3.1 s (was ~1.55 s). Comfortably above the 60/s the game needs. The music and the touch layer cost nothing measurable: 638-748/s at Build 15. Single runs vary by well over 100/s on this container, so never read one number as a regression - take three.
 - **`perf.js` must drain the prewarm queue before it starts timing.** Without the drain loop it reports ~44/s and looks like a catastrophic regression. This trap was documented after Build 5 but the fix had never actually been applied to the script; it is applied now.
+
+## Build 15 — touch controls, for playing it on a phone
+
+Michael's choices when asked (2026-09-30): **floating thumbstick**, **four buttons** (attack, jump, special, back attack) plus a dedicated **dodge**, run stays on a double tap, and the controls go **in the black bars beside the picture** so they never cover the game.
+
+### How it is built
+- `src/p1b_touch.js` — the whole layer. The controls are **DOM elements, not drawn into the canvas**, for two reasons: they have to sit outside the 426×240 picture, and a button sized in game pixels is unusable however crisp it is.
+- Nothing in the fight code knows it exists. `Touch.take()` returns a set of flags once per tick and `Input.poll()` ORs them in beside the keyboard and the pad, so every move, every menu and every existing test keeps working off the same `Input`. The only game-side additions are the `confirm`/`cancel` ORs and the two lines that set `Input.dbl`.
+- Layout adapts to the screen, and `Touch.mode` says which it picked: **`bars`** (phone landscape — controls in the side bars, nothing over the picture), **`below`** (tablet or portrait — a row under the picture), **`over`** (last resort, translucent over the corners).
+- Buttons are listed nearest-thumb first and laid out reversed, so **attack ends up in the bottom corner** and back attack — the least used — ends up furthest away. Roll sits third because it is a panic button.
+- `SAVE.options.touch` is `auto` / `on` / `off`, on the Options screen. `auto` shows them only on a touch screen, so nothing changes on the desktop build.
+- Portrait gets a "turn your phone sideways" overlay you can tap away. It is playable, just small.
+
+### The one place the answers had to be reconciled
+Michael asked for a thumbstick **and** for run to stay on a double tap. Those fight each other: a stick returns to centre constantly while you weave, and two pushes inside a fifth of a second is a normal thing to do — counting them as a double tap breaks you into a run, or a roll, when you meant to sidestep. The test caught it immediately.
+
+So **stick-driven directions are excluded from double-tap detection** (`tDir` in `Input.poll`), and instead:
+- **run** comes from pushing the stick past 72% of its throw, and
+- **roll** comes from the dodge button, which supplies both the direction and the `dbl` flag the fight code looks for — leaning the stick picks the direction, centred rolls toward the camera.
+
+Keyboard and pad double taps are untouched.
+
+### Traps hit while building it, all now guarded by `test/touch.js`
+- **`typeof` does NOT protect against the temporal dead zone for `let`/`const`.** `fitCanvas()` ran at load time and checked `typeof Touch !== 'undefined'`, which *threw* because `Touch` is a const declared in a later file. The whole game failed to boot and every suite reported `window.__rc` undefined. The load-time call is gone; `boot()` calls it once `Touch` exists.
+- **Assigning `style.cssText` replaces the entire inline declaration**, so it silently wiped the flex settings `setSize()` had just applied and the button order came out upside down — attack at the top of the screen, out of thumb reach. Position first, size second.
+- **`flex-wrap: wrap` re-orders a reversed column.** It has to be `nowrap` or `column-reverse` does not do what it says.
+- **The pause button sat directly on top of attack** in the first layout. It lives top-left in bars mode now, the only genuinely empty corner.
+- A row of five buttons must be **sized to the width it is given** or the last one hangs off the edge, which is what portrait did.
+
+### `test/touch.js` — 25 checks
+The suite exists because a touch bug is invisible everywhere else: every other test drives `Input.keys` directly, so the entire layer could be dead and the other 236 checks would still pass. It runs in a phone-sized context with `hasTouch`, dispatches **real pointer events at the real elements**, and then looks at what the game did — walking, running only past the threshold, diagonals, attack, jump, roll direction, two thumbs at once, pause, menus, the option turning it off. It also **measures the layout**: no visible control overlaps the canvas in bars mode, attack is nearer the thumb than back attack, everything is on screen, and the pause button is not on top of anything.
 
 ## The music overhaul (BUILD 14 — in the game)
 
