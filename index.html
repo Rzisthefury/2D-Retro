@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Games Collection</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+            padding: 40px 20px;
+        }
+
+        h1 {
+            font-size: 3.5em;
+            margin-bottom: 10px;
+            text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+            color: #ffd700;
+            letter-spacing: 2px;
+        }
+
+        .subtitle {
+            font-size: 1.2em;
+            color: #aaa;
+        }
+
+        .games-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .game-card {
+            background: linear-gradient(135deg, #0f3460 0%, #16213e 100%);
+            border: 2px solid #ffd700;
+            border-radius: 10px;
+            padding: 30px;
+            text-decoration: none;
+            color: #eee;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+
+        .game-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 15px 30px rgba(255, 215, 0, 0.2);
+            border-color: #ffed4e;
+            background: linear-gradient(135deg, #16213e 0%, #0f3460 100%);
+        }
+
+        .game-card h2 {
+            font-size: 1.8em;
+            margin-bottom: 10px;
+            color: #ffd700;
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.3);
+        }
+
+        .game-card p {
+            font-size: 1em;
+            color: #bbb;
+            margin-bottom: 15px;
+            line-height: 1.5;
+        }
+
+        .play-btn {
+            display: inline-block;
+            background: #ffd700;
+            color: #1a1a2e;
+            padding: 12px 25px;
+            border-radius: 5px;
+            font-weight: bold;
+            font-size: 1.1em;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+
+        .game-card:hover .play-btn {
+            background: #ffed4e;
+            transform: scale(1.05);
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 60px;
+            padding: 20px;
+            color: #888;
+            font-size: 0.9em;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2.5em;
+            }
+
+            .games-container {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>🎮 RETRO GAMES</h1>
+        <p class="subtitle">A Collection of Classic 2D Adventures</p>
+    </header>
+
+    <div class="games-container">
+        <a href="Aerial Finisher/aerial-finisher.html" class="game-card">
+            <h2>Aerial Finisher</h2>
+            <p>Master the skies in this fast-paced aerial combat game. Defeat enemies, unlock new abilities, and prove yourself in an open world of challenges.</p>
+            <div class="play-btn">PLAY NOW</div>
+        </a>
+
+        <a href="Arcanum Pact/arcanum-pact.html" class="game-card">
+            <h2>Arcanum Pact</h2>
+            <p>Harness ancient magic and forge powerful pacts. Navigate a mystical world filled with spells, summons, and arcane mysteries.</p>
+            <div class="play-btn">PLAY NOW</div>
+        </a>
+
+        <a href="Bomberman/detonator93.html" class="game-card">
+            <h2>Bomberman</h2>
+            <p>Classic bomb-blasting action. Navigate mazes, avoid enemies, and clear the board in this timeless puzzle-action game.</p>
+            <div class="play-btn">PLAY NOW</div>
+        </a>
+
+        <a href="Fire Emblem Game/fire-emblem.html" class="game-card">
+            <h2>Fire Emblem Game</h2>
+            <p>Strategic turn-based combat with tactical depth. Command your units across dynamic battlefields and shape your destiny.</p>
+            <div class="play-btn">PLAY NOW</div>
+        </a>
+
+        <a href="Rage/rage.html" class="game-card">
+            <h2>Rage</h2>
+            <p>Unleash your fury in this intense action game. Face relentless challenges and test your skills to the limit.</p>
+            <div class="play-btn">PLAY NOW</div>
+        </a>
+
+        <a href="Tower Defense Game/tower-defense.html" class="game-card">
+            <h2>Tower Defense Game</h2>
+            <p>Defend your territory from waves of enemies. Build towers strategically and survive increasingly difficult onslaughts.</p>
+            <div class="play-btn">PLAY NOW</div>
+        </a>
+    </div>
+
+    <footer>
+        <p>Made with Claude | Hosted on GitHub Pages</p>
+    </footer>
+</body>
+</html>
