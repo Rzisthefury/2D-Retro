@@ -121,7 +121,7 @@ async function desktop(browser) {
   await key(page, 'ArrowDown'); await key(page, 'Enter');
   const up2 = await page.evaluate(() => ({ gold: GAME.player.gold, m: GAME.player.upgrades.might, cost: GAME.upgradeCost('vitality') }));
   check('map MENU button opens the pause menu; 4 = Knight tab', opened && kt === 3, JSON.stringify({ opened, kt }));
-  check('Knight tab: Enter buys a rank at 100 x rank^2 (100, then 400), next costs 900', up1.v === 2 && up1.gold === 1500 && up2.m === 1 && up2.gold === 1400 && up2.cost === 900, JSON.stringify({ up1, up2 }));
+  check('Knight tab: Enter buys a rank at WAR.upgradeCost x rank^2 (Phase 14: 40 -> 40, then 160), next costs 360', up1.v === 2 && up1.gold === 1800 && up2.m === 1 && up2.gold === 1760 && up2.cost === 360, JSON.stringify({ up1, up2 }));
   const maxed = await page.evaluate(() => { const p = GAME.player; p.upgrades.arcana = 10; p.gold = 1e6; const g = p.gold; GAME.buyUpgrade('arcana'); return { cost: GAME.upgradeCost('arcana'), spent: g - p.gold, rank: p.upgrades.arcana }; });
   check('rank 10 is the cap: no cost, no purchase', maxed.cost === 0 && maxed.spent === 0 && maxed.rank === 10, JSON.stringify(maxed));
   await page.evaluate(() => { GAME.player.gold = 1400; });
@@ -317,7 +317,7 @@ async function phone(browser) {
   s = toPage(b, row.x, row.y); await page.touchscreen.tap(s.x, s.y); await wait(200); await page.touchscreen.tap(s.x, s.y); await wait(250);
   const r = await page.evaluate(() => ({ tab: GAME.menuTab, might: GAME.player.upgrades.might, gold: GAME.player.gold }));
   await page.screenshot({ path: OUT + '/p11-phone-knight.png' });
-  check('phone: tap MENU on the map, tap KNIGHT, tap Might twice -> rank 1 for 100 gold', open && r.tab === 3 && r.might === 1 && r.gold === 400, JSON.stringify({ open, r }));
+  check('phone: tap MENU on the map, tap KNIGHT, tap Might twice -> rank 1 for 40 gold (Phase 14 cost)', open && r.tab === 3 && r.might === 1 && r.gold === 460, JSON.stringify({ open, r }));
   s = toPage(b, 940, 32); await page.touchscreen.tap(s.x, s.y); await wait(200);
   const closed = await page.evaluate(() => ({ open: GAME.menuOpen, screen: GAME.screen }));
   await page.screenshot({ path: OUT + '/p11-phone-map.png' });

@@ -35,7 +35,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       const out = { village: troopTotal(w.defendersOf(v)), keep: troopTotal(w.defendersOf(k)), full: [w.militiaFull(v), w.militiaFull(k)] };
       // worn down, it drifts back at WAR.militiaRefill a minute
       w.nodeForce[v.id] = emptyReserve();
-      w.tickAI = () => {}; for (let i = 0; i < 60 * 4; i++) w.__proto__.tick.call(w, 0.25, GAME.player);
+      w.tickAI = () => {}; for (let i = 0; i < 61 * 4; i++) w.__proto__.tick.call(w, 0.25, GAME.player);   // 61 s: 60 leaves float dust short of the 2nd
       out.after60 = troopTotal(w.defendersOf(v));
       // the Dominion never plans an offensive against your only castle
       w.tickAI = War.prototype.tickAI;

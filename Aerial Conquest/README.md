@@ -32,6 +32,83 @@ No dependencies, no bundler, nothing to install.
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
 
+# Phase 14: balance + index.html card
+
+**How it was balanced:** a new harness, `tests/campaign14.js`, plays a
+whole Normal campaign on autopilot from New Game to the warlord, with
+the Dominion AI on.
+
+- **Strategy:** small nodes before keeps and castles, lowest tier first.
+  It attacks when the warband is nearly full, joins the defense of its
+  nodes, and recruits beaten Lords.
+- **Spending:** castles, villages and gear first, then knight upgrades,
+  keeping a buffer for recruiting. Talents go to Command first.
+- **Measures:** campaign time (map + battles) and every battle's length
+  in real campaign context.
+- **Speed:** a 3-hour campaign simulates in about 1.5 minutes, so every
+  change below was measured over whole campaigns, not guessed.
+
+**What it found, and what changed** (all in `WAR`):
+
+| problem (baseline: not won in 6 h, 66 knight deaths) | change |
+|---|---|
+| your captured villages, outposts and keeps had **0 defenders**, so any 6-unit Dominion squad retook them on arrival (50 losses, none defendable) | **militia** (new): villages 6 (+4/level), outposts 8, keeps 12 + `keepDefenders`; refills 2/min. The Dominion now has to fight for them, and you can join the defense |
+| with villages defended, the AI took the **Last Camp** itself (the warband refill empties its garrison). No castle means no production, a dead campaign | the Dominion **never targets your last castle** (new rule) |
+| knight upgrades lagged far behind tier scaling (5k gold banked, rank 7 cost 4,900) | `upgradeCost` 100 → **40** × rank² |
+| tier 4–5 **keeps** killed the knight 94 times in one run: a 150 s gate, then a 5,559 HP Captain | Captain HP 2000 → **1300**, attack 14 → **11**; `keepGateMult` 4.5 → **4.0** |
+| the **warlord** won about 5 duels per campaign against a fully geared first-run knight | HP 1500 → **1000**, attack 18 → **15**, level 20 → **16** (all four phases and both moves unchanged) |
+| villages ended in about 66 s and outposts in about 28 s (band ~2 min) | `houseHp` 800 → **1300**; outposts 50 → **90** defenders, reinforcements stream ×2 faster |
+| map waits for the warband | castle production 6 / 10 / 16 → **8 / 13 / 20** a minute (`WAR.castleProduction`; PLAN 5.2's table) |
+
+- The debug autopilot now also casts Cure below 50% HP when its MP is
+  full, as a competent player would. Before, it only drank potions.
+- **index.html:** the existing Aerial Conquest card (it said "In
+  development") now describes the finished game.
+
+**Verified**: headless Chromium. Phase 14 suite 4/4.
+
+- **DONE, landing page:** the repo root `index.html` has the Aerial
+  Conquest card; clicking it opens the game's title screen.
+- Militia raises 6 / 12 and refills 2 a minute. An empty Last Camp is
+  never a target.
+- **DONE, campaign:** six full Normal campaigns on autopilot with the
+  final settings: **168, 173, 185, 189, 192, 235 minutes**, all won (the
+  suite's own run: 185 min).
+  - Median about **187 min (3.1 h)**: map waits about 40-45 min, battles
+    the rest.
+  - The 235-minute run lost 9 duels to the warlord; he is the main
+    source of variance.
+- **Battle times in campaign context** (medians across those runs) vs
+  PLAN 10.2:
+  - villages 93-96 s (band 80-160): **in**
+  - keeps 110-126 s (120-240): **mostly in**
+  - castles 219-256 s (240-360): **at the lower edge**
+  - outposts 41-56 s (80-160): **short**. The warband floods the ring;
+    PLAN's 10 s hold is kept.
+  - defenses about 9 s. The Dominion's raids on your militia are small
+    by PLAN 8's sizing rule (70-110% of the defender).
+- **Debug battle list** (Phase 5 timing, its assumed knight ranks): 5 of
+  8 in band. Village, keep, convoy, defense and field are in. Outpost is
+  out (about 57 s) and castle is borderline (234 / 262 s). Rescue still
+  loses on autopilot, as before.
+- **Regressions:** Phases 0-13 all pass.
+  - Updated for the tuned values: Phase 7 (production rates), Phase 9
+    (the spared last castle: its targeting tests add a second, held
+    castle) and Phase 11 (upgrade cost).
+  - Phase 2's 120-unit phone check failed once more on frame gaps (53.4
+    fps with 1.0 ms of work per frame) and passed on rerun, as in Phase
+    13.
+
+**Assumed / not verified:**
+- **Human play time.** The autopilot is a stand-in. A person spends time
+  on map decisions the harness doesn't, and probably dodges better than
+  it does. Expect roughly 2.5-3.5 h on Normal; only a real playthrough
+  will tell.
+- Easy and Hard weren't run through whole campaigns; their multipliers
+  are PLAN's.
+- Field, convoy and rescue battles don't come up in the harness's
+  strategy, so they're tuned only on the debug list.
+
 # Phase 13: music war layer, touch polish, phone caps
 
 **What changed** (PLAN 13 music; PLAN 10.1 / 15 touch):
