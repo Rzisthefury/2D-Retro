@@ -43,7 +43,7 @@ canvas{width:100%;display:block;image-rendering:pixelated;image-rendering:crisp-
 .dim{color:var(--dim)}
 .good{color:var(--good)}.bad{color:var(--bad)}.lem{color:var(--lemon)}
 .step{display:flex;align-items:center;gap:6px;margin:6px 0}
-.step .lbl{width:150px}
+.step .lbl{width:120px}
 .step .val{min-width:64px;text-align:center;font-size:24px;color:var(--lemon)}
 .bar{height:12px;background:#120d24;border:2px solid var(--line);position:relative;margin-top:3px}
 .bar i{position:absolute;left:0;top:0;bottom:0;background:var(--good)}
@@ -67,6 +67,26 @@ th{font-family:'Press Start 2P',monospace;font-size:9px;color:var(--dim);font-we
 .ladder span{font-family:'Press Start 2P',monospace;font-size:8px;padding:6px;border:2px solid var(--line);background:var(--panel2);color:var(--dim)}
 .ladder span.done{color:var(--good)}
 .ladder span.cur{background:var(--lemon);color:var(--line)}
+#tip{position:fixed;z-index:70;display:none;pointer-events:none;background:#0d0a1a;border:2px solid var(--lemon2);padding:6px 8px;font-size:18px;line-height:1.2;max-width:260px}
+.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:8px}
+.chart{background:#1f1838;border:3px solid var(--line);padding:8px 8px 4px}
+.chart svg{width:100%;height:auto;display:block}
+.ctitle{font-family:'Press Start 2P',monospace;font-size:9px;color:var(--ink);margin-bottom:2px}
+.cnote{font-size:16px;color:var(--dim)}
+.clegend{display:flex;flex-wrap:wrap;gap:10px;font-size:17px;color:var(--dim);margin:2px 0}
+.clegend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.ax{fill:#b8aee0;font-family:VT323,monospace;font-size:14px}
+.hit{fill:transparent;cursor:crosshair}.hit:hover{fill:rgba(255,255,255,.07)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;margin-bottom:8px}
+.kpi{background:#1f1838;border:3px solid var(--line);padding:6px 8px}
+.kpi .k{font-family:'Press Start 2P',monospace;font-size:8px;color:var(--dim)}
+.kpi .v{font-size:28px;color:var(--ink)}
+.kpi .s{font-size:15px;color:var(--dim)}
+.tscroll{overflow-x:auto}
+.tscroll td,.tscroll th{white-space:nowrap;font-size:17px}
+.warn{border-color:var(--lemon2)}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:middle;border:1px solid #000}
+@media (max-width:600px){.charts{grid-template-columns:1fr}}
 @media (max-width:600px){html,body{font-size:18px}.step .lbl{width:110px}.btn.big{font-size:12px}}
 </style>
 </head>
@@ -102,6 +122,8 @@ const TYPES={
  tourist:{name:'Tourists',      col:'#ffb347',max:2.60,L:4,B:1, ice:0, heat:1.1,stop:1.20,speed:12,pat:28},
  senior: {name:'Seniors',       col:'#c9b6e4',max:1.20,L:4,B:0, ice:-2,heat:0.8,stop:1.00,speed:9, pat:40},
 };
+const PINK_PREF={kid:{a:0.60,B:4},tourist:{a:0.50,B:3},senior:{a:0.25,B:2},office:{a:0.20,B:3},jogger:{a:0.15,B:3}};
+const PINK_HINT={kid:'Pink lemonade fans: most kids order it. Like it extra berry (about 4 berries).',tourist:'Order pink about half the time. About 3 berries.',senior:'Sometimes order pink. Prefer it light on berries (about 2).',office:'Rarely order pink. About 3 berries.',jogger:'Almost never order pink. About 3 berries.'};
 const NB_HINTS={
  kid:{taste:'Like it SWEET: light on lemons, heavy on sugar (about 3 lemons / 5 sugar).',more:'Love extra ice. Rarely pay much over $0.80 unless it is scorching.'},
  jogger:{taste:'Like it TART and STRONG: lots of lemon, less sugar (about 5 lemons / 4 sugar).',more:'Want extra ice. Will pay around $1.30. Get very thirsty on hot days.'},
@@ -121,6 +143,7 @@ const SUP={
  sugar: {name:'Sugar', ic:'🧂',unit:'cups',packs:[[10,0.80],[40,2.80],[100,6.00]]},
  ice:   {name:'Ice',   ic:'🧊',unit:'cubes',packs:[[50,1.00],[200,3.20],[500,7.00]]},
  cups:  {name:'Cups',  ic:'🥤',packs:[[50,1.00],[200,3.50],[500,7.50]]},
+ berries:{name:'Strawberries',ic:'🍓',tier:1,packs:[[10,1.50],[40,5.00],[100,11.00]]},
 };
 const UPG=[
  {id:'juicer', name:'Hand Juicer',  tier:0,cost:15, desc:'Serve customers 20% faster.'},
@@ -143,11 +166,11 @@ const TIERS=[
   goals:[{t:'Serve 250 cups total',v:s=>s.life.cups,n:250},
          {t:'Earn $200 in total sales',v:s=>s.life.revenue,n:200,m:1},
          {t:'Reach 2★ reputation',v:s=>stars(s.rep),n:2}],
-  unlock:'Wooden Cart: move between 4 locations, hire a helper, 6 new upgrades, bigger loans.'},
+  unlock:'Wooden Cart: PINK LEMONADE on the menu, move between 4 locations, hire a helper, 6 new upgrades, bigger loans.'},
  {name:'Wooden Cart',service:5,attract:0.06,loan:400,music:1,next:1500,
   goals:[{t:'Serve 1,500 cups total',v:s=>s.life.cups,n:1500},
          {t:'Reach 4★ reputation',v:s=>stars(s.rep),n:4},
-         {t:'Make $90 profit in one day',v:s=>s.life.best,n:90,m:1},
+         {t:'Make $90 operating profit in one day',v:s=>s.life.best,n:90,m:1},
          {t:'Sell at 3 different locations',v:s=>s.life.locs.length,n:3}],
   unlock:'Kiosk'},
  {name:'Kiosk',future:true},{name:'Café',future:true},{name:'Franchise',future:true},{name:'Bottling Co.',future:true},{name:'Global Brand',future:true},
@@ -161,8 +184,8 @@ const WX={
 };
 const WX_ORDER=['heat','sunny','partly','cloudy','rain'];
 const WAGE=10;
-const COMPLAINTS={sour:'Too sour',sweet:'Too sweet',watery:'Watery',strong:'Too strong',moreice:'Needs ice',icy:'Too icy',pricey:'Too pricey',slow:'Line too slow',soldout:'Sold out'};
-const ADVICE={sour:'Add sugar or use fewer lemons.',sweet:'Use less sugar.',watery:'Add more lemons per pitcher.',strong:'Use fewer lemons per pitcher.',moreice:'Add ice per cup. Hot days want more ice.',icy:'Use less ice per cup.',pricey:'Lower the price, or find a richer crowd.',slow:'Line moved too slowly. Buy faster equipment or hire a helper.',soldout:'You ran out! Stock up before opening.'};
+const COMPLAINTS={sour:'Too sour',sweet:'Too sweet',watery:'Watery',strong:'Too strong',moreice:'Needs ice',icy:'Too icy',pricey:'Too pricey',slow:'Line too slow',soldout:'Sold out',berry:'Needs more berries',berrymuch:'Too much berry'};
+const ADVICE={sour:'Add sugar or use fewer lemons.',sweet:'Use less sugar.',watery:'Add more lemons per pitcher.',strong:'Use fewer lemons per pitcher.',moreice:'Add ice per cup. Hot days want more ice.',icy:'Use less ice per cup.',pricey:'Lower the price, or find a richer crowd.',slow:'Line moved too slowly. Buy faster equipment or hire a helper.',soldout:'You ran out! Stock up before opening.',berry:'Add strawberries to the pink recipe.',berrymuch:'Use fewer strawberries in the pink recipe.'};
 
 /* ================= state ================= */
 let S=null;           // saved game state
@@ -174,7 +197,8 @@ const FLOATS=[];
 let clouds=[],rain=[];
 
 function newState(){
- const s={v:1,day:1,cash:20,rep:10,tier:0,loc:'maple',inv:{lemons:0,sugar:0,ice:0,cups:0},
+ const s={v:1,day:1,cash:20,rep:10,tier:0,loc:'maple',inv:{lemons:0,sugar:0,ice:0,cups:0,berries:0},pink:{on:false,L:4,S:4,B:3,price:1.25},
+  avgCost:{lemons:0.10,sugar:0.08,ice:0.02,cups:0.02,berries:0.15},spentBy:{sup:0,upg:0,fee:0},hist:[],
   recipe:{L:4,S:4,ice:3},price:0.75,upg:{},helper:false,loan:0,spent:0,
   life:{cups:0,revenue:0,best:0,locs:[],days:0},nb:{kid:0,jogger:0,office:0,tourist:0,senior:0},
   wx:{k:'sunny',temp:82},fc:{k:'sunny',temp:82},lastReport:null,grandma:0};
@@ -191,30 +215,33 @@ function genWeather(){
  resetSky();
 }
 function tierDef(){return TIERS[S.tier];}
-function attract(){let a=tierDef().attract;if(S.upg.sign)a+=0.10;if(S.upg.banner)a+=0.12;if(S.upg.parasol&&(S.wx.k==='sunny'||S.wx.k==='heat'))a+=0.10;return a;}
+function attract(){let a=tierDef().attract;if(S.upg.sign)a+=0.10;if(S.upg.banner)a+=0.12;if(S.upg.parasol&&(S.wx.k==='sunny'||S.wx.k==='heat'))a+=0.10;if(S.tier>=1&&S.pink.on)a+=0.08;return a;}
 function serviceTime(){let t=tierDef().service;if(S.upg.juicer)t*=0.8;if(S.upg.press)t*=0.75;if(S.helper)t*=0.65;return t;}
 function mixTime(){return S.upg.rack?5:10;}
 function thirst(type,temp,wk){let th=clamp((temp-50)/40,0.15,1.2)*TYPES[type].heat;if(wk==='rain')th*=0.7;return Math.min(th,1.4);}
-function tolerance(type){const th=thirst(type,S.wx.temp,S.wx.k);return TYPES[type].max*(0.75+0.45*th)*(1+S.rep/250);}
+function tolerance(type,prod){const th=thirst(type,S.wx.temp,S.wx.k);return TYPES[type].max*(0.75+0.45*th)*(1+S.rep/250)*(prod==='pink'?1.2:1);}
 function iceIdeal(type,temp){return clamp(Math.round((temp-52)/8)+TYPES[type].ice,0,6);}
-function rateCup(type){
- const t=TYPES[type],r=S.recipe;
- const dL=r.L-t.L,dB=(r.S-r.L)-t.B,dI=r.ice-iceIdeal(type,S.wx.temp);
+function rateCup(type,prod){
+ const t=TYPES[type],pink=prod==='pink',r=pink?S.pink:S.recipe;
+ const dL=r.L-t.L,dB=(r.S-r.L)-t.B,dI=S.recipe.ice-iceIdeal(type,S.wx.temp);
  const pL=Math.max(0,Math.abs(dL)-0.5)*13,pB=Math.max(0,Math.abs(dB)-0.5)*13,pI=Math.max(0,Math.abs(dI)-0.5)*8;
- const ratio=S.price/tolerance(type);const pP=Math.max(0,ratio-0.6)*45;
- let sat=clamp(100-pL-pB-pI-pP+(S.upg.shaver?6:0),0,100);
+ const dR=pink?r.B-PINK_PREF[type].B:0,pR=Math.max(0,Math.abs(dR)-0.5)*10;
+ const ratio=(pink?S.pink.price:S.price)/tolerance(type,prod);const pP=Math.max(0,ratio-0.6)*45;
+ let sat=clamp(100-pL-pB-pI-pR-pP+(S.upg.shaver?6:0),0,100);
  let worst=null,wv=0;
  if(pL>wv){wv=pL;worst=dL<0?'watery':'strong';}
  if(pB>wv){wv=pB;worst=dB<0?'sour':'sweet';}
  if(pI>wv){wv=pI;worst=dI<0?'moreice':'icy';}
+ if(pR>wv){wv=pR;worst=dR<0?'berry':'berrymuch';}
  if(pP>wv){wv=pP;worst='pricey';}
  return {sat,worst};
 }
-function costPerCup(){const r=S.recipe;return r.L*0.10/12+r.S*0.08/12+r.ice*0.02+0.02;}
-function cupsPossible(){
- const r=S.recipe,i=S.inv;
- const pitchers=Math.min(Math.floor(i.lemons/r.L),r.S>0?Math.floor(i.sugar/r.S):999);
- return Math.min(pitchers*12,r.ice>0?Math.floor(i.ice/r.ice):99999,i.cups);
+function costPerCup(prod){const r=prod==='pink'?S.pink:S.recipe;return r.L*0.10/12+r.S*0.08/12+(prod==='pink'?r.B*0.15/12:0)+S.recipe.ice*0.02+0.02;}
+function cupsPossible(prod){
+ const pink=prod==='pink',r=pink?S.pink:S.recipe,i=S.inv;
+ let pitchers=Math.min(Math.floor(i.lemons/r.L),r.S>0?Math.floor(i.sugar/r.S):999);
+ if(pink)pitchers=Math.min(pitchers,r.B>0?Math.floor(i.berries/r.B):999);
+ return Math.min(pitchers*12,S.recipe.ice>0?Math.floor(i.ice/S.recipe.ice):99999,i.cups);
 }
 function goalsMet(){const t=tierDef();if(!t.goals)return false;return t.goals.every(g=>g.v(S)>=g.n);}
 
@@ -225,7 +252,7 @@ function lsSet(k,v){try{localStorage.setItem(SKEY+k,v);return true;}catch(e){ret
 function slotInfo(k){const raw=lsGet(k);if(!raw)return null;try{const s=JSON.parse(raw);return s;}catch(e){return null;}}
 function validState(s){return s&&s.v===1&&s.inv&&s.recipe&&s.life&&typeof s.cash==='number';}
 function saveTo(k){const ok=lsSet(k,JSON.stringify(Object.assign({},S,{savedAt:Date.now()})));return ok;}
-function loadState(s){S=Object.assign(newState(),s);S.life=Object.assign(newState().life,s.life);S.nb=Object.assign(newState().nb,s.nb);phase='prep';tab='supplies';resetSky();AMB.length=0;FLOATS.length=0;playMusic(tierDef().music);renderAll();}
+function loadState(s){const N0=newState();S=Object.assign(N0,s);['inv','pink','avgCost','spentBy'].forEach(k=>S[k]=Object.assign(newState()[k],s[k]||{}));if(!Array.isArray(S.hist))S.hist=[];S.life=Object.assign(newState().life,s.life);S.nb=Object.assign(newState().nb,s.nb);phase='prep';tab='supplies';resetSky();AMB.length=0;FLOATS.length=0;playMusic(tierDef().music);renderAll();}
 
 /* ================= audio ================= */
 const AU={ctx:null,master:null,mus:null,sfx:null,musicOn:true,sfxOn:true,track:-1,step:0,nextT:0,timer:null};
@@ -394,7 +421,7 @@ function drawPerson(g,c){
  if(c.type==='kid'){P(g,lx+1,hy-1,w-2,2,L.cap);P(c.dir>0?g:g,c.dir>0?lx+w-1:lx-1,hy,2,1,L.cap);}
  if(c.type==='tourist'){P(g,lx-1,hy,w+2,1,'#f5e6a8');P(g,lx+1,hy-2,w-2,2,'#f5e6a8');}
  if(c.type==='senior'){P(g,x+(c.dir>0?5:-5),y-10,1,10,'#6b4423');P(g,x+(c.dir>0?4:-5),y-10,2,1,'#6b4423');}
- if(c.cup){P(g,c.dir>0?lx+w:lx-2,ty+2,2,3,'#fff');P(g,c.dir>0?lx+w:lx-2,ty+2,2,1,'#ffd83a');}
+ if(c.cup){P(g,c.dir>0?lx+w:lx-2,ty+2,2,3,'#fff');P(g,c.dir>0?lx+w:lx-2,ty+2,2,1,c.cup==='pink'?'#ff7fb0':'#ffd83a');}
 }
 function drawSeller(g,x,y){P(g,x-3,y,7,8,'#ffd83a');P(g,x-2,y-6,5,6,'#f6d2b0');P(g,x-2,y-7,5,2,'#6b4423');P(g,x+1,y-4,1,1,'#222');P(g,x-3,y-8,7,2,'#e53935');}
 function drawLemon(g,x,y,r){E(g,x,y,r+1,r,'#ffd83a');P(g,x-r,y-1,2,1,'#fff3a8');P(g,x+r,y,2,1,'#f5a623');P(g,x-1,y-r-2,3,2,'#4caf50');}
@@ -420,7 +447,8 @@ function drawStand(g){
   drawLemon(g,200,173,5);
   D(g,182,188,6,'#3a2a1a');D(g,182,188,4,'#8a5528');P(g,181,187,3,3,'#ccc');D(g,218,188,6,'#3a2a1a');D(g,218,188,4,'#8a5528');P(g,217,187,3,3,'#ccc');
   P(g,176,151,5,7,'#fff');P(g,206,145,10,13,'#9ad3f0');P(g,207,146,8,11,'#e7f7ff');const h=Math.round(10*clamp(pit/12,0,1));if(h>0)P(g,207,157-h,8,h,'#ffe46b');
-  if(u.press){P(g,188,150,6,8,'#888');P(g,190,146,2,4,'#555');}
+  if(S&&S.pink&&S.pink.on){const pp=G?G.pitcherP:12;P(g,194,147,9,11,'#9ad3f0');P(g,195,148,7,9,'#e7f7ff');const hp=Math.round(8*clamp(pp/12,0,1));if(hp>0)P(g,195,157-hp,7,hp,'#ff8fb8');}
+  if(u.press){P(g,186,150,6,8,'#888');P(g,188,146,2,4,'#555');}
   if(u.tipjar){P(g,220,152,6,6,'#cfeeff');P(g,221,155,4,2,'#6be36b');}
   if(u.chest||u.cooler){P(g,232,174,18,14,u.chest?'#1e88e5':'#f2f8ff');P(g,232,172,18,3,u.chest?'#0d5aa7':'#4fa3e0');}
  }
@@ -475,9 +503,9 @@ function spawnWalker(list,type){
 }
 function startDay(){
  const loc=locById(S.loc);const fees=loc.permit+(S.helper?WAGE:0);
- if(S.cash<fees){toast('You need '+fmt(fees)+' for today\'s permit'+(S.helper?' and helper wage':'')+'.');sfx('err');return;}
+ if(S.cash<fees){toast('You need '+fmt(fees)+' for today\'s permit'+(S.helper?' and helper wage':'')+'. Borrow from the Bank, or set up on Maple Street for free.');sfx('err');return;}
  if(cupsPossible()<1){toast('Buy supplies first. You can\'t make a single cup.');sfx('err');return;}
- S.cash-=fees;S.spent+=fees;
+ S.cash-=fees;S.spent+=fees;S.spentBy.fee+=fees;
  AMB.length=0;
  const wm=WX[S.wx.k].m*(loc.beach?({sunny:1.15,heat:1.2,partly:0.95,cloudy:0.6,rain:0.5}[S.wx.k]):1);
  const N=Math.round(loc.traffic*wm*rnd(0.9,1.1));
@@ -486,15 +514,16 @@ function startDay(){
   if(r<0.5)t=rnd(0,DAY_LEN);else if(r<0.8)t=270+gauss()*70;else t=540+gauss()*35;
   spawns.push(clamp(t,0,DAY_LEN-15));}
  spawns.sort((a,b)=>a-b);
- G={cust:[],queue:[],time:0,speed:1,spawns,pitcher:0,serveT:0,mixT:0,soldOut:false,soldWhy:'',fees,
+ G={cust:[],queue:[],time:0,speed:1,spawns,pitcher:0,pitcherP:0,pitcherCost:0,pitcherPCost:0,pinkOut:false,cogs:0,sold:{lem:0,pink:0},serveT:0,mixT:0,soldOut:false,soldWhy:'',fees,
   st:{walkers:0,stopped:0,served:0,revenue:0,tips:0,sat:0,refused:0,slow:0,soldLost:0,c:{sour:0,sweet:0,watery:0,strong:0,moreice:0,icy:0,pricey:0,slow:0,soldout:0},byType:{}},
-  log:[],used:{lemons:0,sugar:0,ice:0,cups:0},liveT:0};
+  log:[],used:{lemons:0,sugar:0,ice:0,cups:0,berries:0},liveT:0};
  phase='day';sfx('day');renderAll();
 }
 function gauss(){return (Math.random()+Math.random()+Math.random()-1.5)*1.4;}
 function say(c,txt,col){c.bub={txt,col,t:1.6};}
 function addLog(txt,cls){G.log.unshift('<span class="'+(cls||'')+'">'+clockStr(G.time)+' — '+txt+'</span>');if(G.log.length>7)G.log.pop();}
 function queueSpot(i){return {x:244+i*13,y:192};}
+function bt(type){const b=G.st.byType;return b[type]||(b[type]={n:0,sat:0,stop:0,ref:0,slow:0,lost:0,c:{}});}
 function decide(c){
  c.decided=true;if(G.time>=DAY_LEN)return;
  const t=TYPES[c.type],th=thirst(c.type,S.wx.temp,S.wx.k);
@@ -502,38 +531,49 @@ function decide(c){
  if(G.queue.length>=5)p*=0.5;
  p=Math.min(p,0.92);
  if(Math.random()>=p)return;
- G.st.stopped++;
- if(G.soldOut){say(c,'Sold out?','#ff6b6b');G.st.soldLost++;G.st.c.soldout++;return;}
- if(S.price>tolerance(c.type)){say(c,'$$$?!','#ff6b6b');addLog(TYPES[c.type].name.replace(/s$/,'')+' walked off: too pricey','bad');G.st.refused++;G.st.c.pricey++;sfx('bad');return;}
+ const b=bt(c.type);G.st.stopped++;b.stop++;
+ c.prod=(S.tier>=1&&S.pink.on&&!G.pinkOut&&Math.random()<PINK_PREF[c.type].a)?'pink':'lem';
+ if(G.soldOut){say(c,'Sold out?','#ff6b6b');G.st.soldLost++;G.st.c.soldout++;b.lost++;return;}
+ if(c.prod==='pink'&&S.pink.price>tolerance(c.type,'pink')&&S.price<=tolerance(c.type,'lem'))c.prod='lem';
+ const price=c.prod==='pink'?S.pink.price:S.price;
+ if(price>tolerance(c.type,c.prod)){say(c,'$$$?!','#ff6b6b');addLog(TYPES[c.type].name.replace(/s$/,'')+' walked off: too pricey','bad');G.st.refused++;G.st.c.pricey++;b.ref++;sfx('bad');return;}
  if(G.queue.length>=8){say(c,'Busy!','#888');return;}
  c.state='toQueue';c.wait=0;G.queue.push(c);
 }
 function setSoldOut(why){
  if(G.soldOut)return;G.soldOut=true;G.soldWhy=why;addLog('SOLD OUT — out of '+why+'!','bad');sfx('err');
- for(const c of G.queue){say(c,'Sold out?','#ff6b6b');c.state='leave';c.dir=Math.random()<.5?1:-1;G.st.soldLost++;G.st.c.soldout++;}
+ for(const c of G.queue){say(c,'Sold out?','#ff6b6b');c.state='leave';c.dir=Math.random()<.5?1:-1;G.st.soldLost++;G.st.c.soldout++;bt(c.type).lost++;}
  G.queue.length=0;
 }
 function tryServe(){
- const r=S.recipe,i=S.inv;
- if(G.pitcher<=0){
-  if(i.lemons<r.L){setSoldOut('lemons');return;}
-  if(i.sugar<r.S){setSoldOut('sugar');return;}
-  i.lemons-=r.L;i.sugar-=r.S;G.used.lemons+=r.L;G.used.sugar+=r.S;G.pitcher=12;G.mixT=mixTime();if(G.speed<=4)sfx('pour');return;
+ const c=G.queue[0],i=S.inv;
+ if(c.prod==='pink'&&G.pinkOut)c.prod='lem';
+ const pink=c.prod==='pink',rc=pink?S.pink:S.recipe,pk=pink?'pitcherP':'pitcher';
+ if(G[pk]<=0){
+  if(i.lemons<rc.L||i.sugar<rc.S||(pink&&i.berries<rc.B)){
+   if(pink){G.pinkOut=true;addLog('Out of pink lemonade. Pink orders switch to lemonade.','bad');c.prod='lem';return;}
+   setSoldOut(i.lemons<rc.L?'lemons':'sugar');return;
+  }
+  i.lemons-=rc.L;i.sugar-=rc.S;G.used.lemons+=rc.L;G.used.sugar+=rc.S;
+  let cost=rc.L*S.avgCost.lemons+rc.S*S.avgCost.sugar;
+  if(pink){i.berries-=rc.B;G.used.berries+=rc.B;cost+=rc.B*S.avgCost.berries;}
+  G.cogs+=cost;G[pk+'Cost']=cost/12;G[pk]=12;G.mixT=mixTime();if(G.speed<=4)sfx('pour');return;
  }
  if(i.cups<1){setSoldOut('cups');return;}
- if(i.ice<r.ice){setSoldOut('ice');return;}
- const c=G.queue.shift();
- G.pitcher--;i.cups--;i.ice-=r.ice;G.used.cups++;G.used.ice+=r.ice;
- const {sat,worst}=rateCup(c.type);
- let rev=S.price,tip=0;if(S.upg.tipjar&&sat>=80)tip=Math.round(S.price*0.15*100)/100;
- S.cash+=rev+tip;G.st.revenue+=rev;G.st.tips+=tip;G.st.served++;G.st.sat+=sat;
- G.st.byType[c.type]=G.st.byType[c.type]||{n:0,sat:0};G.st.byType[c.type].n++;G.st.byType[c.type].sat+=sat;
+ if(i.ice<S.recipe.ice){setSoldOut('ice');return;}
+ G.queue.shift();
+ G[pk]--;i.cups--;i.ice-=S.recipe.ice;G.used.cups++;G.used.ice+=S.recipe.ice;G.cogs+=S.avgCost.cups+S.recipe.ice*S.avgCost.ice;
+ const {sat,worst}=rateCup(c.type,c.prod);
+ const price=pink?S.pink.price:S.price;
+ let rev=price,tip=0;if(S.upg.tipjar&&sat>=80)tip=Math.round(price*0.15*100)/100;
+ S.cash+=rev+tip;G.st.revenue+=rev;G.st.tips+=tip;G.st.served++;G.st.sat+=sat;G.sold[c.prod]++;
+ const b=bt(c.type);b.n++;b.sat+=sat;if(sat<70&&worst)b.c[worst]=(b.c[worst]||0)+1;
  S.nb[c.type]++;
- if(S.nb[c.type]===10||S.nb[c.type]===30)toast('Notebook updated: '+TYPES[c.type].name+'!');
+ if(S.nb[c.type]===10||S.nb[c.type]===30||(S.tier>=1&&S.nb[c.type]===50))toast('Notebook updated: '+TYPES[c.type].name+'!');
  if(sat>=85)say(c,'Perfect!','#2e9e2e');else if(sat>=70)say(c,'Yum!','#2e9e2e');
- else{const lbl={sour:'Sour!',sweet:'Sweet!',watery:'Watery',strong:'Strong!',moreice:'+Ice!',icy:'Icy!',pricey:'Pricey'}[worst]||'Meh';say(c,lbl,sat<45?'#e53935':'#c77700');if(worst)G.st.c[worst]++;}
- addLog(TYPES[c.type].name.replace(/s$/,'')+': '+c.bub.txt+' ('+Math.round(sat)+'%)',sat>=70?'good':sat>=45?'lem':'bad');
- c.cup=true;c.state='leave';c.dir=Math.random()<.5?1:-1;
+ else{const lbl={sour:'Sour!',sweet:'Sweet!',watery:'Watery',strong:'Strong!',moreice:'+Ice!',icy:'Icy!',pricey:'Pricey',berry:'Berries?',berrymuch:'Too berry'}[worst]||'Meh';say(c,lbl,sat<45?'#e53935':'#c77700');if(worst)G.st.c[worst]=(G.st.c[worst]||0)+1;}
+ addLog(TYPES[c.type].name.replace(/s$/,'')+(pink?' (pink)':'')+': '+c.bub.txt+' ('+Math.round(sat)+'%)',sat>=70?'good':sat>=45?'lem':'bad');
+ c.cup=pink?'pink':true;c.state='leave';c.dir=Math.random()<.5?1:-1;
  if(G.speed<=4&&FLOATS.length<12)FLOATS.push({txt:'+'+fmt(rev+tip),x:STAND_X,y:140,col:'#6be36b',t:1});
  if(G.speed<=4)sfx('coin');
 }
@@ -553,7 +593,7 @@ function simStep(d){
    if(dist>1){const m=Math.min(dist,c.speed*1.2*d);c.x+=dx/dist*m;c.y+=dy/dist*m;c.moving=true;c.dir=dx>=0?1:-1;}
    else{c.x=sp.x;c.y=sp.y;c.moving=false;c.state='queue';c.dir=-1;}
    if(c.wait>TYPES[c.type].pat*patMul&&qi>0){
-    G.queue.splice(qi,1);c.state='leave';c.dir=1;say(c,'Too slow!','#c77700');addLog(TYPES[c.type].name.replace(/s$/,'')+' left the line: too slow','bad');G.st.slow++;G.st.c.slow++;
+    G.queue.splice(qi,1);c.state='leave';c.dir=1;say(c,'Too slow!','#c77700');addLog(TYPES[c.type].name.replace(/s$/,'')+' left the line: too slow','bad');G.st.slow++;G.st.c.slow++;bt(c.type).slow++;
    }
   }else if(c.state==='leave'){moveWalker(c,d);c.y+=(c.y<170?d*4:0);}
  }
@@ -587,7 +627,6 @@ function tick(dt){
 
 function endDay(){
  const st=G.st,loc=locById(S.loc);
- const profit=st.revenue+st.tips-S.spent;
  const avg=st.served?st.sat/st.served:0;
  let dRep=st.served?(avg-60)/40*Math.min(6,1.5+st.served*0.08):-0.5;
  if(dRep>0)dRep*=(1-S.rep/120);
@@ -595,19 +634,123 @@ function endDay(){
  if(S.rep>50)dRep-=(S.rep-50)*0.03;
  dRep=clamp(dRep,-8,8);
  const oldStars=stars(S.rep);S.rep=clamp(S.rep+dRep,0,100);
- S.life.cups+=st.served;S.life.revenue+=st.revenue+st.tips;S.life.days++;
- if(profit>S.life.best)S.life.best=profit;
- if(st.served>0&&!S.life.locs.includes(S.loc))S.life.locs.push(S.loc);
- let repaid=0;if(S.loan>0){repaid=Math.min(S.loan,Math.round((st.revenue+st.tips)*0.25*100)/100,S.cash);S.loan=Math.round((S.loan-repaid)*100)/100;S.cash-=repaid;}
- const poured=G.pitcher;
+ const rev=st.revenue+st.tips;
+ const poured=G.pitcher+G.pitcherP,pouredVal=G.pitcher*G.pitcherCost+G.pitcherP*G.pitcherPCost;
  const spoilRate=S.upg.crate?0.03:0.10;const spoiled=Math.floor(S.inv.lemons*spoilRate);S.inv.lemons-=spoiled;
  const keep=S.upg.chest?0.9:S.upg.cooler?0.5:0;const melted=S.inv.ice-Math.floor(S.inv.ice*keep);S.inv.ice-=melted;
- const rep={day:S.day,loc:loc.name,wx:Object.assign({},S.wx),fc:Object.assign({},S.fc),st:JSON.parse(JSON.stringify(st)),profit,spent:S.spent,avg,dRep,stars:stars(S.rep),oldStars,repaid,poured,spoiled,melted,soldWhy:G.soldOut?G.soldWhy:''};
- S.lastReport=rep;S.spent=0;S.day++;
+ const ingr=G.cogs-pouredVal,waste=pouredVal+spoiled*S.avgCost.lemons+melted*S.avgCost.ice,fees=G.fees,op=ingr+waste+fees,profit=rev-op,cashflow=rev-S.spent;
+ S.life.cups+=st.served;S.life.revenue+=rev;S.life.days++;
+ if(profit>S.life.best)S.life.best=profit;
+ if(st.served>0&&!S.life.locs.includes(S.loc))S.life.locs.push(S.loc);
+ let repaid=0;if(S.loan>0){repaid=Math.min(S.loan,Math.round(rev*0.25*100)/100,S.cash);S.loan=Math.round((S.loan-repaid)*100)/100;S.cash-=repaid;}
+ const r2=v=>Math.round(v*100)/100;
+ S.hist.push({d:S.day,loc:S.loc,wx:S.wx.k,temp:S.wx.temp,rev:r2(rev),spend:r2(S.spent),sSup:r2(S.spentBy.sup),sUpg:r2(S.spentBy.upg),sFee:r2(S.spentBy.fee),
+  ingr:r2(ingr),waste:r2(waste),fees:r2(fees),op:r2(op),profit:r2(profit),cash:r2(S.cash),cups:st.served,pink:G.sold.pink,walkers:st.walkers,stopped:st.stopped,
+  sat:Math.round(avg),rep:Math.round(S.rep*10)/10,price:S.price});
+ if(S.hist.length>400)S.hist.shift();
+ const rep={day:S.day,loc:loc.name,wx:Object.assign({},S.wx),fc:Object.assign({},S.fc),st:JSON.parse(JSON.stringify(st)),profit,cashflow,rev,op,ingr,waste,fees,pinkSold:G.sold.pink,
+  spent:S.spent,avg,dRep,stars:stars(S.rep),oldStars,repaid,poured,spoiled,melted,soldWhy:G.soldOut?G.soldWhy:''};
+ S.lastReport=rep;S.spent=0;S.spentBy={sup:0,upg:0,fee:0};S.day++;
  G=null;phase='report';
  genWeather();
  sfx('day');showReport(rep);renderAll();
 }
+function typeWarnings(st){
+ const out=[];
+ for(const k in st.byType){const b=st.byType[k],nm=TYPES[k].name,avg=b.n?b.sat/b.n:100;
+  if(b.ref>=3&&b.ref>=b.stop*0.4)out.push([k,nm+' are avoiding you: your price is too high for them ('+b.ref+' walked off).']);
+  else if(b.slow>=3)out.push([k,nm+' are giving up on your line ('+b.slow+' left before being served). Serve faster.']);
+  else if(b.n>=3&&avg<55){const top=Object.keys(b.c).sort((x,y)=>b.c[y]-b.c[x])[0];out.push([k,nm+' didn\'t like it (avg '+Math.round(avg)+'%)'+(top?', mostly "'+COMPLAINTS[top]+'". '+ADVICE[top]:'.')]);}
+  if(b.lost>=3)out.push([k,nm+' found you sold out '+b.lost+' times.']);
+ }
+ return out;
+}
+/* ================= stats & charts ================= */
+const CC=['#3987e5','#d95926','#199e70','#c98500'],C_LOSS='#e66767',C_SURF='#1f1838';
+let statRange=14,statTable=false;
+function niceTicks(lo,hi,n){const span=hi-lo||1,step0=span/n,mag=Math.pow(10,Math.floor(Math.log10(step0))),e=step0/mag;const step=(e>=7.5?10:e>=3.5?5:e>=1.5?2:1)*mag;const a=Math.floor(lo/step+1e-9)*step,b=Math.ceil(hi/step-1e-9)*step;const t=[];for(let v=a;v<=b+step*0.01;v+=step)t.push(Math.round(v*1e6)/1e6);if(t.length<2)t.push(a+step);return t;}
+function barPath(x,w,ya,yb,c,round){
+ const top=Math.min(ya,yb),h=Math.abs(ya-yb);if(h<0.5)return '';
+ const r=round?Math.min(3,w/2,h):0;
+ if(!r)return '<rect x="'+x.toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+h.toFixed(1)+'" fill="'+c+'"/>';
+ if(yb<ya)return '<path d="M'+x+','+ya+'V'+(top+r)+'Q'+x+','+top+' '+(x+r)+','+top+'H'+(x+w-r)+'Q'+(x+w)+','+top+' '+(x+w)+','+(top+r)+'V'+ya+'Z" fill="'+c+'"/>';
+ return '<path d="M'+x+','+ya+'H'+(x+w)+'V'+(yb-r)+'Q'+(x+w)+','+yb+' '+(x+w-r)+','+yb+'H'+(x+r)+'Q'+x+','+yb+' '+x+','+(yb-r)+'Z" fill="'+c+'"/>';
+}
+function chart(o){
+ const rows=o.rows,n=rows.length,VW=600,VH=190,pl=50,pr=10,pt=10,pb=24,pw=VW-pl-pr,ph=VH-pt-pb;
+ const vals=o.series.map(sr=>rows.map(r=>sr.f(r)));
+ let lo=0,hi=0;
+ if(o.kind==='stack'){for(let i=0;i<n;i++)hi=Math.max(hi,vals.reduce((a,v)=>a+Math.max(0,v[i]||0),0));}
+ else vals.forEach(v=>v.forEach(x=>{if(isFinite(x)){lo=Math.min(lo,x);hi=Math.max(hi,x);}}));
+ if(o.ref!=null){hi=Math.max(hi,o.ref.v);lo=Math.min(lo,o.ref.v);}
+ if(o.yMax!=null)hi=Math.max(hi,o.yMax);
+ if(hi===lo)hi=lo+1;
+ const ticks=niceTicks(lo,hi,4);lo=ticks[0];hi=ticks[ticks.length-1];
+ const y=v=>pt+ph-(v-lo)/(hi-lo)*ph,bw=pw/n,xc=i=>pl+bw*(i+0.5);
+ let g='';
+ for(const t of ticks)g+='<line x1="'+pl+'" x2="'+(VW-pr)+'" y1="'+y(t)+'" y2="'+y(t)+'" stroke="'+(t===0?'#6d6297':'#33295a')+'" stroke-width="1"/><text x="'+(pl-6)+'" y="'+(y(t)+4)+'" text-anchor="end" class="ax">'+o.fmt(t)+'</text>';
+ if(o.ref)g+='<line x1="'+pl+'" x2="'+(VW-pr)+'" y1="'+y(o.ref.v)+'" y2="'+y(o.ref.v)+'" stroke="#fff7d6" stroke-width="1.5" stroke-dasharray="5 4"/><text x="'+(VW-pr-2)+'" y="'+(y(o.ref.v)-4)+'" text-anchor="end" class="ax" style="fill:#fff7d6">'+o.ref.label+'</text>';
+ const step=Math.max(1,Math.ceil(n/10));
+ for(let i=0;i<n;i++)if(i%step===0||i===n-1)g+='<text x="'+xc(i)+'" y="'+(VH-6)+'" text-anchor="middle" class="ax">'+rows[i].d+'</text>';
+ if(o.kind==='group'||o.kind==='bar'){
+  const k=o.series.length,inner=Math.max(2,bw*0.72),w=Math.max(1,(inner-(k-1)*2)/k);
+  for(let i=0;i<n;i++)o.series.forEach((sr,j)=>{const v=vals[j][i];if(!isFinite(v))return;const x=pl+bw*i+(bw-inner)/2+j*(w+2);
+   const col=o.signColor&&v<0?C_LOSS:sr.c;g+=barPath(x,w,y(0),y(v),col,true);});
+ }else if(o.kind==='stack'){
+  const inner=Math.max(2,bw*0.72);
+  for(let i=0;i<n;i++){let acc=0;const last=o.series.map((sr,j)=>vals[j][i]>0?j:-1).reduce((a,b)=>Math.max(a,b),-1);
+   o.series.forEach((sr,j)=>{const v=Math.max(0,vals[j][i]||0);if(v<=0)return;const ya=y(acc)-(acc>0?1:0),yb=y(acc+v)+(j===last?0:1);acc+=v;if(ya-yb>0.5)g+=barPath(pl+bw*i+(bw-inner)/2,inner,ya,yb,sr.c,j===last);});}
+ }else{
+  o.series.forEach((sr,j)=>{let d='';vals[j].forEach((v,i)=>{if(!isFinite(v))return;d+=(d?'L':'M')+xc(i).toFixed(1)+','+y(v).toFixed(1);});
+   g+='<path d="'+d+'" fill="none" stroke="'+sr.c+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+   if(n<=31)vals[j].forEach((v,i)=>{if(isFinite(v))g+='<circle cx="'+xc(i)+'" cy="'+y(v)+'" r="4" fill="'+sr.c+'" stroke="'+C_SURF+'" stroke-width="2"/>';});});
+ }
+ for(let i=0;i<n;i++){const r=rows[i];
+  const tip='<b>Day '+r.d+'</b> · '+locById(r.loc).name+' · '+WX[r.wx].ic+' '+r.temp+'°F'+o.series.map((sr,j)=>'<br><i class=&quot;dot&quot; style=&quot;background:'+sr.c+'&quot;></i>'+sr.n+': <b>'+(isFinite(vals[j][i])?o.fmt(vals[j][i],true):'—')+'</b>').join('');
+  g+='<rect class="hit" x="'+(pl+bw*i)+'" y="'+pt+'" width="'+bw+'" height="'+ph+'" data-tip="'+tip+'"/>';}
+ const leg=o.series.length>1||o.signColor?'<div class="clegend">'+o.series.map(sr=>'<span><i style="background:'+sr.c+'"></i>'+sr.n+'</span>').join('')+(o.signColor?'<span><i style="background:'+C_LOSS+'"></i>Loss</span>':'')+'</div>':'';
+ return '<div class="chart"><div class="ctitle">'+o.title+'</div>'+leg+'<svg viewBox="0 0 '+VW+' '+VH+'" role="img" aria-label="'+o.title+'">'+g+'</svg>'+(o.note?'<div class="cnote">'+o.note+'</div>':'')+'</div>';
+}
+const f$=(v)=>Math.abs(v)>=1000?(v<0?'-':'')+'$'+(Math.abs(v)/1000).toFixed(1)+'k':(v<0?'-':'')+'$'+Math.abs(v).toFixed(Math.abs(v)<10&&v%1?2:0);
+const f$t=(v,tip)=>tip?fmt(v):f$(v);
+const fpct=v=>Math.round(v)+'%';
+function statsTab(){
+ const Hh=S.hist||[];
+ if(!Hh.length)return '<p class="dim">Finish your first day to see your charts.</p>';
+ const d=statRange?Hh.slice(-statRange):Hh;
+ const sum=k=>d.reduce((a,r)=>a+(r[k]||0),0);
+ const rev=sum('rev'),spend=sum('spend'),op=sum('op'),pr=sum('profit'),cups=sum('cups'),walk=sum('walkers'),stop=sum('stopped'),waste=sum('waste');
+ const roas=op>0?rev/op:0,margin=rev>0?pr/rev:0,sat=cups?d.reduce((a,r)=>a+r.sat*r.cups,0)/cups:0;
+ const kpi=(k,v,sub,cls)=>'<div class="kpi"><div class="k">'+k+'</div><div class="v '+(cls||'')+'">'+v+'</div><div class="s">'+sub+'</div></div>';
+ let h='<div class="row between" style="margin-bottom:8px"><div class="row">'+[[7,'7 DAYS'],[14,'14 DAYS'],[30,'30 DAYS'],[0,'ALL']].map(([v,l])=>'<button class="btn sm '+(statRange===v?'on':'')+'" data-a="srange" data-v="'+v+'">'+l+'</button>').join('')+
+  '</div><button class="btn sm alt" data-a="stable">'+(statTable?'📈 CHARTS':'▦ TABLE')+'</button></div>';
+ h+='<div class="kpis">'+kpi('REVENUE',fmt0(rev),d.length+' days')+kpi('SPEND',fmt0(spend),'cash out')+kpi('OP. COST',fmt0(op),'waste '+fmt0(waste))+
+  kpi('PROFIT',fmt0(pr),fmt(pr/d.length)+'/day',pr>=0?'good':'bad')+kpi('ROAS',roas.toFixed(2)+'x','revenue ÷ op. cost',roas>=1?'good':'bad')+kpi('MARGIN',Math.round(margin*100)+'%','profit ÷ revenue',margin>=0?'good':'bad')+
+  kpi('STOP RATE',walk?Math.round(stop/walk*100)+'%':'—','your CTR')+kpi('BUY RATE',walk?Math.round(cups/walk*100)+'%':'—','cups ÷ passers-by')+kpi('CUPS',cups.toLocaleString(),Math.round(cups/d.length)+'/day')+kpi('SATISFACTION',Math.round(sat)+'%','cup-weighted')+'</div>';
+ if(statTable){
+  h+='<div class="tscroll"><table><tr>'+['DAY','PLACE','WEATHER','REVENUE','SPEND','OP COST','WASTE','PROFIT','ROAS','MARGIN','CUPS','STOP %','SAT','REP','CASH'].map(x=>'<th>'+x+'</th>').join('')+'</tr>'+
+   d.slice().reverse().map(r=>'<tr><td>'+r.d+'</td><td>'+locById(r.loc).name+'</td><td>'+WX[r.wx].ic+' '+r.temp+'°</td><td>'+fmt(r.rev)+'</td><td>'+fmt(r.spend)+'</td><td>'+fmt(r.op)+'</td><td>'+fmt(r.waste)+'</td><td class="'+(r.profit>=0?'good':'bad')+'">'+fmt(r.profit)+'</td><td>'+(r.op>0?(r.rev/r.op).toFixed(2)+'x':'—')+'</td><td>'+(r.rev>0?Math.round(r.profit/r.rev*100)+'%':'—')+'</td><td>'+r.cups+'</td><td>'+(r.walkers?Math.round(r.stopped/r.walkers*100):0)+'%</td><td>'+r.sat+'%</td><td>'+r.rep+'</td><td>'+fmt(r.cash)+'</td></tr>').join('')+'</table></div>';
+  return h;
+ }
+ const anyPink=d.some(r=>r.pink>0);
+ h+='<div class="charts">';
+ h+=chart({title:'REVENUE vs SPEND',kind:'group',rows:d,fmt:f$t,series:[{n:'Revenue',c:CC[0],f:r=>r.rev},{n:'Spend (cash out)',c:CC[1],f:r=>r.spend}],note:'Spend spikes on days you stock up in bulk or buy upgrades.'});
+ h+=chart({title:'DAILY PROFIT',kind:'bar',signColor:true,rows:d,fmt:f$t,series:[{n:'Profit',c:CC[0],f:r=>r.profit}],note:'Revenue minus operating cost (ingredients used, waste, permit and wages).'});
+ h+=chart({title:'ROAS',kind:'line',rows:d,fmt:(v,t)=>(t?v.toFixed(2):(+v.toFixed(1)))+'x',ref:{v:1,label:'break-even 1.0x'},series:[{n:'ROAS',c:CC[0],f:r=>r.op>0?r.rev/r.op:NaN}],note:'Revenue ÷ operating cost. Above 1.0x you\'re making money.'});
+ h+=chart({title:'OPERATING COST BREAKDOWN',kind:'stack',rows:d,fmt:f$t,series:[{n:'Ingredients used',c:CC[0],f:r=>r.ingr},{n:'Permit & wages',c:CC[1],f:r=>r.fees},{n:'Waste',c:CC[2],f:r=>r.waste}],note:'Waste = melted ice, spoiled lemons and lemonade poured out at closing.'});
+ h+=chart({title:'PROFIT MARGIN',kind:'line',rows:d,fmt:v=>Math.round(v)+'%',ref:{v:0,label:'0%'},series:[{n:'Margin',c:CC[0],f:r=>r.rev>0?r.profit/r.rev*100:NaN}],note:'Profit ÷ revenue.'});
+ h+=chart({title:'FUNNEL: STOP RATE & BUY RATE',kind:'line',rows:d,fmt:v=>Math.round(v)+'%',series:[{n:'Stop rate (CTR)',c:CC[0],f:r=>r.walkers?r.stopped/r.walkers*100:NaN},{n:'Buy rate',c:CC[1],f:r=>r.walkers?r.cups/r.walkers*100:NaN}],note:'The gap between them = people put off by price, the line, or a sell-out.'});
+ h+=chart({title:'CUPS SOLD',kind:anyPink?'stack':'bar',rows:d,fmt:v=>Math.round(v)+'',series:anyPink?[{n:'Lemonade',c:CC[0],f:r=>r.cups-r.pink},{n:'Pink lemonade',c:CC[1],f:r=>r.pink}]:[{n:'Cups',c:CC[0],f:r=>r.cups}]});
+ h+=chart({title:'AVG PRICE vs COST PER CUP',kind:'line',rows:d,fmt:f$t,series:[{n:'Revenue per cup',c:CC[0],f:r=>r.cups?r.rev/r.cups:NaN},{n:'Op. cost per cup',c:CC[1],f:r=>r.cups?r.op/r.cups:NaN}],note:'The space between the lines is your profit on each cup.'});
+ h+=chart({title:'SATISFACTION & REPUTATION',kind:'line',rows:d,fmt:v=>Math.round(v)+'',yMax:100,series:[{n:'Satisfaction %',c:CC[0],f:r=>r.cups?r.sat:NaN},{n:'Reputation (0–100)',c:CC[1],f:r=>r.rep}]});
+ h+=chart({title:'CASH ON HAND',kind:'line',rows:d,fmt:f$t,series:[{n:'Cash',c:CC[0],f:r=>r.cash}],note:'End of day, after loan repayment.'});
+ return h+'</div><p class="dim">Hover or tap any day for exact numbers. Day numbers run along the bottom.</p>';
+}
+var tipEl=document.createElement('div');tipEl.id='tip';document.body.appendChild(tipEl);
+function tipMove(e){const h=e.target&&e.target.closest?e.target.closest('[data-tip]'):null;if(!h){tipEl.style.display='none';return;}
+ tipEl.innerHTML=h.getAttribute('data-tip');tipEl.style.display='block';
+ const x=Math.min(e.clientX+14,innerWidth-tipEl.offsetWidth-8),yy=e.clientY+16+tipEl.offsetHeight>innerHeight?e.clientY-tipEl.offsetHeight-10:e.clientY+16;tipEl.style.left=Math.max(4,x)+'px';tipEl.style.top=yy+'px';}
+document.addEventListener('pointermove',tipMove);document.addEventListener('pointerdown',tipMove);
 
 /* ================= UI ================= */
 function toast(msg){document.querySelectorAll('.toast').forEach(x=>x.remove());const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600);}
@@ -624,7 +767,7 @@ function renderHud(){
 function audioBtns(){return '<button class="btn sm '+(AU.musicOn?'on':'')+'" data-a="music" title="Music">♪</button><button class="btn sm '+(AU.sfxOn?'on':'')+'" data-a="sfx" title="Sound effects">SFX</button>';}
 function renderAll(){renderHud();renderPanel();}
 function renderPanel(){
- const p=$('#panel');
+ const p=$('#panel');if(window.tipEl)tipEl.style.display='none';
  if(phase==='title'){
   const auto=slotInfo('auto');
   p.innerHTML='<div class="row" style="justify-content:center;gap:12px;padding:10px">'+
@@ -644,8 +787,8 @@ function renderPanel(){
  // prep
  const fcw=WX[S.fc.k];
  const can=cupsPossible();
- const tabs=[['supplies','SUPPLIES'],['recipe','RECIPE & PRICE'],['upgrades','UPGRADES'],['location','LOCATION'],['staff','STAFF'],['goals','GOALS'+(goalsMet()&&!TIERS[S.tier+1].future?' ★':'')],['notebook','NOTEBOOK'],['bank','BANK']];
- let h='<div class="row between"><div class="fc"><span class="ic">'+fcw.ic+'</span><div><div class="pf" style="font-size:9px;color:var(--dim)">FORECAST · DAY '+S.day+'</div><div style="font-size:24px">'+fcw.n+', '+S.fc.temp+'°F</div><div class="dim">'+locById(S.loc).name+' · can make <b class="'+(can>0?'lem':'bad')+'">'+can+'</b> cups</div></div></div>'+
+ const tabs=[['supplies','SUPPLIES'],['recipe','RECIPE & PRICE'],['upgrades','UPGRADES'],['location','LOCATION'],['staff','STAFF'],['goals','GOALS'+(goalsMet()&&!TIERS[S.tier+1].future?' ★':'')],['stats','📊 STATS'],['notebook','NOTEBOOK'],['bank','BANK']];
+ let h='<div class="row between"><div class="fc"><span class="ic">'+fcw.ic+'</span><div><div class="pf" style="font-size:9px;color:var(--dim)">FORECAST · DAY '+S.day+'</div><div style="font-size:24px">'+fcw.n+', '+S.fc.temp+'°F</div><div class="dim">'+locById(S.loc).name+' · can make <b class="'+(can>0?'lem':'bad')+'">'+can+'</b> cups'+(S.tier>=1&&S.pink.on?' + <b style="color:#ff8fb8">'+cupsPossible('pink')+'</b> pink':'')+'</div></div></div>'+
   '<button class="btn big grn" data-a="open">OPEN STAND ▶</button></div>';
  h+='<div class="tabs">'+tabs.map(([k,l])=>'<div class="tab '+(tab===k?'act':'')+'" data-a="tab" data-v="'+k+'">'+l+'</div>').join('')+'</div>';
  h+='<div id="tabbody">'+tabBody()+'</div>';
@@ -655,21 +798,31 @@ function tabBody(){
  if(tab==='supplies'){
   let h='<table><tr><th>ITEM</th><th>STOCK</th><th>BUY</th></tr>';
   for(const k in SUP){const s=SUP[k];
+   if(s.tier&&s.tier>S.tier){h+='<tr class="dim"><td>'+s.ic+' '+s.name+'</td><td>—</td><td>Unlocks with the '+TIERS[s.tier].name+' (pink lemonade)</td></tr>';continue;}
    h+='<tr><td>'+s.ic+' '+s.name+'</td><td><b class="lem" style="font-size:24px">'+S.inv[k]+'</b></td><td><div class="row">'+
     s.packs.map((pk,i)=>'<button class="btn sm" data-a="buy" data-v="'+k+':'+i+'" '+(S.cash<pk[1]?'disabled':'')+'>'+pk[0]+' · '+fmt(pk[1])+'</button>').join('')+'</div></td></tr>';}
-  h+='</table><p class="dim">Each pitcher makes 12 cups and uses your recipe\'s lemons + sugar. Every cup uses 1 cup + your ice. '+
+  h+='</table><p class="dim">Each pitcher makes 12 cups and uses your recipe\'s lemons + sugar'+(S.tier>=1?' (+ strawberries for pink)':'')+'. Every cup uses 1 cup + your ice. '+
    '<span class="bad">Ice melts overnight</span>'+(S.upg.cooler||S.upg.chest?' (your '+(S.upg.chest?'chest keeps 90%':'cooler keeps 50%')+')':'')+'. Lemons spoil '+(S.upg.crate?'3%':'10%')+' per night. Big packs are cheaper per unit.</p>';
   return h;
  }
  if(tab==='recipe'){
-  const r=S.recipe,cpc=costPerCup();
-  const stp=(lbl,key,unit)=>'<div class="step"><span class="lbl">'+lbl+'</span><button class="btn sm" data-a="rec" data-v="'+key+':-1">−</button><span class="val">'+r[key]+'</span><button class="btn sm" data-a="rec" data-v="'+key+':1">+</button><span class="dim">'+unit+'</span></div>';
-  let h='<div class="grid"><div class="card"><div class="h">RECIPE</div>'+stp('🍋 Lemons','L','per pitcher')+stp('🧂 Sugar','S','per pitcher')+stp('🧊 Ice','ice','cubes per cup')+'</div>';
-  h+='<div class="card"><div class="h">PRICE</div><div class="step"><button class="btn sm" data-a="price" data-v="-0.25">−.25</button><button class="btn sm" data-a="price" data-v="-0.05">−.05</button><span class="val">'+fmt(S.price)+'</span><button class="btn sm" data-a="price" data-v="0.05">+.05</button><button class="btn sm" data-a="price" data-v="0.25">+.25</button></div>'+
-   '<div>Cost per cup ≈ <b class="lem">'+fmt(cpc)+'</b> · Profit per cup ≈ <b class="'+(S.price-cpc>0?'good':'bad')+'">'+fmt(S.price-cpc)+'</b></div><div class="dim" style="margin-top:4px">Cost uses small-pack prices.</div></div></div>';
-  h+='<p class="dim">Read the speech bubbles. Each crowd likes it differently, and hot days want more ice. Your <b>Notebook</b> fills in as you serve each customer type.</p>';
+  const r=S.recipe,cpc=costPerCup('lem');
+  const stp=(lbl,act,key,val,unit)=>'<div class="step"><span class="lbl">'+lbl+'</span><button class="btn sm" data-a="'+act+'" data-v="'+key+':-1">−</button><span class="val">'+val+'</span><button class="btn sm" data-a="'+act+'" data-v="'+key+':1">+</button><span class="dim">'+unit+'</span></div>';
+  const pstp=(act,val)=>'<div class="step"><button class="btn sm" data-a="'+act+'" data-v="-0.25">−.25</button><button class="btn sm" data-a="'+act+'" data-v="-0.05">−.05</button><span class="val">'+fmt(val)+'</span><button class="btn sm" data-a="'+act+'" data-v="0.05">+.05</button><button class="btn sm" data-a="'+act+'" data-v="0.25">+.25</button></div>';
+  let h='<div class="grid"><div class="card"><div class="h">🍋 LEMONADE</div>'+stp('Lemons','rec','L',r.L,'per pitcher')+stp('Sugar','rec','S',r.S,'per pitcher')+stp('🧊 Ice','rec','ice',r.ice,'cubes per cup (all drinks)')+
+   '<div class="h" style="margin-top:8px">PRICE</div>'+pstp('price',S.price)+
+   '<div>Cost per cup ≈ <b class="lem">'+fmt(cpc)+'</b> · Profit per cup ≈ <b class="'+(S.price-cpc>0?'good':'bad')+'">'+fmt(S.price-cpc)+'</b></div></div>';
+  if(S.tier>=1){const pr=S.pink,pc=costPerCup('pink');
+   h+='<div class="card '+(pr.on?'own':'')+'"><div class="row between"><div class="h" style="color:#ff8fb8">🍓 PINK LEMONADE</div><button class="btn sm '+(pr.on?'grn':'')+'" data-a="pinkon">'+(pr.on?'ON MENU ✔':'OFF MENU')+'</button></div>'+
+    stp('Lemons','prec','L',pr.L,'per pitcher')+stp('Sugar','prec','S',pr.S,'per pitcher')+stp('🍓 Berries','prec','B',pr.B,'per pitcher')+
+    '<div class="h" style="margin-top:8px">PRICE</div>'+pstp('pprice',pr.price)+
+    '<div>Cost per cup ≈ <b class="lem">'+fmt(pc)+'</b> · Profit per cup ≈ <b class="'+(pr.price-pc>0?'good':'bad')+'">'+fmt(pr.price-pc)+'</b></div>'+
+    '<div class="dim" style="margin-top:4px">Customers pay up to ~20% more for pink. Having two drinks on the menu also draws more people in. If pink runs out, pink fans buy regular lemonade instead.</div></div>';
+  }else h+='<div class="card locked"><div class="h">🍓 PINK LEMONADE</div>Unlocks with the Wooden Cart. A second drink that kids and tourists love and that sells at a premium.</div>';
+  h+='</div><p class="dim">Read the speech bubbles. Each crowd likes it differently, and hot days want more ice. Your <b>Notebook</b> fills in as you serve each customer type. Cost per cup uses small-pack prices.</p>';
   return h;
  }
+ if(tab==='stats')return statsTab();
  if(tab==='upgrades'){
   let h='<div class="grid">';
   for(const u of UPG){const own=S.upg[u.id],lockT=u.tier>S.tier,lockR=u.req&&!S.upg[u.req];
@@ -712,7 +865,7 @@ function tabBody(){
   for(const k in TYPES){const t=TYPES[k],n=S.nb[k];
    h+='<div class="card"><div class="row between"><div class="h" style="color:'+t.col+'">'+t.name.toUpperCase()+'</div><span class="dim">served '+n+'</span></div>'+
     '<div>'+(n>=10?'🍋 '+NB_HINTS[k].taste:'<span class="dim">??? Serve '+(10-n)+' more to learn their taste.</span>')+'</div>'+
-    '<div style="margin-top:4px">'+(n>=30?'💡 '+NB_HINTS[k].more:'<span class="dim">??? Serve '+Math.max(0,30-n)+' more to learn more.</span>')+'</div></div>';}
+    '<div style="margin-top:4px">'+(n>=30?'💡 '+NB_HINTS[k].more:'<span class="dim">??? Serve '+Math.max(0,30-n)+' more to learn more.</span>')+'</div>'+(S.tier>=1?'<div style="margin-top:4px">'+(n>=50?'🍓 '+PINK_HINT[k]:'<span class="dim">??? Serve '+Math.max(0,50-n)+' more to learn their pink taste.</span>')+'</div>':'')+'</div>';}
   return h+'</div><p class="dim">General rule: the hotter the day, the more ice everyone wants (about +1 cube for every 8°F above 52°F). Hot days also make people willing to pay more. Higher reputation brings more customers and lets you charge a bit more.</p>';
  }
  if(tab==='bank'){
@@ -729,35 +882,40 @@ function tabBody(){
  return '';
 }
 function renderLive(){
- const el=$('#live');if(!el||!G)return;const st=G.st,i=S.inv;
+ const el=$('#live');if(!el||!G)return;const st=G.st,i=S.inv,pinkOn=S.tier>=1&&S.pink.on;
  const sat=st.served?Math.round(st.sat/st.served)+'%':'—';
  el.innerHTML='<div class="livegrid">'+
-  '<span class="chip">🕒 '+clockStr(G.time)+'</span><span class="chip">🥤 Sold <b>'+st.served+'</b></span><span class="chip">💵 <b>'+fmt(st.revenue+st.tips)+'</b></span><span class="chip">😊 <b>'+sat+'</b></span>'+
-  '<span class="chip">🍋 <b>'+i.lemons+'</b></span><span class="chip">🧂 <b>'+i.sugar+'</b></span><span class="chip">🧊 <b>'+i.ice+'</b></span><span class="chip">🥤 cups <b>'+i.cups+'</b></span>'+
-  '<span class="chip">🫗 Pitcher <b>'+G.pitcher+'/12</b></span><span class="chip">👥 Line <b>'+G.queue.length+'</b></span><span class="chip">🚶 Passed <b>'+st.walkers+'</b></span><span class="chip">'+WX[S.wx.k].ic+' <b>'+S.wx.temp+'°F</b></span>'+
+  '<span class="chip">🕒 '+clockStr(G.time)+'</span><span class="chip">🥤 Sold <b>'+st.served+'</b>'+(pinkOn?' <span style="color:#ff8fb8">('+G.sold.pink+' pink)</span>':'')+'</span><span class="chip">💵 <b>'+fmt(st.revenue+st.tips)+'</b></span><span class="chip">😊 <b>'+sat+'</b></span>'+
+  '<span class="chip">🍋 <b>'+i.lemons+'</b></span><span class="chip">🧂 <b>'+i.sugar+'</b></span><span class="chip">🧊 <b>'+i.ice+'</b></span><span class="chip">🥤 cups <b>'+i.cups+'</b></span>'+(pinkOn?'<span class="chip">🍓 <b>'+i.berries+'</b></span>':'')+
+  '<span class="chip">🫗 Pitcher <b>'+G.pitcher+'/12</b></span>'+(pinkOn?'<span class="chip">🫗 Pink <b>'+(G.pinkOut?'OUT':G.pitcherP+'/12')+'</b></span>':'')+'<span class="chip">👥 Line <b>'+G.queue.length+'</b></span><span class="chip">🚶 Passed <b>'+st.walkers+'</b></span><span class="chip">'+WX[S.wx.k].ic+' <b>'+S.wx.temp+'°F</b></span>'+
   '</div><div id="log" class="card" style="margin-top:8px">'+(G.log.length?G.log.join('<br>'):'<span class="dim">Customers will come and go. Watch their bubbles.</span>')+'</div>';
 }
 function showReport(r){
  const st=r.st,c=st.c;
  const comp=Object.keys(c).filter(k=>c[k]>0).sort((a,b)=>c[b]-c[a]);
  const top=comp[0];
- const byT=Object.entries(st.byType).map(([k,v])=>'<span style="color:'+TYPES[k].col+'">'+TYPES[k].name+' '+Math.round(v.sat/v.n)+'% ('+v.n+')</span>').join(' · ');
+ const byT=Object.entries(st.byType).filter(([k,v])=>v.n>0).map(([k,v])=>'<span><i class="dot" style="background:'+TYPES[k].col+'"></i>'+TYPES[k].name+' '+Math.round(v.sat/v.n)+'% ('+v.n+')</span>').join(' · ');
+ const roas=r.op>0?r.rev/r.op:0,margin=r.rev>0?r.profit/r.rev:0;
  let h='<div class="h" style="font-size:13px">DAY '+r.day+' REPORT</div><div class="dim">'+r.loc+' · '+WX[r.wx.k].ic+' '+WX[r.wx.k].n+' '+r.wx.temp+'°F <span style="font-size:16px">(forecast: '+WX[r.fc.k].n+' '+r.fc.temp+'°F)</span></div>';
- h+='<table style="margin:8px 0"><tr><td>Passers-by</td><td>'+st.walkers+'</td><td>Stopped</td><td>'+st.stopped+'</td></tr>'+
-  '<tr><td>Cups sold</td><td class="lem">'+st.served+'</td><td>Avg satisfaction</td><td class="'+(r.avg>=70?'good':r.avg>=50?'lem':'bad')+'">'+(st.served?Math.round(r.avg)+'%':'—')+'</td></tr>'+
-  '<tr><td>Sales</td><td>'+fmt(st.revenue)+'</td><td>Tips</td><td>'+fmt(st.tips)+'</td></tr>'+
-  '<tr><td>Spent today</td><td>'+fmt(r.spent)+'</td><td><b>PROFIT</b></td><td class="'+(r.profit>=0?'good':'bad')+'" style="font-size:24px">'+fmt(r.profit)+'</td></tr></table>';
- h+='<div>Reputation: <b class="'+(r.dRep>=0?'good':'bad')+'">'+(r.dRep>=0?'+':'')+r.dRep.toFixed(1)+'</b> → <span class="lem">'+'★'.repeat(r.stars)+'☆'.repeat(5-r.stars)+'</span>'+(r.stars>r.oldStars?' <b class="good">STAR UP!</b>':r.stars<r.oldStars?' <b class="bad">star lost</b>':'')+'</div>';
+ h+='<table style="margin:8px 0"><tr><td>Passers-by</td><td>'+st.walkers+'</td><td>Stopped</td><td>'+st.stopped+' <span class="dim">('+(st.walkers?Math.round(st.stopped/st.walkers*100):0)+'%)</span></td></tr>'+
+  '<tr><td>Cups sold</td><td class="lem">'+st.served+(r.pinkSold?' <span style="color:#ff8fb8">('+r.pinkSold+' pink)</span>':'')+'</td><td>Avg satisfaction</td><td class="'+(r.avg>=70?'good':r.avg>=50?'lem':'bad')+'">'+(st.served?Math.round(r.avg)+'%':'—')+'</td></tr>'+
+  '<tr><td>Revenue</td><td>'+fmt(r.rev)+(st.tips?' <span class="dim">(tips '+fmt(st.tips)+')</span>':'')+'</td><td>Spent today</td><td>'+fmt(r.spent)+'</td></tr>'+
+  '<tr><td>Operating cost</td><td>'+fmt(r.op)+'</td><td><b>PROFIT</b></td><td class="'+(r.profit>=0?'good':'bad')+'" style="font-size:24px">'+fmt(r.profit)+'</td></tr>'+
+  '<tr><td>ROAS</td><td class="'+(roas>=1?'good':'bad')+'">'+roas.toFixed(2)+'x</td><td>Margin</td><td class="'+(margin>=0?'good':'bad')+'">'+Math.round(margin*100)+'%</td></tr></table>';
+ h+='<div class="dim" style="font-size:16px">Operating cost = ingredients used ('+fmt(r.ingr)+') + waste ('+fmt(r.waste)+') + permit/wages ('+fmt(r.fees)+'). Stock you bought but didn\'t use, and upgrades, count as spend but not cost. Cash flow today: '+fmt(r.cashflow)+'.</div>';
+ h+='<div style="margin-top:6px">Reputation: <b class="'+(r.dRep>=0?'good':'bad')+'">'+(r.dRep>=0?'+':'')+r.dRep.toFixed(1)+'</b> → <span class="lem">'+'★'.repeat(r.stars)+'☆'.repeat(5-r.stars)+'</span>'+(r.stars>r.oldStars?' <b class="good">STAR UP!</b>':r.stars<r.oldStars?' <b class="bad">star lost</b>':'')+'</div>';
  if(byT)h+='<div style="margin-top:4px;font-size:18px">'+byT+'</div>';
+ const warns=typeWarnings(st);
+ if(warns.length)h+='<div class="card warn" style="margin-top:8px"><div class="h" style="color:var(--lemon2)">⚠ CUSTOMER WARNINGS</div>'+warns.map(([k,t])=>'<div><i class="dot" style="background:'+TYPES[k].col+'"></i>'+t+'</div>').join('')+'</div>';
  h+='<div class="card" style="margin-top:8px"><div class="h">WHAT CUSTOMERS SAID</div>'+(comp.length?comp.map(k=>COMPLAINTS[k]+' ×'+c[k]).join(' · '):'<span class="good">No complaints. Flawless!</span>')+
   (top?'<div style="margin-top:4px">💡 <b class="lem">'+ADVICE[top]+'</b></div>':'')+'</div>';
  const night=[];if(r.poured)night.push(r.poured+' leftover cups poured out');if(r.spoiled)night.push(r.spoiled+' lemons spoiled');if(r.melted)night.push(r.melted+' ice melted');if(r.repaid)night.push(fmt(r.repaid)+' repaid to the bank');
  if(night.length)h+='<div class="dim">Overnight: '+night.join(' · ')+'.</div>';
  if(goalsMet()&&!TIERS[S.tier+1].future)h+='<div class="card own" style="margin-top:8px">★ All goals met! Open the <b>GOALS</b> tab to upgrade to the '+TIERS[S.tier+1].name+'.</div>';
- h+='<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn big grn" data-a="next">NEXT DAY ▶</button></div>';
+ h+='<div class="row between" style="margin-top:10px"><span class="dim">📊 Trends are in the STATS tab.</span><button class="btn big grn" data-a="next">NEXT DAY ▶</button></div>';
  openModal(h);
 }
-function openModal(h){$('#mbox').innerHTML=h;$('#modal').classList.add('show');}
+function openModal(h){if(window.tipEl)tipEl.style.display='none';$('#mbox').innerHTML=h;$('#modal').classList.add('show');}
 function closeModal(){$('#modal').classList.remove('show');}
 function menuHtml(fromTitle){
  const canSave=phase==='prep';
@@ -805,14 +963,19 @@ function act(a,v){
  case 'import':$('#importFile').click();break;
  case 'title':closeModal();G=null;phase='title';S=null;resetSky();playMusic(0);renderAll();break;
  case 'tab':tab=v;renderPanel();break;
- case 'buy':{const[k,i]=v.split(':');const pk=SUP[k].packs[+i];if(S.cash>=pk[1]){S.cash=Math.round((S.cash-pk[1])*100)/100;S.spent+=pk[1];S.inv[k]+=pk[0];sfx('buy');}else sfx('err');renderAll();break;}
+ case 'buy':{const[k,i]=v.split(':');const pk=SUP[k].packs[+i];if(S.cash>=pk[1]){S.avgCost[k]=(S.avgCost[k]*S.inv[k]+pk[1])/(S.inv[k]+pk[0]);S.cash=Math.round((S.cash-pk[1])*100)/100;S.spent+=pk[1];S.spentBy.sup+=pk[1];S.inv[k]+=pk[0];sfx('buy');}else sfx('err');renderAll();break;}
+ case 'prec':{const[k,d]=v.split(':');const lim={L:[1,10],S:[0,10],B:[1,8]}[k];S.pink[k]=clamp(S.pink[k]+(+d),lim[0],lim[1]);renderPanel();break;}
+ case 'pprice':S.pink.price=clamp(Math.round((S.pink.price+(+v))*100)/100,0.05,9.95);renderPanel();break;
+ case 'pinkon':S.pink.on=!S.pink.on;renderAll();break;
+ case 'srange':statRange=+v;renderPanel();break;
+ case 'stable':statTable=!statTable;renderPanel();break;
  case 'rec':{const[k,d]=v.split(':');const lim={L:[1,10],S:[0,10],ice:[0,6]}[k];S.recipe[k]=clamp(S.recipe[k]+(+d),lim[0],lim[1]);renderPanel();break;}
  case 'price':S.price=clamp(Math.round((S.price+(+v))*100)/100,0.05,9.95);renderPanel();break;
- case 'upg':{const u=UPG.find(x=>x.id===v);if(u&&!S.upg[v]&&S.cash>=u.cost&&u.tier<=S.tier&&(!u.req||S.upg[u.req])){S.cash-=u.cost;S.spent+=u.cost;S.upg[v]=true;sfx('level');toast(u.name+' installed!');}renderAll();break;}
+ case 'upg':{const u=UPG.find(x=>x.id===v);if(u&&!S.upg[v]&&S.cash>=u.cost&&u.tier<=S.tier&&(!u.req||S.upg[u.req])){S.cash-=u.cost;S.spent+=u.cost;S.spentBy.upg+=u.cost;S.upg[v]=true;sfx('level');toast(u.name+' installed!');}renderAll();break;}
  case 'loc':{const l=locById(v);if(l&&l.tier<=S.tier){S.loc=v;AMB.length=0;toast('Moved to '+l.name+'.');}renderAll();break;}
  case 'helper':S.helper=!S.helper;renderAll();break;
- case 'tierup':{const t=tierDef();if(goalsMet()&&S.cash>=t.next&&!TIERS[S.tier+1].future){S.cash-=t.next;S.spent+=t.next;S.tier++;sfx('level');playMusic(tierDef().music);
-  openModal('<div class="h" style="font-size:14px">🎉 '+tierDef().name.toUpperCase()+' UNLOCKED!</div><p>'+t.unlock+'</p><p class="dim">Check the LOCATION, STAFF and UPGRADES tabs.</p><div class="row" style="justify-content:flex-end"><button class="btn sm grn" data-a="close">LET\'S GO</button></div>');}
+ case 'tierup':{const t=tierDef();if(goalsMet()&&S.cash>=t.next&&!TIERS[S.tier+1].future){S.cash-=t.next;S.spent+=t.next;S.spentBy.upg+=t.next;S.tier++;sfx('level');playMusic(tierDef().music);
+  openModal('<div class="h" style="font-size:14px">🎉 '+tierDef().name.toUpperCase()+' UNLOCKED!</div><p>'+t.unlock+'</p><p class="dim">Check RECIPE & PRICE (pink lemonade!), LOCATION, STAFF and UPGRADES.</p><div class="row" style="justify-content:flex-end"><button class="btn sm grn" data-a="close">LET\'S GO</button></div>');}
   renderAll();break;}
  case 'loan':{const amt=+v,cap=tierDef().loan;if(S.loan+amt*1.1<=cap+0.001){S.loan=Math.round((S.loan+amt*1.1)*100)/100;S.cash+=amt;sfx('coin');}renderAll();break;}
  case 'repay':{const p=Math.min(S.loan,S.cash);S.loan=Math.round((S.loan-p)*100)/100;S.cash=Math.round((S.cash-p)*100)/100;renderAll();break;}
