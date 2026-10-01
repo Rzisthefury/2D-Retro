@@ -118,7 +118,7 @@ async function desktop(browser) {
       return { d, held: GAME.camp.territoriesHeld('player'), cap, max, musters };
     }, [d, k]));
   }
-  check('DONE: concurrent offensives never exceed the cap, even with the clock firing every second (25 min each: Normal 1 / 4 territories, Hard 8)', cc.every((r) => r.max <= r.cap && r.max === r.cap && r.musters >= 2), JSON.stringify(cc));
+  check('DONE: concurrent offensives never exceed the cap, even with the clock firing every second (25 min each: Normal 1 / 4 territories, Hard 8)', cc.every((r) => r.max <= r.cap && r.max === r.cap && r.musters >= (r.held === 1 ? 1 : 2))   /* Phase 14: your last castle is never a target, so one territory gives one */, JSON.stringify(cc));
 
   // ---- DONE: grace - no offensive targets a territory for 90 s after you take its castle
   await fresh(page);
@@ -144,8 +144,10 @@ async function desktop(browser) {
   const sz = await page.evaluate(() => {
     const w = GAME.war, c = GAME.camp, out = [];
     w.garrison[0] = w.recruitList(40, 0);
-    // only the Last Camp castle to aim at: its village is out of play
+    // only the Last Camp castle to aim at: its village is out of play (Phase 14: a second, heavily held castle far off,
+    // so the Last Camp isn't your last castle, which the Dominion never targets)
     c.nodes[1].owner = 'enemy';
+    const far = c.castleOf(10); far.owner = 'player'; w.garrison[far.id] = { ...emptyReserve(), shield: 2000 };
     for (let k = 0; k < 40; k++) {
       const p = w.planOffensive(); if (!p) break;
       const tgt = c.nodes[p.target], str = w.nodeStrength(tgt);
@@ -166,6 +168,7 @@ async function desktop(browser) {
   check('targets: an undefended village (2 / its strength) beats a garrisoned castle', pick === 'Emberfield', JSON.stringify(pick));
   const clamp = await page.evaluate(() => {
     const w = GAME.war, c = GAME.camp; w.garrison[0] = w.recruitList(40, 0); c.nodes[1].owner = 'enemy';
+    const far = c.castleOf(10); far.owner = 'player'; w.garrison[far.id] = { ...emptyReserve(), shield: 2000 };
     for (const n of c.nodes) if (n.type === 'castle' && n.owner === 'enemy') w.nodeForce[n.id] = { ...emptyReserve(), sword: 20 };
     const p = w.planOffensive(); c.nodes[1].owner = 'player'; return p && { size: p.size, max: Math.floor(20 * WAR.offensiveDraw) };
   });
