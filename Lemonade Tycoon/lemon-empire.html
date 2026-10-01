@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>LEMON EMPIRE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#1b1430;--panel:#2a2148;--panel2:#352a5c;--panel3:#43367a;--ink:#fff7d6;--dim:#b8aee0;--lemon:#ffd83a;--lemon2:#f5a623;--good:#6be36b;--bad:#ff6b6b;--line:#0d0a1a;--blue:#5ec8ff}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:'VT323',monospace;font-size:20px;line-height:1.15}
+body{background:radial-gradient(circle at 50% 0,#2c2152,#140f26 70%) fixed}
+#app{max-width:980px;margin:0 auto;padding:8px 8px 40px}
+.pf{font-family:'Press Start 2P',monospace}
+#hud{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px}
+.chip{background:var(--panel);border:3px solid var(--line);box-shadow:inset 0 -3px 0 rgba(0,0,0,.35);padding:4px 8px;font-size:20px;white-space:nowrap}
+.chip b{color:var(--lemon)}
+#hud .sp{flex:1}
+#cvwrap{position:relative;border:4px solid var(--line);box-shadow:0 0 0 3px var(--lemon2),0 8px 0 rgba(0,0,0,.4);background:#000}
+canvas{width:100%;display:block;image-rendering:pixelated;image-rendering:crisp-edges}
+#panel{margin-top:12px;background:var(--panel);border:4px solid var(--line);box-shadow:inset 0 0 0 2px var(--panel3);padding:10px}
+.btn{font-family:'Press Start 2P',monospace;font-size:10px;line-height:1.3;color:var(--line);background:var(--lemon);border:3px solid var(--line);box-shadow:inset -3px -3px 0 var(--lemon2),inset 3px 3px 0 #fff3a8;padding:8px 10px;cursor:pointer;touch-action:manipulation;user-select:none}
+.btn:active{transform:translateY(2px);box-shadow:inset 3px 3px 0 var(--lemon2)}
+.btn[disabled]{background:#6d6690;box-shadow:inset -3px -3px 0 #4f4970;color:#2a2448;cursor:not-allowed}
+.btn.alt{background:var(--blue);box-shadow:inset -3px -3px 0 #2c8fc4,inset 3px 3px 0 #b8ecff}
+.btn.red{background:var(--bad);box-shadow:inset -3px -3px 0 #c23d3d,inset 3px 3px 0 #ffb0b0}
+.btn.grn{background:var(--good);box-shadow:inset -3px -3px 0 #3aa83a,inset 3px 3px 0 #c4ffc4}
+.btn.big{font-size:14px;padding:14px 18px}
+.btn.sm{font-size:8px;padding:6px 7px}
+.btn.on{background:#fff;box-shadow:inset -3px -3px 0 #bbb}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;margin:10px 0 8px}
+.tab{font-family:'Press Start 2P',monospace;font-size:9px;background:var(--panel2);color:var(--dim);border:3px solid var(--line);padding:8px 8px;cursor:pointer;touch-action:manipulation}
+.tab.act{background:var(--panel3);color:var(--lemon)}
+.tab.lock{opacity:.5}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.between{justify-content:space-between}
+.card{background:var(--panel2);border:3px solid var(--line);padding:8px 10px;margin-bottom:8px}
+.card.own{border-color:var(--good)}
+.card.locked{opacity:.55}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
+.h{font-family:'Press Start 2P',monospace;font-size:11px;color:var(--lemon);margin:2px 0 6px}
+.dim{color:var(--dim)}
+.good{color:var(--good)}.bad{color:var(--bad)}.lem{color:var(--lemon)}
+.step{display:flex;align-items:center;gap:6px;margin:6px 0}
+.step .lbl{width:150px}
+.step .val{min-width:64px;text-align:center;font-size:24px;color:var(--lemon)}
+.bar{height:12px;background:#120d24;border:2px solid var(--line);position:relative;margin-top:3px}
+.bar i{position:absolute;left:0;top:0;bottom:0;background:var(--good)}
+.mix{display:flex;height:12px;border:2px solid var(--line);margin-top:4px}
+.mix span{display:block;height:100%}
+table{border-collapse:collapse;width:100%}
+td,th{padding:4px 6px;text-align:left;border-bottom:2px solid var(--panel3);vertical-align:middle}
+th{font-family:'Press Start 2P',monospace;font-size:9px;color:var(--dim);font-weight:normal}
+#modal{position:fixed;inset:0;background:rgba(8,5,18,.78);display:none;align-items:flex-start;justify-content:center;z-index:50;overflow-y:auto;padding:20px 10px}
+#modal.show{display:flex}
+#mbox{background:var(--panel);border:4px solid var(--line);box-shadow:0 0 0 3px var(--lemon2),0 10px 0 rgba(0,0,0,.5);max-width:640px;width:100%;padding:14px}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--panel3);border:3px solid var(--line);padding:8px 14px;z-index:60;max-width:90vw;text-align:center}
+.fc{display:flex;align-items:center;gap:10px}
+.fc .ic{font-size:34px}
+.legend span{display:inline-block;margin-right:10px;font-size:17px}
+.legend i{display:inline-block;width:10px;height:10px;margin-right:4px;border:1px solid #000}
+.livegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:6px}
+.livegrid .chip{text-align:center}
+#log{min-height:60px;font-size:18px}
+.ladder{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px}
+.ladder span{font-family:'Press Start 2P',monospace;font-size:8px;padding:6px;border:2px solid var(--line);background:var(--panel2);color:var(--dim)}
+.ladder span.done{color:var(--good)}
+.ladder span.cur{background:var(--lemon);color:var(--line)}
+@media (max-width:600px){html,body{font-size:18px}.step .lbl{width:110px}.btn.big{font-size:12px}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud"></div>
+  <div id="cvwrap"><canvas id="cv" width="400" height="225"></canvas></div>
+  <div id="panel"></div>
+</div>
+<div id="modal"><div id="mbox"></div></div>
+<input type="file" id="importFile" accept=".json,application/json" style="display:none">
+<script>
+'use strict';
+/* ================= helpers ================= */
+const $=s=>document.querySelector(s);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const ri=(a,b)=>Math.floor(rnd(a,b+1));
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+const fmt=v=>(v<0?'-':'')+'$'+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmt0=v=>(v<0?'-':'')+'$'+Math.round(Math.abs(v)).toLocaleString('en-US');
+function wpick(o){let t=0;for(const k in o)t+=o[k];let r=Math.random()*t;for(const k in o){r-=o[k];if(r<=0)return k;}return Object.keys(o)[0];}
+function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;}}
+
+/* ================= data ================= */
+const W=400,H=225,STAND_X=200,DAY_LEN=600,REAL_SEC_PER_DAY=80;
+const GM_PER_SEC=DAY_LEN/REAL_SEC_PER_DAY;
+
+const TYPES={
+ kid:    {name:'Kids',          col:'#ff6fa3',max:0.80,L:3,B:2, ice:1, heat:1.0,stop:1.10,speed:20,pat:30},
+ jogger: {name:'Joggers',       col:'#7cd65a',max:1.30,L:5,B:-1,ice:1, heat:1.4,stop:0.90,speed:32,pat:15},
+ office: {name:'Office Workers',col:'#5d7bd8',max:2.10,L:4,B:0, ice:0, heat:0.9,stop:0.80,speed:17,pat:12},
+ tourist:{name:'Tourists',      col:'#ffb347',max:2.60,L:4,B:1, ice:0, heat:1.1,stop:1.20,speed:12,pat:28},
+ senior: {name:'Seniors',       col:'#c9b6e4',max:1.20,L:4,B:0, ice:-2,heat:0.8,stop:1.00,speed:9, pat:40},
+};
+const NB_HINTS={
+ kid:{taste:'Like it SWEET: light on lemons, heavy on sugar (about 3 lemons / 5 sugar).',more:'Love extra ice. Rarely pay much over $0.80 unless it is scorching.'},
+ jogger:{taste:'Like it TART and STRONG: lots of lemon, less sugar (about 5 lemons / 4 sugar).',more:'Want extra ice. Will pay around $1.30. Get very thirsty on hot days.'},
+ office:{taste:'Classic balance: equal lemons and sugar (about 4 / 4).',more:'Normal ice. Pay well (around $2.10) but HATE waiting in line.'},
+ tourist:{taste:'A touch sweeter than classic (about 4 lemons / 5 sugar).',more:'Normal ice. Big spenders (around $2.60) and patient.'},
+ senior:{taste:'Classic balance: equal lemons and sugar (about 4 / 4).',more:'Go EASY on ice (about 2 cubes less). Pay around $1.20. Very patient.'},
+};
+const LOCS=[
+ {id:'maple',   name:'Maple Street',   tier:0,traffic:70, permit:0, mix:{kid:35,senior:30,jogger:20,office:10,tourist:5},desc:'Quiet suburb. Free to set up.'},
+ {id:'park',    name:'Sunny Park',     tier:1,traffic:115,permit:6, mix:{jogger:40,kid:25,senior:20,tourist:10,office:5},desc:'Joggers and families all day.'},
+ {id:'downtown',name:'Downtown Plaza', tier:1,traffic:160,permit:15,mix:{office:55,tourist:20,senior:10,jogger:10,kid:5},desc:'Busy suits. Big lunch rush.'},
+ {id:'beach',   name:'Boardwalk Beach',tier:1,traffic:185,permit:22,mix:{tourist:45,jogger:25,kid:20,senior:5,office:5},desc:'Huge crowds when sunny. Dead when it rains.',beach:true},
+];
+const locById=id=>LOCS.find(l=>l.id===id);
+const SUP={
+ lemons:{name:'Lemons',ic:'🍋',packs:[[12,1.20],[48,4.20],[144,11.00]]},
+ sugar: {name:'Sugar', ic:'🧂',unit:'cups',packs:[[10,0.80],[40,2.80],[100,6.00]]},
+ ice:   {name:'Ice',   ic:'🧊',unit:'cubes',packs:[[50,1.00],[200,3.20],[500,7.00]]},
+ cups:  {name:'Cups',  ic:'🥤',packs:[[50,1.00],[200,3.50],[500,7.50]]},
+};
+const UPG=[
+ {id:'juicer', name:'Hand Juicer',  tier:0,cost:15, desc:'Serve customers 20% faster.'},
+ {id:'rack',   name:'Pitcher Rack', tier:0,cost:20, desc:'Mix new pitchers twice as fast.'},
+ {id:'sign',   name:'Painted Sign', tier:0,cost:20, desc:'More passers-by stop to buy.'},
+ {id:'parasol',name:'Parasol',      tier:0,cost:25, desc:'More stop on sunny/hot days. Customers wait 25% longer.'},
+ {id:'cooler', name:'Foam Cooler',  tier:0,cost:30, desc:'Keep 50% of your ice overnight.'},
+ {id:'radio',  name:'Weather Radio',tier:0,cost:35, desc:'Forecasts become far more accurate.'},
+ {id:'press',  name:'Lever Press',  tier:1,cost:120,req:'juicer',desc:'Serve another 25% faster.'},
+ {id:'banner', name:'Bell & Banner',tier:1,cost:150,req:'sign',desc:'Even more customers stop.'},
+ {id:'chest',  name:'Ice Chest',    tier:1,cost:160,req:'cooler',desc:'Keep 90% of your ice overnight.'},
+ {id:'crate',  name:'Lemon Crate',  tier:1,cost:90, desc:'Lemons spoil 3% per night instead of 10%.'},
+ {id:'tipjar', name:'Tip Jar',      tier:1,cost:60, desc:'Happy customers (80%+) leave a 15% tip.'},
+ {id:'shaver', name:'Ice Shaver',   tier:1,cost:140,desc:'+6 satisfaction on every cup.'},
+];
+const stars=r=>r>=90?5:r>=70?4:r>=50?3:r>=30?2:r>=15?1:0;
+const starStr=r=>'★'.repeat(stars(r))+'☆'.repeat(5-stars(r));
+const TIERS=[
+ {name:'Cardboard Box',service:6,attract:0,loan:50,music:0,next:100,
+  goals:[{t:'Serve 250 cups total',v:s=>s.life.cups,n:250},
+         {t:'Earn $200 in total sales',v:s=>s.life.revenue,n:200,m:1},
+         {t:'Reach 2★ reputation',v:s=>stars(s.rep),n:2}],
+  unlock:'Wooden Cart: move between 4 locations, hire a helper, 6 new upgrades, bigger loans.'},
+ {name:'Wooden Cart',service:5,attract:0.06,loan:400,music:1,next:1500,
+  goals:[{t:'Serve 1,500 cups total',v:s=>s.life.cups,n:1500},
+         {t:'Reach 4★ reputation',v:s=>stars(s.rep),n:4},
+         {t:'Make $90 profit in one day',v:s=>s.life.best,n:90,m:1},
+         {t:'Sell at 3 different locations',v:s=>s.life.locs.length,n:3}],
+  unlock:'Kiosk'},
+ {name:'Kiosk',future:true},{name:'Café',future:true},{name:'Franchise',future:true},{name:'Bottling Co.',future:true},{name:'Global Brand',future:true},
+];
+const WX={
+ heat:  {n:'Heat Wave',    ic:'🔥',p:8, t:[95,104],m:1.0},
+ sunny: {n:'Sunny',        ic:'☀️',p:35,t:[75,92], m:1.0},
+ partly:{n:'Partly Cloudy',ic:'⛅',p:25,t:[68,85], m:0.9},
+ cloudy:{n:'Cloudy',       ic:'☁️',p:20,t:[60,75], m:0.75},
+ rain:  {n:'Rainy',        ic:'🌧️',p:12,t:[55,68], m:0.4},
+};
+const WX_ORDER=['heat','sunny','partly','cloudy','rain'];
+const WAGE=10;
+const COMPLAINTS={sour:'Too sour',sweet:'Too sweet',watery:'Watery',strong:'Too strong',moreice:'Needs ice',icy:'Too icy',pricey:'Too pricey',slow:'Line too slow',soldout:'Sold out'};
+const ADVICE={sour:'Add sugar or use fewer lemons.',sweet:'Use less sugar.',watery:'Add more lemons per pitcher.',strong:'Use fewer lemons per pitcher.',moreice:'Add ice per cup. Hot days want more ice.',icy:'Use less ice per cup.',pricey:'Lower the price, or find a richer crowd.',slow:'Line moved too slowly. Buy faster equipment or hire a helper.',soldout:'You ran out! Stock up before opening.'};
+
+/* ================= state ================= */
+let S=null;           // saved game state
+let phase='title';    // title | prep | day | report
+let tab='supplies';
+let G=null;           // live day sim
+const AMB=[];         // ambient walkers (title/prep)
+const FLOATS=[];
+let clouds=[],rain=[];
+
+function newState(){
+ const s={v:1,day:1,cash:20,rep:10,tier:0,loc:'maple',inv:{lemons:0,sugar:0,ice:0,cups:0},
+  recipe:{L:4,S:4,ice:3},price:0.75,upg:{},helper:false,loan:0,spent:0,
+  life:{cups:0,revenue:0,best:0,locs:[],days:0},nb:{kid:0,jogger:0,office:0,tourist:0,senior:0},
+  wx:{k:'sunny',temp:82},fc:{k:'sunny',temp:82},lastReport:null,grandma:0};
+ return s;
+}
+function genWeather(){
+ const ps={};for(const k in WX)ps[k]=WX[k].p;
+ const k=wpick(ps);const temp=ri(WX[k].t[0],WX[k].t[1]);
+ const acc=S.upg.radio?0.95:0.7;
+ let fk=k;
+ if(Math.random()>acc){const i=WX_ORDER.indexOf(k);const j=clamp(i+(Math.random()<.5?-1:1),0,WX_ORDER.length-1);fk=WX_ORDER[j===i?(i===0?1:i-1):j];}
+ const err=S.upg.radio?2:7;
+ S.wx={k,temp};S.fc={k:fk,temp:temp+ri(-err,err)};
+ resetSky();
+}
+function tierDef(){return TIERS[S.tier];}
+function attract(){let a=tierDef().attract;if(S.upg.sign)a+=0.10;if(S.upg.banner)a+=0.12;if(S.upg.parasol&&(S.wx.k==='sunny'||S.wx.k==='heat'))a+=0.10;return a;}
+function serviceTime(){let t=tierDef().service;if(S.upg.juicer)t*=0.8;if(S.upg.press)t*=0.75;if(S.helper)t*=0.65;return t;}
+function mixTime(){return S.upg.rack?5:10;}
+function thirst(type,temp,wk){let th=clamp((temp-50)/40,0.15,1.2)*TYPES[type].heat;if(wk==='rain')th*=0.7;return Math.min(th,1.4);}
+function tolerance(type){const th=thirst(type,S.wx.temp,S.wx.k);return TYPES[type].max*(0.75+0.45*th)*(1+S.rep/250);}
+function iceIdeal(type,temp){return clamp(Math.round((temp-52)/8)+TYPES[type].ice,0,6);}
+function rateCup(type){
+ const t=TYPES[type],r=S.recipe;
+ const dL=r.L-t.L,dB=(r.S-r.L)-t.B,dI=r.ice-iceIdeal(type,S.wx.temp);
+ const pL=Math.max(0,Math.abs(dL)-0.5)*13,pB=Math.max(0,Math.abs(dB)-0.5)*13,pI=Math.max(0,Math.abs(dI)-0.5)*8;
+ const ratio=S.price/tolerance(type);const pP=Math.max(0,ratio-0.6)*45;
+ let sat=clamp(100-pL-pB-pI-pP+(S.upg.shaver?6:0),0,100);
+ let worst=null,wv=0;
+ if(pL>wv){wv=pL;worst=dL<0?'watery':'strong';}
+ if(pB>wv){wv=pB;worst=dB<0?'sour':'sweet';}
+ if(pI>wv){wv=pI;worst=dI<0?'moreice':'icy';}
+ if(pP>wv){wv=pP;worst='pricey';}
+ return {sat,worst};
+}
+function costPerCup(){const r=S.recipe;return r.L*0.10/12+r.S*0.08/12+r.ice*0.02+0.02;}
+function cupsPossible(){
+ const r=S.recipe,i=S.inv;
+ const pitchers=Math.min(Math.floor(i.lemons/r.L),r.S>0?Math.floor(i.sugar/r.S):999);
+ return Math.min(pitchers*12,r.ice>0?Math.floor(i.ice/r.ice):99999,i.cups);
+}
+function goalsMet(){const t=tierDef();if(!t.goals)return false;return t.goals.every(g=>g.v(S)>=g.n);}
+
+/* ================= saves ================= */
+const SKEY='lemonEmpire_';
+function lsGet(k){try{return localStorage.getItem(SKEY+k);}catch(e){return null;}}
+function lsSet(k,v){try{localStorage.setItem(SKEY+k,v);return true;}catch(e){return false;}}
+function slotInfo(k){const raw=lsGet(k);if(!raw)return null;try{const s=JSON.parse(raw);return s;}catch(e){return null;}}
+function validState(s){return s&&s.v===1&&s.inv&&s.recipe&&s.life&&typeof s.cash==='number';}
+function saveTo(k){const ok=lsSet(k,JSON.stringify(Object.assign({},S,{savedAt:Date.now()})));return ok;}
+function loadState(s){S=Object.assign(newState(),s);S.life=Object.assign(newState().life,s.life);S.nb=Object.assign(newState().nb,s.nb);phase='prep';tab='supplies';resetSky();AMB.length=0;FLOATS.length=0;playMusic(tierDef().music);renderAll();}
+
+/* ================= audio ================= */
+const AU={ctx:null,master:null,mus:null,sfx:null,musicOn:true,sfxOn:true,track:-1,step:0,nextT:0,timer:null};
+try{const m=lsGet('audio');if(m){const o=JSON.parse(m);AU.musicOn=o.m!==false;AU.sfxOn=o.s!==false;}}catch(e){}
+function auInit(){
+ if(AU.ctx){if(AU.ctx.state==='suspended')AU.ctx.resume();return;}
+ const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
+ AU.ctx=new AC();AU.master=AU.ctx.createGain();AU.master.gain.value=0.5;AU.master.connect(AU.ctx.destination);
+ AU.mus=AU.ctx.createGain();AU.mus.gain.value=AU.musicOn?0.35:0;AU.mus.connect(AU.master);
+ AU.sfx=AU.ctx.createGain();AU.sfx.gain.value=AU.sfxOn?0.6:0;AU.sfx.connect(AU.master);
+ const nb=AU.ctx.createBuffer(1,AU.ctx.sampleRate*0.5,AU.ctx.sampleRate);const d=nb.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;AU.noise=nb;
+ AU.timer=setInterval(sched,25);
+}
+const mf=m=>440*Math.pow(2,(m-69)/12);
+function tone(f,t,dur,type,vol,dest,slideTo){
+ const o=AU.ctx.createOscillator(),g=AU.ctx.createGain();o.type=type;o.frequency.setValueAtTime(f,t);
+ if(slideTo)o.frequency.exponentialRampToValueAtTime(slideTo,t+dur);
+ g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.0001,t+dur);o.connect(g);g.connect(dest);o.start(t);o.stop(t+dur+0.02);
+}
+function noise(t,dur,vol,dest,hp){
+ const s=AU.ctx.createBufferSource();s.buffer=AU.noise;const f=AU.ctx.createBiquadFilter();f.type='highpass';f.frequency.value=hp||6000;
+ const g=AU.ctx.createGain();g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.0001,t+dur);s.connect(f);f.connect(g);g.connect(dest);s.start(t);s.stop(t+dur+0.02);
+}
+const TRACKS=[
+ {bpm:118,lead:[76,79,84,79,81,79,76,72, 74,77,81,77,79,0,79,0, 76,79,84,86,84,81,79,76, 74,76,72,71,72,0,0,0,
+                72,76,79,76,77,76,74,72, 71,74,77,74,76,0,72,0, 69,72,76,77,79,77,76,74, 76,74,72,71,72,0,67,0],
+  bass:[48,55,48,55, 50,57,55,43, 48,55,53,57, 55,43,48,48, 45,52,45,52, 43,50,43,50, 41,48,43,50, 43,50,48,48]},
+ {bpm:132,lead:[79,83,86,83,88,86,83,79, 81,84,88,84,86,0,83,0, 79,81,83,86,91,88,86,83, 81,83,79,78,79,0,0,0,
+                84,83,81,79,81,83,84,86, 88,86,84,83,81,0,79,0, 76,79,83,84,86,84,83,81, 79,78,79,81,79,0,74,0],
+  bass:[43,50,43,50, 45,52,50,38, 48,55,47,50, 50,38,43,43, 48,55,48,55, 45,52,45,52, 40,47,48,50, 50,38,43,43]},
+];
+function playMusic(i){AU.track=i;AU.step=0;if(AU.ctx)AU.nextT=AU.ctx.currentTime+0.1;}
+function sched(){
+ if(!AU.ctx||AU.track<0)return;const tr=TRACKS[AU.track];const st=60/tr.bpm/2;
+ if(AU.nextT<AU.ctx.currentTime-0.5)AU.nextT=AU.ctx.currentTime+0.05;
+ while(AU.nextT<AU.ctx.currentTime+0.12){
+  const t=AU.nextT,i=AU.step%tr.lead.length;
+  if(AU.musicOn){
+   const n=tr.lead[i];if(n)tone(mf(n),t,st*0.9,'square',0.10,AU.mus);
+   if(i%2===0){const b=tr.bass[(i/2)%tr.bass.length];tone(mf(b),t,st*1.8,'triangle',0.28,AU.mus);}
+   if(i%4===0)tone(110,t,0.12,'sine',0.35,AU.mus,40);
+   if(i%4===2)noise(t,0.08,0.12,AU.mus,2500);
+   noise(t,0.025,0.05,AU.mus,8000);
+  }
+  AU.step++;AU.nextT+=st;
+ }
+}
+let lastCoin=0;
+function sfx(n){
+ if(!AU.ctx||!AU.sfxOn)return;const t=AU.ctx.currentTime;
+ if(n==='coin'){if(t-lastCoin<0.07)return;lastCoin=t;tone(988,t,0.06,'square',0.12,AU.sfx);tone(1319,t+0.06,0.14,'square',0.12,AU.sfx);}
+ else if(n==='click')tone(660,t,0.05,'square',0.08,AU.sfx);
+ else if(n==='buy'){tone(523,t,0.05,'square',0.1,AU.sfx);tone(784,t+0.05,0.08,'square',0.1,AU.sfx);}
+ else if(n==='err')tone(140,t,0.2,'sawtooth',0.12,AU.sfx);
+ else if(n==='pour')noise(t,0.25,0.15,AU.sfx,1200);
+ else if(n==='bad')tone(330,t,0.15,'square',0.07,AU.sfx,200);
+ else if(n==='level'){[72,76,79,84,88,91].forEach((m,i)=>tone(mf(m),t+i*0.09,0.2,'square',0.12,AU.sfx));}
+ else if(n==='day'){[67,72,76,79].forEach((m,i)=>tone(mf(m),t+i*0.08,0.18,'square',0.1,AU.sfx));}
+}
+function saveAudio(){lsSet('audio',JSON.stringify({m:AU.musicOn,s:AU.sfxOn}));if(AU.mus)AU.mus.gain.value=AU.musicOn?0.35:0;if(AU.sfx)AU.sfx.gain.value=AU.sfxOn?0.6:0;}
+document.addEventListener('pointerdown',()=>{auInit();},{passive:true});
+
+/* ================= drawing ================= */
+const cv=$('#cv'),cx=cv.getContext('2d');cx.imageSmoothingEnabled=false;
+function P(g,x,y,w,h,c){g.fillStyle=c;g.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h));}
+function D(g,x0,y0,r,c){g.fillStyle=c;x0=Math.round(x0);y0=Math.round(y0);for(let dy=-r;dy<=r;dy++){const w=Math.floor(Math.sqrt(r*r-dy*dy));g.fillRect(x0-w,y0+dy,w*2+1,1);}}
+function E(g,x0,y0,rx,ry,c){g.fillStyle=c;for(let dy=-ry;dy<=ry;dy++){const w=Math.floor(rx*Math.sqrt(1-(dy*dy)/(ry*ry)));g.fillRect(x0-w,y0+dy,w*2+1,1);}}
+function hex2(h){return [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];}
+function lerpC(a,b,t){const A=hex2(a),B=hex2(b);return 'rgb('+A.map((v,i)=>Math.round(v+(B[i]-v)*t)).join(',')+')';}
+const SKY={sunny:['#4aa8ff','#c4ecff'],partly:['#5fb0ee','#d4ecf8'],cloudy:['#8c9bb0','#cdd4de'],rain:['#56616f','#949eab'],heat:['#ff9f43','#fff1b5']};
+
+const SCN={};
+function tree(g,x,y,s,R){P(g,x-1,y,3,10*s,'#6b4423');D(g,x,y-2,Math.round(8*s),'#2f7d32');D(g,x-4*s,y+1,Math.round(6*s),'#3f9b3a');D(g,x+4*s,y,Math.round(6*s),'#43a047');D(g,x+1,y-6*s,Math.round(5*s),'#5cbf5a');}
+function sidewalk(g,base,line){P(g,0,150,W,56,base);for(let x=0;x<W;x+=24)P(g,x,150,1,54,line);P(g,0,177,W,1,line);P(g,0,150,W,2,'rgba(0,0,0,.18)');P(g,0,204,W,3,'#8f877a');}
+function road(g){P(g,0,207,W,18,'#4b4b57');for(let x=4;x<W;x+=28)P(g,x,215,12,2,'#e8d34a');}
+function sceneCanvas(id){
+ if(SCN[id])return SCN[id];
+ const c=document.createElement('canvas');c.width=W;c.height=H;const g=c.getContext('2d');const R=mulberry(id.length*977+13);
+ if(id==='maple'){
+  D(g,60,160,62,'#8fd16a');D(g,210,175,90,'#86c95f');D(g,360,160,66,'#8fd16a');
+  const cols=['#e8b4a0','#a8d0e6','#f3e1a1','#c9b6e4','#b8e0b0'],roofs=['#b5523b','#6b5b95','#8d5a3c','#4f6d8f','#a8433a'];
+  for(let i=0;i<5;i++){
+   const hx=i*82+4+Math.floor(R()*8),hw=50+Math.floor(R()*10),hh=28+Math.floor(R()*8),base=124;
+   P(g,hx,base-hh,hw,hh,cols[i]);P(g,hx+hw-4,base-hh,4,hh,'rgba(0,0,0,.12)');
+   for(let r=0;r<16;r++){const rw=(hw+10)*(1-r/16);P(g,hx-5+(hw+10-rw)/2,base-hh-r-1,rw,1,roofs[i]);}
+   P(g,hx+hw/2-4,base-14,8,14,'#7a4b2a');P(g,hx+hw/2+2,base-8,1,1,'#ffd83a');
+   [[hx+6],[hx+hw-16]].forEach(([wx])=>{P(g,wx,base-hh+7,10,9,'#fff');P(g,wx+1,base-hh+8,8,7,'#7fc8f8');P(g,wx+4,base-hh+8,1,7,'#fff');});
+   tree(g,hx+hw+14,104,1,R);
+  }
+  P(g,0,124,W,26,'#6cc24a');for(let x=0;x<W;x+=6){P(g,x,115,3,11,'#fafafa');P(g,x+1,114,1,1,'#fafafa');}P(g,0,118,W,2,'#fafafa');
+  for(let i=0;i<40;i++)P(g,Math.floor(R()*W),128+Math.floor(R()*20),2,1,'#58a83b');
+  sidewalk(g,'#d6cdbd','#bdb3a2');road(g);
+ }else if(id==='park'){
+  for(let i=0;i<14;i++)D(g,i*30+Math.floor(R()*10),104+Math.floor(R()*6),14+Math.floor(R()*6),i%2?'#2e7a34':'#367f3a');
+  P(g,0,110,W,40,'#74c850');for(let i=0;i<50;i++)P(g,Math.floor(R()*W),112+Math.floor(R()*36),2,1,'#5eb43e');
+  E(g,90,126,48,9,'#2c7fc0');E(g,90,125,44,7,'#3d95d6');P(g,70,123,14,1,'#a8dcff');P(g,100,127,10,1,'#a8dcff');
+  tree(g,250,100,1.3,R);tree(g,20,104,1.1,R);tree(g,370,102,1.2,R);
+  P(g,300,128,22,3,'#8a5a2b');P(g,300,124,22,2,'#8a5a2b');P(g,302,131,2,5,'#555');P(g,318,131,2,5,'#555');
+  P(g,160,96,2,40,'#3b3b45');P(g,157,94,8,4,'#ffe98a');
+  P(g,0,150,W,56,'#dcc79a');for(let i=0;i<60;i++)P(g,Math.floor(R()*W),152+Math.floor(R()*50),2,1,'#c7b080');P(g,0,150,W,2,'rgba(0,0,0,.15)');P(g,0,204,W,3,'#b59c6b');
+  P(g,0,207,W,18,'#74c850');for(let i=0;i<30;i++)P(g,Math.floor(R()*W),209+Math.floor(R()*14),2,1,'#5eb43e');
+ }else if(id==='downtown'){
+  const bc=['#7b8fa8','#a07c6a','#6f7d8c','#c2b59b','#8e6f8f','#5f7a6e'];
+  let x=-6;while(x<W){const bw=36+Math.floor(R()*30),bh=50+Math.floor(R()*70),col=bc[Math.floor(R()*bc.length)];
+   P(g,x,130-bh,bw,bh,col);P(g,x+bw-3,130-bh,3,bh,'rgba(0,0,0,.15)');P(g,x,130-bh,bw,2,'rgba(255,255,255,.2)');
+   for(let wy=130-bh+6;wy<124;wy+=9)for(let wx=x+4;wx<x+bw-6;wx+=8)P(g,wx,wy,5,5,R()<.2?'#ffe98a':'#bfe0f5');
+   x+=bw+2;}
+  P(g,0,124,W,26,'#b9b2a8');for(let x2=0;x2<W;x2+=16)P(g,x2,124,1,26,'#a59e94');
+  P(g,330,112,4,16,'#3b3b45');D(g,332,110,4,'#3a9b3a');
+  sidewalk(g,'#c9c9c9','#adadad');road(g);
+ }else if(id==='beach'){
+  P(g,0,96,W,40,'#2f8fd8');P(g,0,96,W,2,'#9fd6ff');for(let i=0;i<40;i++)P(g,Math.floor(R()*W),100+Math.floor(R()*32),4+Math.floor(R()*6),1,'#6fc0f3');
+  P(g,280,82,1,12,'#555');for(let r=0;r<10;r++)P(g,281,84+r,r,1,'#fff');P(g,272,94,20,3,'#b5523b');
+  P(g,0,134,W,16,'#f1d79b');for(let i=0;i<40;i++)P(g,Math.floor(R()*W),136+Math.floor(R()*12),1,1,'#d9bc78');
+  const palm=(px0,top)=>{for(let y=top;y<150;y++){P(g,px0+Math.round(Math.sin((y-top)/18)*3),y,4,1,(y%4)?'#8b5a2b':'#6e4520');}
+   const fx=px0+2,fy=top;[[-16,4],[16,4],[-12,-4],[12,-4],[0,-7]].forEach(([dx,dy])=>{for(let s=0;s<=16;s++){const t=s/16;P(g,fx+dx*t,fy+dy*t+Math.abs(dx)*t*t*0.4,3,2,'#2f8f3a');}});D(g,fx,fy+2,2,'#6b4423');};
+  palm(30,70);palm(355,64);
+  E(g,120,141,10,3,'#e06b5c');P(g,119,124,2,18,'#eee');for(let r=0;r<6;r++)P(g,108+r,124+r*0+0,24-r*2,1,r%2?'#ff5a5a':'#fff');
+  P(g,0,150,W,56,'#b9814e');for(let x2=0;x2<W;x2+=8)P(g,x2,150,1,56,'#9a663a');P(g,0,150,W,2,'rgba(0,0,0,.2)');P(g,0,204,W,3,'#7d5230');
+  P(g,0,207,W,18,'#f1d79b');for(let i=0;i<30;i++)P(g,Math.floor(R()*W),209+Math.floor(R()*14),1,1,'#d9bc78');
+ }
+ SCN[id]=c;return c;
+}
+function resetSky(){
+ const k=S?S.wx.k:'sunny';clouds=[];
+ const n={sunny:2,partly:5,cloudy:8,rain:9,heat:0}[k];
+ for(let i=0;i<n;i++)clouds.push({x:rnd(-40,W),y:rnd(10,60),s:rnd(0.8,1.6),v:rnd(2,6)});
+ rain=[];if(k==='rain')for(let i=0;i<90;i++)rain.push({x:rnd(0,W),y:rnd(0,H),v:rnd(160,220)});
+}
+function drawSky(k){
+ const [a,b]=SKY[k];for(let i=0;i<10;i++)P(cx,0,i*15,W,15,lerpC(a,b,i/9));
+ if(k==='sunny'||k==='partly'||k==='heat'){const r=k==='heat'?16:12;D(cx,340,30,r+3,k==='heat'?'#ffd36e':'#fff3a8');D(cx,340,30,r,k==='heat'?'#ff7b1c':'#ffd83a');}
+ const cc=k==='rain'?['#7a8592','#69737f']:k==='cloudy'?['#e4e8ee','#c5ccd6']:['#ffffff','#e3f1fb'];
+ for(const c of clouds){const s=c.s;D(cx,c.x,c.y,Math.round(7*s),cc[1]);D(cx,c.x+9*s,c.y-4*s,Math.round(9*s),cc[0]);D(cx,c.x+19*s,c.y,Math.round(7*s),cc[0]);P(cx,c.x,c.y,19*s,Math.round(6*s),cc[0]);}
+}
+function updSky(dt){for(const c of clouds){c.x+=c.v*dt;if(c.x>W+40){c.x=-50;c.y=rnd(10,60);}}for(const r of rain){r.y+=r.v*dt;r.x-=r.v*dt*0.2;if(r.y>H){r.y=-5;r.x=rnd(0,W+40);}}}
+
+const SKINS=['#f6d2b0','#e8b48c','#c68b5e','#8d5a3b','#5e3a26','#f1c6a0'];
+const HAIRS=['#3a2a1a','#6b4423','#1c1c1c','#c98f3a','#a33b20','#e8d27a'];
+function makeLook(type){
+ const L={skin:pick(SKINS),hair:pick(HAIRS),pants:pick(['#3b4a6b','#4a3b2a','#2f3d55','#555c66'])};
+ if(type==='kid'){L.shirt=pick(['#ff5c8a','#4fc3f7','#7cd65a','#ffb300']);L.cap=pick(['#e53935','#1e88e5','#43a047']);}
+ if(type==='jogger'){L.shirt=pick(['#7cd65a','#ff7043','#26c6da','#f4f4f4']);L.pants='#1f1f2a';}
+ if(type==='office'){L.shirt=pick(['#3b4a6b','#4a4a52','#5b4636']);L.pants=L.shirt;L.tie=pick(['#c0392b','#2980b9','#f39c12']);}
+ if(type==='tourist'){L.shirt=pick(['#ff8a65','#4dd0e1','#ba68c8','#fff176']);L.pants='#d8c79a';}
+ if(type==='senior'){L.shirt=pick(['#9fa8da','#bcaaa4','#a5d6a7','#f8bbd0']);L.hair=pick(['#dddddd','#bdbdbd','#f0f0f0']);}
+ return L;
+}
+function drawPerson(g,c){
+ const x=Math.round(c.x),y=Math.round(c.y),kid=c.type==='kid',L=c.look;
+ const legH=kid?5:7,torH=kid?6:8,headH=kid?5:6,w=kid?5:7;
+ const st=c.moving?(Math.floor(c.anim*7)%2):0;
+ P(g,x-4,y-1,9,2,'rgba(0,0,0,.22)');
+ const lx=x-Math.floor(w/2);
+ const legC=c.type==='jogger'?L.skin:L.pants;
+ P(g,lx+1,y-legH,2,legH-(st?1:0),legC);P(g,lx+w-3,y-legH,2,legH-(st?0:1),legC);
+ if(c.type==='jogger')P(g,lx,y-legH,w,2,L.pants);
+ P(g,lx+1,y-1-(st?1:0),2,1,'#222');P(g,lx+w-3,y-1-(st?0:1),2,1,'#222');
+ const ty=y-legH-torH;P(g,lx,ty,w,torH,L.shirt);
+ P(g,lx-1,ty+1,1,torH-2,L.skin);P(g,lx+w,ty+1,1,torH-2,L.skin);
+ if(c.type==='office'){P(g,x-1,ty,3,3,'#f2f2f2');P(g,x,ty+1,1,5,L.tie);}
+ if(c.type==='tourist'){P(g,x-1,ty+3,3,2,'#222');P(g,lx+1,ty+1,1,1,'#fff');P(g,lx+4,ty+4,1,1,'#fff');}
+ const hy=ty-headH;P(g,lx+1,hy,w-2,headH,L.skin);P(g,lx+1,hy,w-2,2,L.hair);
+ P(g,c.dir>0?lx+w-3:lx+2,hy+2,1,1,'#222');
+ if(c.type==='jogger')P(g,lx+1,hy+1,w-2,1,'#ff3b3b');
+ if(c.type==='kid'){P(g,lx+1,hy-1,w-2,2,L.cap);P(c.dir>0?g:g,c.dir>0?lx+w-1:lx-1,hy,2,1,L.cap);}
+ if(c.type==='tourist'){P(g,lx-1,hy,w+2,1,'#f5e6a8');P(g,lx+1,hy-2,w-2,2,'#f5e6a8');}
+ if(c.type==='senior'){P(g,x+(c.dir>0?5:-5),y-10,1,10,'#6b4423');P(g,x+(c.dir>0?4:-5),y-10,2,1,'#6b4423');}
+ if(c.cup){P(g,c.dir>0?lx+w:lx-2,ty+2,2,3,'#fff');P(g,c.dir>0?lx+w:lx-2,ty+2,2,1,'#ffd83a');}
+}
+function drawSeller(g,x,y){P(g,x-3,y,7,8,'#ffd83a');P(g,x-2,y-6,5,6,'#f6d2b0');P(g,x-2,y-7,5,2,'#6b4423');P(g,x+1,y-4,1,1,'#222');P(g,x-3,y-8,7,2,'#e53935');}
+function drawLemon(g,x,y,r){E(g,x,y,r+1,r,'#ffd83a');P(g,x-r,y-1,2,1,'#fff3a8');P(g,x+r,y,2,1,'#f5a623');P(g,x-1,y-r-2,3,2,'#4caf50');}
+function drawStand(g){
+ const tier=S?S.tier:0,u=S?S.upg:{};const pit=G?G.pitcher:12;
+ if(u.sign||u.banner){P(g,146,146,2,44,'#7a4b25');P(g,132,132,30,18,'#3a2a1a');P(g,133,133,28,16,u.banner?'#fff3a8':'#fff');drawLemon(g,141,141,4);P(g,149,138,9,2,'#e53935');P(g,149,142,7,2,'#e53935');P(g,149,146,8,1,'#e53935');}
+ if(tier===0){
+  if(u.parasol){P(g,199,112,2,54,'#ddd');for(let r=0;r<10;r++){const rw=44-r*4;P(g,200-rw/2,120-r,rw,1,(r%2)?'#ff6b6b':'#fff');}P(g,178,120,44,2,'#ff6b6b');}
+  drawSeller(g,198,152);
+  P(g,183,166,34,24,'#c8945a');P(g,181,164,38,4,'#a8743f');P(g,211,166,6,24,'#b07f4b');P(g,183,188,34,2,'#8f6234');
+  P(g,188,170,22,14,'#fff6d5');drawLemon(g,199,177,4);
+  P(g,186,157,5,7,'#fff');P(g,186,157,5,1,'#ddd');
+  if(u.radio){P(g,192,160,9,4,'#555');P(g,193,161,3,2,'#ddd');P(g,199,156,1,4,'#888');}
+  P(g,204,150,10,14,'#9ad3f0');P(g,205,151,8,12,'#e7f7ff');const h=Math.round(11*clamp(pit/12,0,1));if(h>0)P(g,205,163-h,8,h,'#ffe46b');P(g,214,153,2,7,'#9ad3f0');
+  if(u.cooler){P(g,222,176,16,14,'#f2f8ff');P(g,222,174,16,3,'#4fa3e0');P(g,222,188,16,2,'#c0d4e6');}
+ }else{
+  for(let x=173;x<=225;x+=52)P(g,x,116,2,48,'#8a5528');
+  for(let i=0;i<8;i++){P(g,168+i*8,110,8,12,i%2?'#fff':'#ffd83a');D(g,172+i*8,122,3,i%2?'#fff':'#ffd83a');}
+  P(g,168,108,64,2,'#f5a623');
+  if(u.banner){for(let i=0;i<7;i++){const fx=172+i*8;for(let r=0;r<5;r++)P(g,fx+r/2,125+r,4-r,1,i%2?'#e53935':'#1e88e5');}}
+  drawSeller(g,200,150);if(S&&S.helper)drawSeller(g,184,151);
+  P(g,172,162,56,22,'#b5773d');for(let y=166;y<184;y+=5)P(g,172,y,56,1,'#9a6330');P(g,170,158,60,5,'#8a5528');
+  drawLemon(g,200,173,5);
+  D(g,182,188,6,'#3a2a1a');D(g,182,188,4,'#8a5528');P(g,181,187,3,3,'#ccc');D(g,218,188,6,'#3a2a1a');D(g,218,188,4,'#8a5528');P(g,217,187,3,3,'#ccc');
+  P(g,176,151,5,7,'#fff');P(g,206,145,10,13,'#9ad3f0');P(g,207,146,8,11,'#e7f7ff');const h=Math.round(10*clamp(pit/12,0,1));if(h>0)P(g,207,157-h,8,h,'#ffe46b');
+  if(u.press){P(g,188,150,6,8,'#888');P(g,190,146,2,4,'#555');}
+  if(u.tipjar){P(g,220,152,6,6,'#cfeeff');P(g,221,155,4,2,'#6be36b');}
+  if(u.chest||u.cooler){P(g,232,174,18,14,u.chest?'#1e88e5':'#f2f8ff');P(g,232,172,18,3,u.chest?'#0d5aa7':'#4fa3e0');}
+ }
+}
+function bubble(g,x,y,txt,col){
+ g.font='8px "Press Start 2P", monospace';g.textBaseline='top';
+ const w=Math.ceil(g.measureText(txt).width)+6;let bx=Math.round(x-w/2);bx=clamp(bx,2,W-w-2);const by=Math.round(y-14);
+ P(g,bx,by,w,12,'#111');P(g,bx+1,by+1,w-2,10,'#fff');P(g,Math.round(x)-1,by+12,3,2,'#111');
+ g.fillStyle=col||'#222';g.fillText(txt,bx+3,by+2);
+}
+function outlineText(g,t,x,y,size,col,align){
+ g.font=size+'px "Press Start 2P", monospace';g.textBaseline='top';g.textAlign=align||'left';
+ g.fillStyle='#1b1430';for(const[dx,dy]of[[-1,0],[1,0],[0,-1],[0,1],[1,1],[2,2]])g.fillText(t,x+dx,y+dy);
+ g.fillStyle=col;g.fillText(t,x,y);g.textAlign='left';
+}
+function clockStr(t){const m=480+Math.min(t,DAY_LEN);let h=Math.floor(m/60),mm=Math.floor(m%60/15)*15;const ap=h>=12?'PM':'AM';h=h%12||12;return h+':'+String(mm).padStart(2,'0')+' '+ap;}
+
+function draw(){
+ const k=S?S.wx.k:'sunny',lid=S?S.loc:'maple';
+ drawSky(k);cx.drawImage(sceneCanvas(lid),0,0);
+ const ents=[];
+ for(const a of AMB)ents.push(a);
+ if(G)for(const c of G.cust)ents.push(c);
+ ents.push({stand:true,y:190});
+ ents.sort((a,b)=>a.y-b.y);
+ for(const e of ents){if(e.stand)drawStand(cx);else drawPerson(cx,e);}
+ if(k==='rain'){cx.fillStyle='rgba(200,215,235,.7)';for(const r of rain)cx.fillRect(Math.round(r.x),Math.round(r.y),1,4);P(cx,0,0,W,H,'rgba(20,30,50,.12)');}
+ if(k==='heat')P(cx,0,0,W,H,'rgba(255,140,40,.06)');
+ if(G){const ev=clamp((G.time-420)/180,0,1);if(ev>0)P(cx,0,0,W,H,'rgba(255,110,40,'+(ev*0.16).toFixed(3)+')');}
+ const ents2=[...AMB];if(G)ents2.push(...G.cust);
+ for(const c of ents2)if(c.bub&&c.bub.t>0)bubble(cx,c.x,c.y-(c.type==='kid'?18:24),c.bub.txt,c.bub.col);
+ for(const f of FLOATS)outlineText(cx,f.txt,f.x,f.y,8,f.col,'center');
+ if(phase==='day'&&G){
+  P(cx,4,4,86,16,'rgba(27,20,48,.85)');outlineText(cx,clockStr(G.time),9,8,8,'#fff7d6');
+  P(cx,4,21,86,4,'#120d24');P(cx,4,21,86*clamp(G.time/DAY_LEN,0,1),4,'#ffd83a');
+  if(G.speed>1){outlineText(cx,(G.speed>8?'>>>':G.speed+'x'),W-6,8,8,'#ffd83a','right');}
+  if(G.soldOut&&Math.floor(performance.now()/400)%2)outlineText(cx,'SOLD OUT!',W/2,40,16,'#ff6b6b','center');
+ }
+ if(phase==='title'){
+  P(cx,0,0,W,H,'rgba(20,12,40,.35)');
+  drawLemon(cx,200,46,14);
+  outlineText(cx,'LEMON',W/2,70,24,'#ffd83a','center');outlineText(cx,'EMPIRE',W/2,98,24,'#fff7d6','center');
+  outlineText(cx,'FROM CARDBOARD BOX TO GLOBAL BRAND',W/2,132,8,'#b8ecff','center');
+ }
+}
+
+/* ================= simulation ================= */
+function spawnWalker(list,type){
+ const dir=Math.random()<.5?1:-1;
+ const c={type,dir,x:dir>0?-12:W+12,y:rnd(166,200),speed:TYPES[type].speed*rnd(0.85,1.15),look:makeLook(type),state:'walk',decided:false,anim:Math.random(),moving:true,bub:null,wait:0};
+ list.push(c);return c;
+}
+function startDay(){
+ const loc=locById(S.loc);const fees=loc.permit+(S.helper?WAGE:0);
+ if(S.cash<fees){toast('You need '+fmt(fees)+' for today\'s permit'+(S.helper?' and helper wage':'')+'.');sfx('err');return;}
+ if(cupsPossible()<1){toast('Buy supplies first. You can\'t make a single cup.');sfx('err');return;}
+ S.cash-=fees;S.spent+=fees;
+ AMB.length=0;
+ const wm=WX[S.wx.k].m*(loc.beach?({sunny:1.15,heat:1.2,partly:0.95,cloudy:0.6,rain:0.5}[S.wx.k]):1);
+ const N=Math.round(loc.traffic*wm*rnd(0.9,1.1));
+ const spawns=[];
+ for(let i=0;i<N;i++){const r=Math.random();let t;
+  if(r<0.5)t=rnd(0,DAY_LEN);else if(r<0.8)t=270+gauss()*70;else t=540+gauss()*35;
+  spawns.push(clamp(t,0,DAY_LEN-15));}
+ spawns.sort((a,b)=>a-b);
+ G={cust:[],queue:[],time:0,speed:1,spawns,pitcher:0,serveT:0,mixT:0,soldOut:false,soldWhy:'',fees,
+  st:{walkers:0,stopped:0,served:0,revenue:0,tips:0,sat:0,refused:0,slow:0,soldLost:0,c:{sour:0,sweet:0,watery:0,strong:0,moreice:0,icy:0,pricey:0,slow:0,soldout:0},byType:{}},
+  log:[],used:{lemons:0,sugar:0,ice:0,cups:0},liveT:0};
+ phase='day';sfx('day');renderAll();
+}
+function gauss(){return (Math.random()+Math.random()+Math.random()-1.5)*1.4;}
+function say(c,txt,col){c.bub={txt,col,t:1.6};}
+function addLog(txt,cls){G.log.unshift('<span class="'+(cls||'')+'">'+clockStr(G.time)+' — '+txt+'</span>');if(G.log.length>7)G.log.pop();}
+function queueSpot(i){return {x:244+i*13,y:192};}
+function decide(c){
+ c.decided=true;if(G.time>=DAY_LEN)return;
+ const t=TYPES[c.type],th=thirst(c.type,S.wx.temp,S.wx.k);
+ let p=(0.12+0.35*th)*t.stop*(0.5+S.rep/100)*(1+attract());
+ if(G.queue.length>=5)p*=0.5;
+ p=Math.min(p,0.92);
+ if(Math.random()>=p)return;
+ G.st.stopped++;
+ if(G.soldOut){say(c,'Sold out?','#ff6b6b');G.st.soldLost++;G.st.c.soldout++;return;}
+ if(S.price>tolerance(c.type)){say(c,'$$$?!','#ff6b6b');addLog(TYPES[c.type].name.replace(/s$/,'')+' walked off: too pricey','bad');G.st.refused++;G.st.c.pricey++;sfx('bad');return;}
+ if(G.queue.length>=8){say(c,'Busy!','#888');return;}
+ c.state='toQueue';c.wait=0;G.queue.push(c);
+}
+function setSoldOut(why){
+ if(G.soldOut)return;G.soldOut=true;G.soldWhy=why;addLog('SOLD OUT — out of '+why+'!','bad');sfx('err');
+ for(const c of G.queue){say(c,'Sold out?','#ff6b6b');c.state='leave';c.dir=Math.random()<.5?1:-1;G.st.soldLost++;G.st.c.soldout++;}
+ G.queue.length=0;
+}
+function tryServe(){
+ const r=S.recipe,i=S.inv;
+ if(G.pitcher<=0){
+  if(i.lemons<r.L){setSoldOut('lemons');return;}
+  if(i.sugar<r.S){setSoldOut('sugar');return;}
+  i.lemons-=r.L;i.sugar-=r.S;G.used.lemons+=r.L;G.used.sugar+=r.S;G.pitcher=12;G.mixT=mixTime();if(G.speed<=4)sfx('pour');return;
+ }
+ if(i.cups<1){setSoldOut('cups');return;}
+ if(i.ice<r.ice){setSoldOut('ice');return;}
+ const c=G.queue.shift();
+ G.pitcher--;i.cups--;i.ice-=r.ice;G.used.cups++;G.used.ice+=r.ice;
+ const {sat,worst}=rateCup(c.type);
+ let rev=S.price,tip=0;if(S.upg.tipjar&&sat>=80)tip=Math.round(S.price*0.15*100)/100;
+ S.cash+=rev+tip;G.st.revenue+=rev;G.st.tips+=tip;G.st.served++;G.st.sat+=sat;
+ G.st.byType[c.type]=G.st.byType[c.type]||{n:0,sat:0};G.st.byType[c.type].n++;G.st.byType[c.type].sat+=sat;
+ S.nb[c.type]++;
+ if(S.nb[c.type]===10||S.nb[c.type]===30)toast('Notebook updated: '+TYPES[c.type].name+'!');
+ if(sat>=85)say(c,'Perfect!','#2e9e2e');else if(sat>=70)say(c,'Yum!','#2e9e2e');
+ else{const lbl={sour:'Sour!',sweet:'Sweet!',watery:'Watery',strong:'Strong!',moreice:'+Ice!',icy:'Icy!',pricey:'Pricey'}[worst]||'Meh';say(c,lbl,sat<45?'#e53935':'#c77700');if(worst)G.st.c[worst]++;}
+ addLog(TYPES[c.type].name.replace(/s$/,'')+': '+c.bub.txt+' ('+Math.round(sat)+'%)',sat>=70?'good':sat>=45?'lem':'bad');
+ c.cup=true;c.state='leave';c.dir=Math.random()<.5?1:-1;
+ if(G.speed<=4&&FLOATS.length<12)FLOATS.push({txt:'+'+fmt(rev+tip),x:STAND_X,y:140,col:'#6be36b',t:1});
+ if(G.speed<=4)sfx('coin');
+}
+function moveWalker(c,d){c.x+=c.dir*c.speed*d;c.moving=true;}
+function simStep(d){
+ G.time+=d;
+ while(G.spawns.length&&G.spawns[0]<=G.time){G.spawns.shift();spawnWalker(G.cust,wpick(locById(S.loc).mix));G.st.walkers++;}
+ const patMul=S.upg.parasol?1.25:1;
+ for(const c of G.cust){
+  if(c.state==='walk'){
+   moveWalker(c,d);
+   if(!c.decided&&((c.dir>0&&c.x>=STAND_X-80)||(c.dir<0&&c.x<=STAND_X+110)))decide(c);
+  }else if(c.state==='toQueue'||c.state==='queue'){
+   c.wait+=d;
+   const qi=G.queue.indexOf(c),sp=queueSpot(qi);
+   const dx=sp.x-c.x,dy=sp.y-c.y,dist=Math.hypot(dx,dy);
+   if(dist>1){const m=Math.min(dist,c.speed*1.2*d);c.x+=dx/dist*m;c.y+=dy/dist*m;c.moving=true;c.dir=dx>=0?1:-1;}
+   else{c.x=sp.x;c.y=sp.y;c.moving=false;c.state='queue';c.dir=-1;}
+   if(c.wait>TYPES[c.type].pat*patMul&&qi>0){
+    G.queue.splice(qi,1);c.state='leave';c.dir=1;say(c,'Too slow!','#c77700');addLog(TYPES[c.type].name.replace(/s$/,'')+' left the line: too slow','bad');G.st.slow++;G.st.c.slow++;
+   }
+  }else if(c.state==='leave'){moveWalker(c,d);c.y+=(c.y<170?d*4:0);}
+ }
+ G.cust=G.cust.filter(c=>c.x>-30&&c.x<W+30);
+ // serving
+ const f=G.queue[0];
+ if(G.time>=DAY_LEN){
+  for(const c of G.queue){c.state='leave';c.dir=1;say(c,'Closed?','#888');}G.queue.length=0;
+ }else if(f&&f.state==='queue'&&!G.soldOut){
+  if(G.mixT>0)G.mixT-=d;
+  else{G.serveT+=d;if(G.serveT>=serviceTime()||G.pitcher<=0){G.serveT=0;tryServe();}}
+ }
+ if(G.time>=DAY_LEN+20)endDay();
+}
+function tickAmbient(dt){
+ AMB.t=(AMB.t||0)-dt;
+ if(AMB.t<=0&&AMB.length<6){const mix=S?locById(S.loc).mix:LOCS[0].mix;spawnWalker(AMB,wpick(mix));AMB.t=rnd(1.5,4);}
+ for(const c of AMB){moveWalker(c,dt*GM_PER_SEC);c.anim+=dt;if(c.bub)c.bub.t-=dt;}
+ for(let i=AMB.length-1;i>=0;i--)if(AMB[i].x<-30||AMB[i].x>W+30)AMB.splice(i,1);
+}
+function tick(dt){
+ updSky(dt);
+ for(let i=FLOATS.length-1;i>=0;i--){const f=FLOATS[i];f.y-=dt*20;f.t-=dt;if(f.t<=0)FLOATS.splice(i,1);}
+ if(phase==='day'&&G){
+  let gm=dt*GM_PER_SEC*G.speed;
+  while(gm>0&&phase==='day'){const s=Math.min(gm,0.5);simStep(s);gm-=s;}
+  if(G){for(const c of G.cust){c.anim+=dt*(G.speed>2?2:1);if(c.bub)c.bub.t-=dt;}
+   G.liveT-=dt;if(G.liveT<=0){G.liveT=0.25;renderLive();renderHud();}}
+ }else if(phase!=='report'){tickAmbient(dt);}
+}
+
+function endDay(){
+ const st=G.st,loc=locById(S.loc);
+ const profit=st.revenue+st.tips-S.spent;
+ const avg=st.served?st.sat/st.served:0;
+ let dRep=st.served?(avg-60)/40*Math.min(6,1.5+st.served*0.08):-0.5;
+ if(dRep>0)dRep*=(1-S.rep/120);
+ dRep-=st.slow*0.15+st.soldLost*0.05;
+ if(S.rep>50)dRep-=(S.rep-50)*0.03;
+ dRep=clamp(dRep,-8,8);
+ const oldStars=stars(S.rep);S.rep=clamp(S.rep+dRep,0,100);
+ S.life.cups+=st.served;S.life.revenue+=st.revenue+st.tips;S.life.days++;
+ if(profit>S.life.best)S.life.best=profit;
+ if(st.served>0&&!S.life.locs.includes(S.loc))S.life.locs.push(S.loc);
+ let repaid=0;if(S.loan>0){repaid=Math.min(S.loan,Math.round((st.revenue+st.tips)*0.25*100)/100,S.cash);S.loan=Math.round((S.loan-repaid)*100)/100;S.cash-=repaid;}
+ const poured=G.pitcher;
+ const spoilRate=S.upg.crate?0.03:0.10;const spoiled=Math.floor(S.inv.lemons*spoilRate);S.inv.lemons-=spoiled;
+ const keep=S.upg.chest?0.9:S.upg.cooler?0.5:0;const melted=S.inv.ice-Math.floor(S.inv.ice*keep);S.inv.ice-=melted;
+ const rep={day:S.day,loc:loc.name,wx:Object.assign({},S.wx),fc:Object.assign({},S.fc),st:JSON.parse(JSON.stringify(st)),profit,spent:S.spent,avg,dRep,stars:stars(S.rep),oldStars,repaid,poured,spoiled,melted,soldWhy:G.soldOut?G.soldWhy:''};
+ S.lastReport=rep;S.spent=0;S.day++;
+ G=null;phase='report';
+ genWeather();
+ sfx('day');showReport(rep);renderAll();
+}
+
+/* ================= UI ================= */
+function toast(msg){document.querySelectorAll('.toast').forEach(x=>x.remove());const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600);}
+function renderHud(){
+ const h=$('#hud');
+ if(!S||phase==='title'){h.innerHTML='<span class="chip pf" style="font-size:10px">🍋 LEMON EMPIRE</span><span class="sp"></span>'+audioBtns();return;}
+ const w=phase==='day'||phase==='report'?S.wx:null;
+ h.innerHTML='<span class="chip">Day <b>'+S.day+'</b></span><span class="chip">💰 <b>'+fmt(S.cash)+'</b></span>'+
+  '<span class="chip" title="Reputation">'+'<span class="lem">'+starStr(S.rep)+'</span> <span class="dim">'+Math.round(S.rep)+'</span></span>'+
+  (phase==='day'?'<span class="chip">'+WX[S.wx.k].ic+' '+S.wx.temp+'°F</span>':'')+
+  '<span class="chip">🏪 '+tierDef().name+'</span>'+(S.loan>0?'<span class="chip bad">Loan '+fmt(S.loan)+'</span>':'')+
+  '<span class="sp"></span>'+audioBtns()+'<button class="btn sm alt" data-a="menu">☰ MENU</button>';
+}
+function audioBtns(){return '<button class="btn sm '+(AU.musicOn?'on':'')+'" data-a="music" title="Music">♪</button><button class="btn sm '+(AU.sfxOn?'on':'')+'" data-a="sfx" title="Sound effects">SFX</button>';}
+function renderAll(){renderHud();renderPanel();}
+function renderPanel(){
+ const p=$('#panel');
+ if(phase==='title'){
+  const auto=slotInfo('auto');
+  p.innerHTML='<div class="row" style="justify-content:center;gap:12px;padding:10px">'+
+   '<button class="btn big" data-a="new">NEW GAME</button>'+
+   (auto?'<button class="btn big grn" data-a="continue">CONTINUE · DAY '+auto.day+'</button>':'')+
+   '<button class="btn big alt" data-a="loadmenu">LOAD</button><button class="btn big alt" data-a="howto">HOW TO PLAY</button></div>'+
+   '<p class="dim" style="text-align:center">Start with a cardboard box and $20. Reinvest every penny. Build an empire.</p>';
+  return;
+ }
+ if(phase==='day'){
+  p.innerHTML='<div class="row between"><div class="h">OPEN FOR BUSINESS — '+locById(S.loc).name+'</div><div class="row">'+
+   [1,2,4].map(s=>'<button class="btn sm '+(G.speed===s?'on':'')+'" data-a="speed" data-v="'+s+'">'+s+'x</button>').join('')+
+   '<button class="btn sm red" data-a="speed" data-v="60">&gt;&gt; FINISH DAY</button></div></div><div id="live"></div>';
+  renderLive();return;
+ }
+ if(phase==='report'){p.innerHTML='<div class="row" style="justify-content:center;padding:10px"><button class="btn big grn" data-a="next">NEXT DAY ▶</button></div>';return;}
+ // prep
+ const fcw=WX[S.fc.k];
+ const can=cupsPossible();
+ const tabs=[['supplies','SUPPLIES'],['recipe','RECIPE & PRICE'],['upgrades','UPGRADES'],['location','LOCATION'],['staff','STAFF'],['goals','GOALS'+(goalsMet()&&!TIERS[S.tier+1].future?' ★':'')],['notebook','NOTEBOOK'],['bank','BANK']];
+ let h='<div class="row between"><div class="fc"><span class="ic">'+fcw.ic+'</span><div><div class="pf" style="font-size:9px;color:var(--dim)">FORECAST · DAY '+S.day+'</div><div style="font-size:24px">'+fcw.n+', '+S.fc.temp+'°F</div><div class="dim">'+locById(S.loc).name+' · can make <b class="'+(can>0?'lem':'bad')+'">'+can+'</b> cups</div></div></div>'+
+  '<button class="btn big grn" data-a="open">OPEN STAND ▶</button></div>';
+ h+='<div class="tabs">'+tabs.map(([k,l])=>'<div class="tab '+(tab===k?'act':'')+'" data-a="tab" data-v="'+k+'">'+l+'</div>').join('')+'</div>';
+ h+='<div id="tabbody">'+tabBody()+'</div>';
+ p.innerHTML=h;
+}
+function tabBody(){
+ if(tab==='supplies'){
+  let h='<table><tr><th>ITEM</th><th>STOCK</th><th>BUY</th></tr>';
+  for(const k in SUP){const s=SUP[k];
+   h+='<tr><td>'+s.ic+' '+s.name+'</td><td><b class="lem" style="font-size:24px">'+S.inv[k]+'</b></td><td><div class="row">'+
+    s.packs.map((pk,i)=>'<button class="btn sm" data-a="buy" data-v="'+k+':'+i+'" '+(S.cash<pk[1]?'disabled':'')+'>'+pk[0]+' · '+fmt(pk[1])+'</button>').join('')+'</div></td></tr>';}
+  h+='</table><p class="dim">Each pitcher makes 12 cups and uses your recipe\'s lemons + sugar. Every cup uses 1 cup + your ice. '+
+   '<span class="bad">Ice melts overnight</span>'+(S.upg.cooler||S.upg.chest?' (your '+(S.upg.chest?'chest keeps 90%':'cooler keeps 50%')+')':'')+'. Lemons spoil '+(S.upg.crate?'3%':'10%')+' per night. Big packs are cheaper per unit.</p>';
+  return h;
+ }
+ if(tab==='recipe'){
+  const r=S.recipe,cpc=costPerCup();
+  const stp=(lbl,key,unit)=>'<div class="step"><span class="lbl">'+lbl+'</span><button class="btn sm" data-a="rec" data-v="'+key+':-1">−</button><span class="val">'+r[key]+'</span><button class="btn sm" data-a="rec" data-v="'+key+':1">+</button><span class="dim">'+unit+'</span></div>';
+  let h='<div class="grid"><div class="card"><div class="h">RECIPE</div>'+stp('🍋 Lemons','L','per pitcher')+stp('🧂 Sugar','S','per pitcher')+stp('🧊 Ice','ice','cubes per cup')+'</div>';
+  h+='<div class="card"><div class="h">PRICE</div><div class="step"><button class="btn sm" data-a="price" data-v="-0.25">−.25</button><button class="btn sm" data-a="price" data-v="-0.05">−.05</button><span class="val">'+fmt(S.price)+'</span><button class="btn sm" data-a="price" data-v="0.05">+.05</button><button class="btn sm" data-a="price" data-v="0.25">+.25</button></div>'+
+   '<div>Cost per cup ≈ <b class="lem">'+fmt(cpc)+'</b> · Profit per cup ≈ <b class="'+(S.price-cpc>0?'good':'bad')+'">'+fmt(S.price-cpc)+'</b></div><div class="dim" style="margin-top:4px">Cost uses small-pack prices.</div></div></div>';
+  h+='<p class="dim">Read the speech bubbles. Each crowd likes it differently, and hot days want more ice. Your <b>Notebook</b> fills in as you serve each customer type.</p>';
+  return h;
+ }
+ if(tab==='upgrades'){
+  let h='<div class="grid">';
+  for(const u of UPG){const own=S.upg[u.id],lockT=u.tier>S.tier,lockR=u.req&&!S.upg[u.req];
+   h+='<div class="card '+(own?'own':(lockT?'locked':''))+'"><div class="row between"><div class="h">'+u.name+'</div><b class="lem">'+fmt0(u.cost)+'</b></div><div>'+u.desc+'</div><div style="margin-top:6px">'+
+    (own?'<span class="good pf" style="font-size:9px">✔ OWNED</span>':lockT?'<span class="dim">Requires '+TIERS[u.tier].name+'</span>':lockR?'<span class="dim">Requires '+UPG.find(x=>x.id===u.req).name+'</span>':
+     '<button class="btn sm" data-a="upg" data-v="'+u.id+'" '+(S.cash<u.cost?'disabled':'')+'>BUY</button>')+'</div></div>';}
+  return h+'</div><p class="dim">More upgrade lines arrive with the Kiosk, Café and beyond.</p>';
+ }
+ if(tab==='location'){
+  let h='<div class="grid">';
+  for(const l of LOCS){const cur=S.loc===l.id,lock=l.tier>S.tier;
+   const mix=Object.entries(l.mix).map(([k,v])=>'<span style="width:'+v+'%;background:'+TYPES[k].col+'" title="'+TYPES[k].name+' '+v+'%"></span>').join('');
+   h+='<div class="card '+(cur?'own':lock?'locked':'')+'"><div class="row between"><div class="h">'+l.name+'</div><span>'+(l.permit?fmt0(l.permit)+'/day':'FREE')+'</span></div><div class="dim">'+l.desc+'</div>'+
+    '<div>Foot traffic: <b class="lem">'+'▮'.repeat(Math.round(l.traffic/37))+'</b></div><div class="mix">'+mix+'</div>'+
+    '<div style="margin-top:6px">'+(cur?'<span class="good pf" style="font-size:9px">✔ YOU ARE HERE</span>':lock?'<span class="dim">Requires Wooden Cart</span>':'<button class="btn sm" data-a="loc" data-v="'+l.id+'">SET UP HERE</button>')+'</div></div>';}
+  h+='</div><div class="legend">'+Object.values(TYPES).map(t=>'<span><i style="background:'+t.col+'"></i>'+t.name+'</span>').join('')+'</div>';
+  if(S.tier===0)h+='<p class="dim">A cardboard box can\'t go anywhere. Get the Wooden Cart to move around town.</p>';
+  return h;
+ }
+ if(tab==='staff'){
+  if(S.tier<1)return '<div class="card locked"><div class="h">HELPER</div>Requires the Wooden Cart. A cardboard box only fits you.</div><div class="card locked"><div class="h">MANAGERS</div>Arrive at the Café tier. They run stands for you.</div>';
+  return '<div class="card '+(S.helper?'own':'')+'"><div class="row between"><div class="h">HELPER</div><span>'+fmt0(WAGE)+'/day</span></div><div>Serves 35% faster. Wage is paid each morning when you open.</div><div style="margin-top:6px"><button class="btn sm '+(S.helper?'red':'')+'" data-a="helper">'+(S.helper?'LET GO':'HIRE')+'</button></div></div>'+
+   '<div class="card locked"><div class="h">MANAGERS</div>Arrive at the Café tier. They run extra stands on their own.</div>';
+ }
+ if(tab==='goals'){
+  let h='<div class="ladder">'+TIERS.map((t,i)=>'<span class="'+(i<S.tier?'done':i===S.tier?'cur':'')+'">'+(i<S.tier?'✔ ':'')+t.name+'</span>').join('')+'</div>';
+  const t=tierDef();h+='<div class="h">GOALS TO UNLOCK: '+TIERS[S.tier+1].name.toUpperCase()+'</div>';
+  for(const g of t.goals){const v=g.v(S),pct=clamp(v/g.n,0,1);
+   h+='<div class="card '+(pct>=1?'own':'')+'"><div class="row between"><span>'+(pct>=1?'✔ ':'')+g.t+'</span><span class="dim">'+(g.m?fmt0(Math.min(v,g.n)):Math.min(Math.floor(v),g.n).toLocaleString())+' / '+(g.m?fmt0(g.n):g.n.toLocaleString())+'</span></div><div class="bar"><i style="width:'+(pct*100)+'%"></i></div></div>';}
+  if(TIERS[S.tier+1].future){
+   h+=goalsMet()?'<div class="card own"><div class="h">KIOSK UNDER CONSTRUCTION</div>You\'ve maxed out the Wooden Cart. The Kiosk, Café and the rest of the ladder arrive in the next update. Keep playing to bank cash for it!</div>':'<p class="dim">Next: '+TIERS[S.tier+1].name+' (arrives in the next update).</p>';
+  }else{
+   h+='<div class="card"><div class="dim">Unlocks: '+t.unlock+'</div><div style="margin-top:8px"><button class="btn big grn" data-a="tierup" '+(goalsMet()&&S.cash>=t.next?'':'disabled')+'>UPGRADE TO '+TIERS[S.tier+1].name.toUpperCase()+' — '+fmt0(t.next)+'</button></div></div>';
+  }
+  h+='<p class="dim">Lifetime: '+S.life.days+' days · '+S.life.cups.toLocaleString()+' cups · '+fmt(S.life.revenue)+' sales · best day '+fmt(S.life.best)+'</p>';
+  return h;
+ }
+ if(tab==='notebook'){
+  let h='<div class="grid">';
+  for(const k in TYPES){const t=TYPES[k],n=S.nb[k];
+   h+='<div class="card"><div class="row between"><div class="h" style="color:'+t.col+'">'+t.name.toUpperCase()+'</div><span class="dim">served '+n+'</span></div>'+
+    '<div>'+(n>=10?'🍋 '+NB_HINTS[k].taste:'<span class="dim">??? Serve '+(10-n)+' more to learn their taste.</span>')+'</div>'+
+    '<div style="margin-top:4px">'+(n>=30?'💡 '+NB_HINTS[k].more:'<span class="dim">??? Serve '+Math.max(0,30-n)+' more to learn more.</span>')+'</div></div>';}
+  return h+'</div><p class="dim">General rule: the hotter the day, the more ice everyone wants (about +1 cube for every 8°F above 52°F). Hot days also make people willing to pay more. Higher reputation brings more customers and lets you charge a bit more.</p>';
+ }
+ if(tab==='bank'){
+  const cap=tierDef().loan,room=Math.max(0,cap-S.loan);
+  const amts=S.tier===0?[10,25]:[50,100,200];
+  let h='<div class="card"><div class="h">LEMON BANK</div><div>Borrow up to <b class="lem">'+fmt0(cap)+'</b> total. 10% fee is added when you borrow. 25% of each day\'s sales goes to repayment automatically.</div>'+
+   '<div style="margin:6px 0">Owed: <b class="'+(S.loan>0?'bad':'good')+'">'+fmt(S.loan)+'</b></div><div class="row">'+
+   amts.map(a=>'<button class="btn sm" data-a="loan" data-v="'+a+'" '+(a*1.1>room+0.001?'disabled':'')+'>BORROW '+fmt0(a)+'</button>').join('')+
+   '<button class="btn sm alt" data-a="repay" '+(S.loan>0&&S.cash>0?'':'disabled')+'>REPAY NOW</button></div></div>';
+  const stuck=cupsPossible()<1&&S.cash<4&&room<11;
+  if(stuck)h+='<div class="card"><div class="h">GRANDMA\'S COOKIE JAR</div>Broke and out of stock? Grandma believes in you.<div style="margin-top:6px"><button class="btn sm grn" data-a="grandma">TAKE $5</button></div></div>';
+  return h;
+ }
+ return '';
+}
+function renderLive(){
+ const el=$('#live');if(!el||!G)return;const st=G.st,i=S.inv;
+ const sat=st.served?Math.round(st.sat/st.served)+'%':'—';
+ el.innerHTML='<div class="livegrid">'+
+  '<span class="chip">🕒 '+clockStr(G.time)+'</span><span class="chip">🥤 Sold <b>'+st.served+'</b></span><span class="chip">💵 <b>'+fmt(st.revenue+st.tips)+'</b></span><span class="chip">😊 <b>'+sat+'</b></span>'+
+  '<span class="chip">🍋 <b>'+i.lemons+'</b></span><span class="chip">🧂 <b>'+i.sugar+'</b></span><span class="chip">🧊 <b>'+i.ice+'</b></span><span class="chip">🥤 cups <b>'+i.cups+'</b></span>'+
+  '<span class="chip">🫗 Pitcher <b>'+G.pitcher+'/12</b></span><span class="chip">👥 Line <b>'+G.queue.length+'</b></span><span class="chip">🚶 Passed <b>'+st.walkers+'</b></span><span class="chip">'+WX[S.wx.k].ic+' <b>'+S.wx.temp+'°F</b></span>'+
+  '</div><div id="log" class="card" style="margin-top:8px">'+(G.log.length?G.log.join('<br>'):'<span class="dim">Customers will come and go. Watch their bubbles.</span>')+'</div>';
+}
+function showReport(r){
+ const st=r.st,c=st.c;
+ const comp=Object.keys(c).filter(k=>c[k]>0).sort((a,b)=>c[b]-c[a]);
+ const top=comp[0];
+ const byT=Object.entries(st.byType).map(([k,v])=>'<span style="color:'+TYPES[k].col+'">'+TYPES[k].name+' '+Math.round(v.sat/v.n)+'% ('+v.n+')</span>').join(' · ');
+ let h='<div class="h" style="font-size:13px">DAY '+r.day+' REPORT</div><div class="dim">'+r.loc+' · '+WX[r.wx.k].ic+' '+WX[r.wx.k].n+' '+r.wx.temp+'°F <span style="font-size:16px">(forecast: '+WX[r.fc.k].n+' '+r.fc.temp+'°F)</span></div>';
+ h+='<table style="margin:8px 0"><tr><td>Passers-by</td><td>'+st.walkers+'</td><td>Stopped</td><td>'+st.stopped+'</td></tr>'+
+  '<tr><td>Cups sold</td><td class="lem">'+st.served+'</td><td>Avg satisfaction</td><td class="'+(r.avg>=70?'good':r.avg>=50?'lem':'bad')+'">'+(st.served?Math.round(r.avg)+'%':'—')+'</td></tr>'+
+  '<tr><td>Sales</td><td>'+fmt(st.revenue)+'</td><td>Tips</td><td>'+fmt(st.tips)+'</td></tr>'+
+  '<tr><td>Spent today</td><td>'+fmt(r.spent)+'</td><td><b>PROFIT</b></td><td class="'+(r.profit>=0?'good':'bad')+'" style="font-size:24px">'+fmt(r.profit)+'</td></tr></table>';
+ h+='<div>Reputation: <b class="'+(r.dRep>=0?'good':'bad')+'">'+(r.dRep>=0?'+':'')+r.dRep.toFixed(1)+'</b> → <span class="lem">'+'★'.repeat(r.stars)+'☆'.repeat(5-r.stars)+'</span>'+(r.stars>r.oldStars?' <b class="good">STAR UP!</b>':r.stars<r.oldStars?' <b class="bad">star lost</b>':'')+'</div>';
+ if(byT)h+='<div style="margin-top:4px;font-size:18px">'+byT+'</div>';
+ h+='<div class="card" style="margin-top:8px"><div class="h">WHAT CUSTOMERS SAID</div>'+(comp.length?comp.map(k=>COMPLAINTS[k]+' ×'+c[k]).join(' · '):'<span class="good">No complaints. Flawless!</span>')+
+  (top?'<div style="margin-top:4px">💡 <b class="lem">'+ADVICE[top]+'</b></div>':'')+'</div>';
+ const night=[];if(r.poured)night.push(r.poured+' leftover cups poured out');if(r.spoiled)night.push(r.spoiled+' lemons spoiled');if(r.melted)night.push(r.melted+' ice melted');if(r.repaid)night.push(fmt(r.repaid)+' repaid to the bank');
+ if(night.length)h+='<div class="dim">Overnight: '+night.join(' · ')+'.</div>';
+ if(goalsMet()&&!TIERS[S.tier+1].future)h+='<div class="card own" style="margin-top:8px">★ All goals met! Open the <b>GOALS</b> tab to upgrade to the '+TIERS[S.tier+1].name+'.</div>';
+ h+='<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn big grn" data-a="next">NEXT DAY ▶</button></div>';
+ openModal(h);
+}
+function openModal(h){$('#mbox').innerHTML=h;$('#modal').classList.add('show');}
+function closeModal(){$('#modal').classList.remove('show');}
+function menuHtml(fromTitle){
+ const canSave=phase==='prep';
+ let h='<div class="row between"><div class="h" style="font-size:13px">'+(fromTitle?'LOAD GAME':'MENU')+'</div><button class="btn sm red" data-a="close">✕</button></div>';
+ const slots=[['auto','AUTOSAVE'],['1','SLOT 1'],['2','SLOT 2'],['3','SLOT 3']];
+ h+='<table>';
+ for(const[k,l]of slots){const s=slotInfo(k);
+  h+='<tr><td class="pf" style="font-size:9px">'+l+'</td><td>'+(s?'Day '+s.day+' · '+TIERS[s.tier].name+' · '+fmt(s.cash):'<span class="dim">empty</span>')+'</td><td><div class="row">'+
+   (k!=='auto'&&!fromTitle?'<button class="btn sm" data-a="save" data-v="'+k+'" '+(canSave?'':'disabled')+'>SAVE</button>':'')+
+   (s?'<button class="btn sm alt" data-a="load" data-v="'+k+'">LOAD</button>':'')+'</div></td></tr>';}
+ h+='</table>';
+ if(!canSave&&!fromTitle)h+='<p class="dim">You can save between days (during morning prep).</p>';
+ h+='<div class="row" style="margin-top:10px">'+(S&&canSave?'<button class="btn sm" data-a="export">EXPORT SAVE FILE</button>':'')+'<button class="btn sm" data-a="import">IMPORT SAVE FILE</button>'+
+  (fromTitle?'':'<button class="btn sm alt" data-a="howto">HOW TO PLAY</button><button class="btn sm red" data-a="title">QUIT TO TITLE</button>')+'</div>';
+ h+='<p class="dim" style="font-size:16px">The game autosaves every morning. Saves live in this browser. Export a file to back up or move your empire.</p>';
+ return h;
+}
+const HOWTO='<div class="row between"><div class="h" style="font-size:13px">HOW TO PLAY</div><button class="btn sm red" data-a="close">✕</button></div>'+
+ '<p><b class="lem">Each morning</b> check the forecast, buy supplies, set your recipe and price, then <b>OPEN STAND</b>.</p>'+
+ '<p><b class="lem">During the day</b> watch customers. Bubbles tell you what they think: <i>Sour!</i>, <i>+Ice!</i>, <i>$$$?!</i>, <i>Too slow!</i>. Use 2x/4x or FINISH DAY to speed up.</p>'+
+ '<p><b class="lem">Each pitcher</b> = 12 cups using your lemons + sugar. Each cup also uses a cup and your ice. Running out of anything means SOLD OUT.</p>'+
+ '<p><b class="lem">Customer types</b> (Kids, Joggers, Office Workers, Tourists, Seniors) each want different flavor, ice and price. Every location has a different mix. Your Notebook fills in as you serve them.</p>'+
+ '<p><b class="lem">Reputation</b> (stars) rises with happy customers and brings bigger crowds willing to pay more.</p>'+
+ '<p><b class="lem">Climb the ladder</b>: meet a tier\'s goals in the GOALS tab, then pay to upgrade. Cardboard Box → Wooden Cart → Kiosk → Café → Franchise → Bottling Co. → Global Brand.</p>'+
+ '<p><b class="lem">No game over.</b> Broke? Visit the Bank.</p>'+
+ '<div class="row" style="justify-content:flex-end"><button class="btn sm grn" data-a="close">GOT IT</button></div>';
+
+function act(a,v){
+ if(a!=='music'&&a!=='sfx')sfx('click');
+ switch(a){
+ case 'music':AU.musicOn=!AU.musicOn;saveAudio();renderHud();break;
+ case 'sfx':AU.sfxOn=!AU.sfxOn;saveAudio();renderHud();break;
+ case 'new':
+  if(slotInfo('auto'))openModal('<div class="h">START A NEW EMPIRE?</div><p>Your autosave will be overwritten tomorrow morning. Manual slots are kept.</p><div class="row" style="justify-content:flex-end"><button class="btn sm" data-a="close">CANCEL</button><button class="btn sm grn" data-a="confirmNew">START FRESH</button></div>');
+  else act('confirmNew');break;
+ case 'confirmNew':closeModal();S=newState();resetSky();phase='prep';tab='supplies';AMB.length=0;playMusic(0);saveTo('auto');renderAll();openModal(HOWTO);break;
+ case 'continue':{const s=slotInfo('auto');if(s&&validState(s))loadState(s);break;}
+ case 'loadmenu':openModal(menuHtml(true));break;
+ case 'howto':openModal(HOWTO);break;
+ case 'menu':openModal(menuHtml(false));break;
+ case 'close':closeModal();break;
+ case 'save':if(saveTo(v)){toast('Saved to slot '+v+'.');openModal(menuHtml(false));}else toast('Could not save. Browser storage is blocked. Use Export.');break;
+ case 'load':{const s=slotInfo(v);if(s&&validState(s)){closeModal();G=null;loadState(s);toast('Loaded.');}else toast('That save is damaged.');break;}
+ case 'export':{const blob=new Blob([JSON.stringify(S)],{type:'application/json'});const u=URL.createObjectURL(blob);const l=document.createElement('a');l.href=u;l.download='lemon-empire-day'+S.day+'.json';document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),2000);break;}
+ case 'import':$('#importFile').click();break;
+ case 'title':closeModal();G=null;phase='title';S=null;resetSky();playMusic(0);renderAll();break;
+ case 'tab':tab=v;renderPanel();break;
+ case 'buy':{const[k,i]=v.split(':');const pk=SUP[k].packs[+i];if(S.cash>=pk[1]){S.cash=Math.round((S.cash-pk[1])*100)/100;S.spent+=pk[1];S.inv[k]+=pk[0];sfx('buy');}else sfx('err');renderAll();break;}
+ case 'rec':{const[k,d]=v.split(':');const lim={L:[1,10],S:[0,10],ice:[0,6]}[k];S.recipe[k]=clamp(S.recipe[k]+(+d),lim[0],lim[1]);renderPanel();break;}
+ case 'price':S.price=clamp(Math.round((S.price+(+v))*100)/100,0.05,9.95);renderPanel();break;
+ case 'upg':{const u=UPG.find(x=>x.id===v);if(u&&!S.upg[v]&&S.cash>=u.cost&&u.tier<=S.tier&&(!u.req||S.upg[u.req])){S.cash-=u.cost;S.spent+=u.cost;S.upg[v]=true;sfx('level');toast(u.name+' installed!');}renderAll();break;}
+ case 'loc':{const l=locById(v);if(l&&l.tier<=S.tier){S.loc=v;AMB.length=0;toast('Moved to '+l.name+'.');}renderAll();break;}
+ case 'helper':S.helper=!S.helper;renderAll();break;
+ case 'tierup':{const t=tierDef();if(goalsMet()&&S.cash>=t.next&&!TIERS[S.tier+1].future){S.cash-=t.next;S.spent+=t.next;S.tier++;sfx('level');playMusic(tierDef().music);
+  openModal('<div class="h" style="font-size:14px">🎉 '+tierDef().name.toUpperCase()+' UNLOCKED!</div><p>'+t.unlock+'</p><p class="dim">Check the LOCATION, STAFF and UPGRADES tabs.</p><div class="row" style="justify-content:flex-end"><button class="btn sm grn" data-a="close">LET\'S GO</button></div>');}
+  renderAll();break;}
+ case 'loan':{const amt=+v,cap=tierDef().loan;if(S.loan+amt*1.1<=cap+0.001){S.loan=Math.round((S.loan+amt*1.1)*100)/100;S.cash+=amt;sfx('coin');}renderAll();break;}
+ case 'repay':{const p=Math.min(S.loan,S.cash);S.loan=Math.round((S.loan-p)*100)/100;S.cash=Math.round((S.cash-p)*100)/100;renderAll();break;}
+ case 'grandma':S.cash+=5;S.grandma++;toast('Grandma slipped you $5. Don\'t waste it.');renderAll();break;
+ case 'open':startDay();break;
+ case 'speed':if(G){G.speed=+v;renderPanel();}break;
+ case 'next':closeModal();phase='prep';tab='supplies';saveTo('auto');renderAll();break;
+ }
+}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(!b||b.disabled)return;act(b.dataset.a,b.dataset.v);});
+$('#modal').addEventListener('click',e=>{if(e.target.id==='modal'&&phase!=='report')closeModal();});
+$('#importFile').addEventListener('change',e=>{
+ const f=e.target.files[0];if(!f)return;const rd=new FileReader();
+ rd.onload=()=>{try{const s=JSON.parse(rd.result);if(!validState(s))throw 0;closeModal();G=null;loadState(s);toast('Save imported. Day '+S.day+'.');}catch(err){toast('That file isn\'t a LEMON EMPIRE save.');}e.target.value='';};
+ rd.readAsText(f);
+});
+
+/* ================= main loop ================= */
+let last=performance.now();
+function frame(now){const dt=Math.min(0.1,(now-last)/1000);last=now;try{tick(dt);draw();}catch(err){console.error(err);}requestAnimationFrame(frame);}
+resetSky();playMusic(0);renderAll();requestAnimationFrame(frame);
+</script>
+</body>
+</html>
