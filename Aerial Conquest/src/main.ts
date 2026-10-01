@@ -404,6 +404,8 @@ class Game {
     this.enemies.length = 0; this.projectiles.length = 0; this.pickups.length = 0;
     this.army.clear();
     this.army.streamTier = spec.tier;
+    this.army.streamMult[TEAM_PLAYER] = 1;
+    this.army.streamMult[TEAM_ENEMY] = WAR.battlePace[spec.kind] || 1;
     p.lock = null;
     this.order = 'follow';
     this.wheelOpen = false; this.wheelTouch = false; this.input.suppressMove = false;
@@ -509,7 +511,8 @@ class Game {
       // a defense's commander leads from the rear: go out to him to break the attack early
       if (spec.kind === 'defense') c.aggro = false;
     }
-    for (const k of unitList(spec.reinforce || {})) this.army.addReserve('enemy', k);
+    // a rescue's reinforcements wait for the alarm (the general walking free)
+    if (spec.kind !== 'rescue') for (const k of unitList(spec.reinforce || {})) this.army.addReserve('enemy', k);
     b.startFoes = this.foeStrength();
     b.startAllies = this.army.live('player') + this.army.reserveCount('player');
     if (spec.kind === 'convoy') b.notes.push(`${b.cargo} gold aboard`);
@@ -616,7 +619,9 @@ class Game {
       case 'rescue': {
         const c = b.cell!;
         if (!b.general) {
-          if (p.alive && dist(p.x, p.y, c.x, c.y) <= c.ringR) c.progress += dt;
+          // held like the outpost's ring: an enemy inside pauses it (never resets)
+          c.contested = this.sideIn('enemy', c.x, c.y, c.ringR);
+          if (p.alive && !c.contested && dist(p.x, p.y, c.x, c.y) <= c.ringR) c.progress += dt;
           if (c.progress >= c.need) this.freeGeneral();
         } else if (!b.general.alive) {
           b.outcome = `${b.spec.generalName || 'The general'} fell`;
@@ -655,7 +660,10 @@ class Game {
     this.enemies.push(g);
     b.general = g;
     c.hp = 0;
-    this.banner(`${(b.spec.generalName || 'the general').toUpperCase()} IS FREE`, 'now get out: your edge, the general alive', '#4fe08a');
+    // the alarm: the throne room's guard pours out after you
+    for (const k of unitList(b.spec.reinforce || {})) this.army.addReserve('enemy', k);
+    b.startFoes = Math.max(b.startFoes, this.foeStrength());
+    this.banner(`${(b.spec.generalName || 'the general').toUpperCase()} IS FREE`, 'the alarm is up  ·  get out: your edge, the general alive', '#4fe08a');
     this.sfx.levelUp();
   }
 
@@ -703,7 +711,7 @@ class Game {
     inp.bot = null;
     if (!this.autopilot || b.spec.kind === 'test' || b.result || !p.alive) return;
     const kind = b.spec.kind;
-    if (b.time < 0.1 && this.order === 'follow' && kind !== 'outpost' && kind !== 'rescue') this.issueOrder('charge');
+    if (b.time < 0.1 && this.order === 'follow' && kind !== 'outpost' && kind !== 'rescue' && kind !== 'defense') this.issueOrder('charge');
     if (p.hp < p.stats.maxHp * 0.35 && p.potions > 0 && inp.frame % 30 === 0) inp.press('item');
 
     // the nearest hostile in the knight's way

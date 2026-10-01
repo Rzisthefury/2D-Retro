@@ -4,9 +4,9 @@ Read `PLAN.md` in this folder in full before writing any code. It is the complet
 
 ## Hard rules
 
-- **Commit and push each phase.** When a phase is done and its checks pass, commit with a clear message and push to the session's working branch. Never force-push, never rewrite history, and never push to `main` or open a pull request unless Michael asks. Don't commit `dist/` (scratch build output).
+- **Commit and push each phase to `main`.** When a phase is done and its checks pass, commit with a clear message and push it to `main` (Michael's instruction, 2026-10-01); a cloud session also pushes its working branch. Merge, never force-push, never rewrite history. Don't commit `dist/` (scratch build output).
 - **Never edit `../Aerial Finisher`.** It is the source you fork in Phase 0. Copy it, don't touch it.
-- Work in this folder (`Retro Games/Aerial Conquest`). After every phase, also copy the playable `aerial-conquest.html`, `src/`, `build.js`, `shell.html`, `tsconfig.json`, `README.md` and `PLAN.md` to `C:\Users\shado\OneDrive\Desktop\Claude\Aerial Conquest`. A phase is not delivered until both folders match. In a cloud session that can't reach Michael's PC, push instead and tell him the Desktop copy is his to make.
+- Work in this folder (`Retro Games/Aerial Conquest`). After every phase, also copy the playable `aerial-conquest.html`, `src/`, `build.js`, `shell.html`, `tsconfig.json`, `README.md` and `PLAN.md` to `C:\Users\shado\OneDrive\Desktop\Claude\Aerial Conquest`. A phase is not delivered until both folders match. In a cloud session that can't reach Michael's PC, push to `main` instead: Michael pulls it into `Retro Games` and runs `sync-desktop.bat` to update the Desktop copy.
 - No npm installs, no dependencies, no bundler. `tsc -p tsconfig.json` then `node build.js`, the same as Aerial Finisher.
 - Build one phase at a time, in the order in PLAN.md section 14. Finish each phase's "done when" checks (headless Chromium, desktop and emulated phone) before starting the next.
 - Put all new tunable numbers in the `WAR` object in `config.ts`.

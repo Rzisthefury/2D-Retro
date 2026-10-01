@@ -454,6 +454,13 @@ class Army {
         const st = g.battle.nearestStructure(teamName(own), this.x[i], this.y[i], !!d.ignoresUnits);
         if (st) { this.tgt[i] = st; return; }
       }
+      // the Dominion holds its objective (the outpost's ring, the rescue cell)
+      const gp = own === TEAM_ENEMY ? g.battle.guardPoint() : null;
+      if (gp) {
+        const s = this.formationSpot(i, gp.x, gp.y);
+        if (dist(this.x[i], this.y[i], s.x, s.y) > 14) go(s.x, s.y, 1); else halt();
+        return;
+      }
       // otherwise march on the enemy's centre (behind a shut gate: stand)
       const c = this.centre[1 - own];
       if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40) go(c.x, c.y, 1); else halt();

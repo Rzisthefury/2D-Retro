@@ -419,7 +419,7 @@ const WAR = {
   orderBanner: 0.9,          // seconds the "ORDER: CHARGE" banner shows
 
   // battles (Phase 4, PLAN 10)
-  houseHp: 600,              // village house HP at tier 1 (x tier HP scale): ~7 knight combos
+  houseHp: 800,              // village house HP at tier 1 (x tier HP scale): ~7 knight combos
   routThreshold: 0.4,        // a leaderless side under this share of its starting strength flees
   routCheckEvery: 0.5,       // seconds between rout checks
   fadeTime: 0.6,             // battle entry fade
@@ -433,17 +433,22 @@ const WAR = {
   ringRadius: 110,           // outpost capture ring
   outpostHold: 10,           // seconds in the ring with no enemy inside (pauses, never resets)
   gateHp: 1500,              // gate HP at tier 1 (x tier HP scale); knights do x0.3, rams x4
-  keepGateMult: 1.6,         // keep gates against the base
+  keepGateMult: 4.5,         // keep gates against the base
   ironGateMult: 1.6,         // a castle whose keep is still the Dominion's (PLAN 10.2)
-  throneHp: 2200,            // castle throne at tier 1 (knights and units x0.3, rams can't)
+  throneHp: 5600,            // castle throne at tier 1 (knights and units x0.3, rams can't)
   cellRingRadius: 70,        // rescue: stand this close to the cell...
   rescueHold: 8,             // ...for this long to free the general
-  wagonHp: 700,              // convoy wagon at tier 1
+  wagonHp: 1700,              // convoy wagon at tier 1
   wagonSpeed: 30,            // px/s along the road (3600 px: about 2 min to get away)
-  wagonGap: 700,             // px between wagons in the column (the last ones enter late)
+  wagonGap: 1100,             // px between wagons in the column (the last ones enter late)
   convoyCargo: 90,           // gold aboard per wagon, x tier: stolen on a win
   defenseHold: 180,          // defense: hold this long with a house standing
-  captainStats: { hp: 700, attack: 14, defense: 8 },   // keep Captain (boss data, tier 1; scaled like AF bosses)
+  // battle length (PLAN 10.2 time bands): the knight cuts down ~3 units a second, so a
+  // battle lasts as long as its Dominion army does. Each type brings this many more
+  // units on from its edge during the fight (default mix), at this pace (x stream interval)
+  battleReinforce: { village: 200, field: 340, outpost: 650, keep: 100, castle: 60, convoy: 150, defense: 300, rescue: 160 } as Record<string, number>,
+  battlePace: { village: 2.5, field: 3, outpost: 0.8, keep: 2, castle: 2.5, convoy: 2, defense: 3.5, rescue: 1.5 } as Record<string, number>,
+  captainStats: { hp: 2000, attack: 14, defense: 8 },   // keep Captain (boss data, tier 1; scaled like AF bosses)
   lordStats: { hp: 640, attack: 15, defense: 10 },     // castle Lord
   commanderMult: 1.6,        // field / defense commander
 

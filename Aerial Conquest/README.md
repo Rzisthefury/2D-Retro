@@ -144,34 +144,56 @@ suite: 46/46 functional checks.
 - Phone frame work during that fight: p50 1.9 ms, p95 4.0 ms
   (100 units live).
 
-**Not met: the time bands.** Autopilot runs, default troops, the knight
-with modest upgrades (rank 1 at tier 1, rank 3 at tier 2), no god mode,
-2 runs each:
+**Time bands: retuned with bigger armies (Michael's call, 2026-10-01).** The
+first pass came in far under the bands. The knight kills about 3 Dominion
+units a second (the PLAN 11.2 feel target), so a battle lasts about as long
+as its army does. Michael took the recommendation: bigger Dominion armies
+streaming in as reinforcements, rather than tougher minions.
 
-| type | band | measured |
-|---|---|---|
-| Outpost | ~2 min | 28 s, 30 s |
-| Keep | ~3 min | 67 s, 58 s |
-| Castle siege | 4–6 min | 196 s, 168 s |
-| Convoy | ~2 min | 42 s, 52 s |
-| Defense | 2–3 min | 39 s, 53 s |
-| Rescue | ~3 min | 65 s, 61 s |
-| Village raid (Phase 4) | ~2 min | 38 s, 35 s |
-| Field battle (Phase 4) | 2–3 min | 19 s, 20 s |
+- `WAR.battleReinforce` sets, per type, how many more units come on during
+  the fight (default 40/20/25/15 mix). `WAR.battlePace` sets how fast they
+  arrive (× the 1.5 s stream interval).
+- Outpost reinforcements turn out of the tower beside the ring. A keep's
+  come from its barracks, a castle's from the throne room.
+- A rescue's reinforcements wait for the alarm: they pour out when the
+  general walks free.
+- Idle Dominion units now hold their objective: the outpost ring, the
+  rescue cell.
+- The rescue cell's ring now pauses while an enemy is inside, like the
+  outpost's.
+- Objectives got tougher:
+  - gates ×4.5 on keeps;
+  - throne 5600;
+  - wagons 1700, 1100 px apart;
+  - houses 800;
+  - Captain 2000 HP.
 
-The knight kills about 3 Dominion units a second while fighting. That's
-the PLAN 11.2 feel target at work: two hits per swordsman, a Whirl clears a
-crowd. So a battle lasts about as long as it takes to cut down its enemies,
-plus the time spent on gates, thrones and wagons. At the PLAN's own garrison
-scale (a level-1 castle holds 40), a fight is over in well under a minute.
-Only the castle comes close (about 3 min vs 4–6), because its gates and
-throne take time. Making the bands means one of these:
-- about 250–350 Dominion units per battle (streaming in past the live cap);
-- minions about 3× tougher, which breaks the feel target;
-- much tougher objectives.
+Autopilot runs, final build, 3 each. The knight is assumed at upgrade
+rank 1 at tier 1 and rank 4 at tier 2 (PLAN 11.2: "the upgrades expected
+for a territory's tier"); no god mode:
 
-That's Michael's call, so the numbers here are a sensible middle, not tuned
-to the bands.
+| type | band | measured | |
+|---|---|---|---|
+| Village raid | ~2 min | 100, 98, 102 s | in band |
+| Outpost | ~2 min | 40 s, lost at 79 s, 67 s | **out**: high variance |
+| Keep | ~3 min | 144, 149, 142 s | in band |
+| Castle siege | 4–6 min | 273, 236, 279 s | 2 of 3 in band (one 4 s short) |
+| Convoy | ~2 min | 90, 90, 87 s | in band |
+| Field battle | 2–3 min | 135, 135, 135 s | in band |
+| Defense | 2–3 min | 143, 148, 180 s | in band |
+| Rescue raid | ~3 min | lost at 64 s, lost at 70 s, 52 s | **out** |
+
+- **Outpost:** the ring is easily contested or cleared. The knight kills up
+  to ~8 units a second in the crowd on it, and the fight ends at the rout
+  (40%). It needs 650 reinforcements to average about a minute and a half,
+  and the no-dodge autopilot starts dying above that.
+- **Rescue:** a raid is short by design. When the knight wins, he escapes
+  in under a minute, ahead of the alarm. When he loses, it's at the cell,
+  under the garrison.
+- Neither can be pushed into band with numbers alone. Both are listed for
+  the Phase 14 balance pass.
+- The autopilot never dodges or guards, so its deaths say little about a
+  real player's.
 
 **Bugs found and fixed while building it:**
 - Units grinding on walls. Solved by the zone and door routing above.
@@ -188,12 +210,22 @@ to the bands.
 - Lord and Captain stats beyond "they fight and fall".
 - Recruiting a beaten Lord (Phase 10) and the general's loyalty gain
   (Phase 10). The battle only records them.
-- Rescue's ring doesn't pause when contested. PLAN 10.2 only says "hold
-  its ring 8 s", unlike the outpost.
+- Rescue's ring pauses when contested, like the outpost. PLAN 10.2 only
+  says "hold its ring 8 s"; this is my default.
 
-**Regression runs:** Phase 0 30/30, Phase 1 17/17, Phase 2 23/23 (200
-units desktop at 60 fps, 120 on the phone at 60 fps), Phase 3 24/24,
-Phase 4 24/24. The Phase 4 suite was updated for the stub's new row order.
+**Regression runs (final build):** Phase 0 30/30, Phase 1 17/17, Phase 2
+23/23 (200 units on desktop at 60 fps, 120 on the phone at 60 fps), Phase 3
+24/24, Phase 4 24/24. The Phase 4 suite was updated in two ways:
+- for the stub's new row order;
+- two tests now set the bigger reserve aside: one checks a rout by killing
+  live units, and one watches forced-rout runners leave.
+
+Phase 5 functional checks: 46/46. Phone frame work in the castle fight:
+p50 2.1 ms, p95 4.1 ms.
+
+**Desktop copy:** `sync-desktop.bat` in this folder copies the game and its
+sources to `Desktop\Claude\Aerial Conquest`. Pull `main` first, then
+double-click it.
 
 # Phase 4: battle framework, Field battle, Village raid
 

@@ -12,8 +12,8 @@
 
 1. **Fork, don't share.** The fork already exists in `Retro Games/Aerial Conquest` (v1 Phase 0). v2 Phase 0 strips it much further (section 3). Never edit `../Aerial Finisher`.
 2. Same toolchain: TypeScript, `tsc -p tsconfig.json` (`module: none`, `outFile`), `node build.js` writes `aerial-conquest.html`. **No dependencies, no bundler, no npm installs.**
-3. **Commit and push each finished phase** to the session's working branch. No force-push, no history rewrites, nothing to `main` without Michael's say-so.
-4. Every build also gets copied to `Desktop\Claude\Aerial Conquest` (playable HTML + `src/` + build files + README). In a cloud session that can't reach the PC, push and tell Michael the Desktop copy is his to make.
+3. **Commit and push each finished phase** to `main` (Michael, 2026-10-01; a cloud session also pushes its working branch). No force-push, no history rewrites.
+4. Every build also gets copied to `Desktop\Claude\Aerial Conquest` (playable HTML + `src/` + build files + README). In a cloud session that can't reach the PC, push to `main`; Michael pulls and runs `sync-desktop.bat`.
 5. Save keys: `aerial-conquest-slot1/2/3`. Never touch `aerial-finisher-save-*`.
 6. **Phone is equal priority.** Every phase must work on touch before it counts as done. Unit caps scale down on phones.
 7. Work phase by phase (section 14). Each phase ends with its "done when" checks passing in headless Chromium (desktop + emulated phone) and a README section.

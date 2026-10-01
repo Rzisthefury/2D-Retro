@@ -362,6 +362,7 @@ class Battle {
     const tower = new Structure('wall', 'enemy', tx + 90, ty - 30, 70, 70, 1e9, 'Tower');
     tower.look = 'tower';
     this.structures.push(tower);
+    this.foeEdge = { x: tower.x, y: tower.y + 40, spread: 30 };   // the garrison turns out of the tower
     const ring = new Structure('captureRing', 'enemy', tx - 60, ty + 60, 10, 10, 1, 'Capture ring');
     ring.ringR = WAR.ringRadius; ring.need = WAR.outpostHold;
     this.structures.push(ring);
@@ -464,6 +465,13 @@ class Battle {
 
   /* --------------------------------------------------------------- queries */
 
+  /** Where idle Dominion units gather: the ring they hold, or the cell they guard. */
+  guardPoint(): Structure | null {
+    if (this.spec.kind === 'outpost') return this.ring;
+    if (this.spec.kind === 'rescue' && !this.general) return this.cell;
+    return null;
+  }
+
   /** The nearest live structure hostile to `side` that units may attack and can get at, or null. */
   nearestStructure(side: Team, x: number, y: number, ram = false): Structure | null {
     let best: Structure | null = null, bd = Infinity;
@@ -504,6 +512,7 @@ function testSpec(): BattleSpec {
 /** A village raid: a garrison among four houses. */
 function villageSpec(): BattleSpec {
   return {
+    reinforce: foeMix(WAR.battleReinforce.village),
     kind: 'village', name: 'Millbrook', tier: 1, scenery: 'forest', seed: 1337 + 11, houses: 4,
     foes: { sword: 16, spear: 8, archer: 10, shield: 6 }, foeElites: ['shade', 'caster'], commander: null, allies: {},
   };
@@ -512,6 +521,7 @@ function villageSpec(): BattleSpec {
 /** A field battle: a Dominion column with a commander, against your warband and a sent army joining. */
 function fieldSpec(): BattleSpec {
   return {
+    reinforce: foeMix(WAR.battleReinforce.field),
     kind: 'field', name: 'Dominion column', tier: 1, scenery: 'coast', seed: 1337 + 23,
     foes: { sword: 28, spear: 14, archer: 18, shield: 10 }, foeElites: ['shade', 'flyer'], commander: 'bruiser',
     allies: { sword: 10, spear: 6, archer: 6, shield: 4 },
@@ -521,18 +531,18 @@ function fieldSpec(): BattleSpec {
 /** Outpost capture: a watchtower and its garrison. */
 function outpostSpec(): BattleSpec {
   return {
+    reinforce: foeMix(WAR.battleReinforce.outpost),
     kind: 'outpost', name: 'Greywatch Tower', tier: 1, scenery: 'forest', seed: 1337 + 31,
     foes: { sword: 20, spear: 10, archer: 12, shield: 8 }, foeElites: ['shade', 'caster'], commander: null, allies: {},
-    reinforce: { sword: 30, spear: 14, archer: 16, shield: 10 },   // the tower's signal brings the column
   };
 }
 
 /** Keep assault: a walled fort, one gate, a Captain. */
 function keepSpec(): BattleSpec {
   return {
+    reinforce: foeMix(WAR.battleReinforce.keep),
     kind: 'keep', name: 'Thornwall Keep', tier: 1, scenery: 'ruins', seed: 1337 + 41, captainName: 'Captain Varn',
     foes: { sword: 24, spear: 12, archer: 12, shield: 10 }, foeElites: ['caster', 'shade'], commander: null,
-    reinforce: { sword: 20, spear: 10, archer: 10, shield: 8 },    // the keep's barracks
     allies: { sword: 8, spear: 4, archer: 4, shield: 4, ram: 1 },
   };
 }
@@ -540,9 +550,9 @@ function keepSpec(): BattleSpec {
 /** Castle siege: two gates and a throne; the keep still stands, so the gate is iron. */
 function castleSpec(): BattleSpec {
   return {
+    reinforce: foeMix(WAR.battleReinforce.castle),
     kind: 'castle', name: 'Castle Hollin', tier: 2, scenery: 'forest', seed: 1337 + 51, ironGate: true, lordName: 'Lord Edric Hollin',
     foes: { sword: 32, spear: 16, archer: 20, shield: 12 }, foeElites: ['shade', 'caster'], commander: null,
-    reinforce: { sword: 16, spear: 8, archer: 10, shield: 6 },     // the throne room's guard
     allies: { sword: 16, spear: 8, archer: 10, shield: 6, ram: 2 },
   };
 }
@@ -550,18 +560,18 @@ function castleSpec(): BattleSpec {
 /** Convoy ambush: two wagons of gold and their escort. */
 function convoySpec(): BattleSpec {
   return {
+    reinforce: foeMix(WAR.battleReinforce.convoy),
     kind: 'convoy', name: 'Dominion convoy', tier: 1, scenery: 'coast', seed: 1337 + 61, wagons: 3,
     foes: { sword: 12, spear: 6, archer: 6, shield: 4 }, foeElites: ['shade'], commander: null, allies: {},
-    reinforce: { sword: 16, spear: 8, archer: 8, shield: 6 },      // the rearguard, walking behind the wagons
   };
 }
 
 /** Defense: the Dominion comes for your village, rams and all. */
 function defenseSpec(): BattleSpec {
   return {
+    reinforce: { ...foeMix(WAR.battleReinforce.defense), ram: 2 },
     kind: 'defense', name: 'Millbrook (held)', tier: 1, scenery: 'forest', seed: 1337 + 71, houses: 3,
     foes: { sword: 40, spear: 20, archer: 22, shield: 14, ram: 3 }, foeElites: ['shade', 'flyer'], commander: 'bruiser',
-    reinforce: { sword: 50, spear: 25, archer: 25, shield: 16, ram: 2 },
     allies: { sword: 10, spear: 6, archer: 8, shield: 4 },
   };
 }
@@ -569,10 +579,18 @@ function defenseSpec(): BattleSpec {
 /** Rescue raid: a general caged in a castle's north wing. */
 function rescueSpec(): BattleSpec {
   return {
+    reinforce: foeMix(WAR.battleReinforce.rescue),
     kind: 'rescue', name: 'Castle Hollin (cells)', tier: 2, scenery: 'forest', seed: 1337 + 81, lordName: 'Lord Edric Hollin', generalName: 'Sir Aldric',
     foes: { sword: 24, spear: 12, archer: 14, shield: 10 }, foeElites: ['shade', 'caster'], commander: null, allies: {},
-    reinforce: { sword: 20, spear: 10, archer: 10, shield: 8 },
   };
+}
+
+/** n Dominion units in the default recruit mix (PLAN 6: 40/20/25/15). */
+function foeMix(n: number): Partial<Record<UnitType, number>> {
+  const m = WAR.testMix;
+  const out: Partial<Record<UnitType, number>> = { sword: Math.round(n * m.sword), spear: Math.round(n * m.spear), archer: Math.round(n * m.archer) };
+  out.shield = Math.max(0, n - out.sword! - out.spear! - out.archer!);
+  return out;
 }
 
 /** Counts by type -> a shuffled list of unit types. */

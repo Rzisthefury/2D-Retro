@@ -465,7 +465,7 @@ const WAR = {
     wheelDeadZone: 22, // touch radial: drag this far (logical px) to pick a slice
     orderBanner: 0.9, // seconds the "ORDER: CHARGE" banner shows
     // battles (Phase 4, PLAN 10)
-    houseHp: 600, // village house HP at tier 1 (x tier HP scale): ~7 knight combos
+    houseHp: 800, // village house HP at tier 1 (x tier HP scale): ~7 knight combos
     routThreshold: 0.4, // a leaderless side under this share of its starting strength flees
     routCheckEvery: 0.5, // seconds between rout checks
     fadeTime: 0.6, // battle entry fade
@@ -478,17 +478,22 @@ const WAR = {
     ringRadius: 110, // outpost capture ring
     outpostHold: 10, // seconds in the ring with no enemy inside (pauses, never resets)
     gateHp: 1500, // gate HP at tier 1 (x tier HP scale); knights do x0.3, rams x4
-    keepGateMult: 1.6, // keep gates against the base
+    keepGateMult: 4.5, // keep gates against the base
     ironGateMult: 1.6, // a castle whose keep is still the Dominion's (PLAN 10.2)
-    throneHp: 2200, // castle throne at tier 1 (knights and units x0.3, rams can't)
+    throneHp: 5600, // castle throne at tier 1 (knights and units x0.3, rams can't)
     cellRingRadius: 70, // rescue: stand this close to the cell...
     rescueHold: 8, // ...for this long to free the general
-    wagonHp: 700, // convoy wagon at tier 1
+    wagonHp: 1700, // convoy wagon at tier 1
     wagonSpeed: 30, // px/s along the road (3600 px: about 2 min to get away)
-    wagonGap: 700, // px between wagons in the column (the last ones enter late)
+    wagonGap: 1100, // px between wagons in the column (the last ones enter late)
     convoyCargo: 90, // gold aboard per wagon, x tier: stolen on a win
     defenseHold: 180, // defense: hold this long with a house standing
-    captainStats: { hp: 700, attack: 14, defense: 8 }, // keep Captain (boss data, tier 1; scaled like AF bosses)
+    // battle length (PLAN 10.2 time bands): the knight cuts down ~3 units a second, so a
+    // battle lasts as long as its Dominion army does. Each type brings this many more
+    // units on from its edge during the fight (default mix), at this pace (x stream interval)
+    battleReinforce: { village: 200, field: 340, outpost: 650, keep: 100, castle: 60, convoy: 150, defense: 300, rescue: 160 },
+    battlePace: { village: 2.5, field: 3, outpost: 0.8, keep: 2, castle: 2.5, convoy: 2, defense: 3.5, rescue: 1.5 },
+    captainStats: { hp: 2000, attack: 14, defense: 8 }, // keep Captain (boss data, tier 1; scaled like AF bosses)
     lordStats: { hp: 640, attack: 15, defense: 10 }, // castle Lord
     commanderMult: 1.6, // field / defense commander
     // the Phase 0 test battlefield
@@ -1882,6 +1887,16 @@ class Army {
                     return;
                 }
             }
+            // the Dominion holds its objective (the outpost's ring, the rescue cell)
+            const gp = own === TEAM_ENEMY ? g.battle.guardPoint() : null;
+            if (gp) {
+                const s = this.formationSpot(i, gp.x, gp.y);
+                if (dist(this.x[i], this.y[i], s.x, s.y) > 14)
+                    go(s.x, s.y, 1);
+                else
+                    halt();
+                return;
+            }
             // otherwise march on the enemy's centre (behind a shut gate: stand)
             const c = this.centre[1 - own];
             if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40)
@@ -2400,6 +2415,7 @@ class Battle {
         const tower = new Structure('wall', 'enemy', tx + 90, ty - 30, 70, 70, 1e9, 'Tower');
         tower.look = 'tower';
         this.structures.push(tower);
+        this.foeEdge = { x: tower.x, y: tower.y + 40, spread: 30 }; // the garrison turns out of the tower
         const ring = new Structure('captureRing', 'enemy', tx - 60, ty + 60, 10, 10, 1, 'Capture ring');
         ring.ringR = WAR.ringRadius;
         ring.need = WAR.outpostHold;
@@ -2503,6 +2519,14 @@ class Battle {
         }
     }
     /* --------------------------------------------------------------- queries */
+    /** Where idle Dominion units gather: the ring they hold, or the cell they guard. */
+    guardPoint() {
+        if (this.spec.kind === 'outpost')
+            return this.ring;
+        if (this.spec.kind === 'rescue' && !this.general)
+            return this.cell;
+        return null;
+    }
     /** The nearest live structure hostile to `side` that units may attack and can get at, or null. */
     nearestStructure(side, x, y, ram = false) {
         let best = null, bd = Infinity;
@@ -2544,6 +2568,7 @@ function testSpec() {
 /** A village raid: a garrison among four houses. */
 function villageSpec() {
     return {
+        reinforce: foeMix(WAR.battleReinforce.village),
         kind: 'village', name: 'Millbrook', tier: 1, scenery: 'forest', seed: 1337 + 11, houses: 4,
         foes: { sword: 16, spear: 8, archer: 10, shield: 6 }, foeElites: ['shade', 'caster'], commander: null, allies: {},
     };
@@ -2551,6 +2576,7 @@ function villageSpec() {
 /** A field battle: a Dominion column with a commander, against your warband and a sent army joining. */
 function fieldSpec() {
     return {
+        reinforce: foeMix(WAR.battleReinforce.field),
         kind: 'field', name: 'Dominion column', tier: 1, scenery: 'coast', seed: 1337 + 23,
         foes: { sword: 28, spear: 14, archer: 18, shield: 10 }, foeElites: ['shade', 'flyer'], commander: 'bruiser',
         allies: { sword: 10, spear: 6, archer: 6, shield: 4 },
@@ -2559,53 +2585,60 @@ function fieldSpec() {
 /** Outpost capture: a watchtower and its garrison. */
 function outpostSpec() {
     return {
+        reinforce: foeMix(WAR.battleReinforce.outpost),
         kind: 'outpost', name: 'Greywatch Tower', tier: 1, scenery: 'forest', seed: 1337 + 31,
         foes: { sword: 20, spear: 10, archer: 12, shield: 8 }, foeElites: ['shade', 'caster'], commander: null, allies: {},
-        reinforce: { sword: 30, spear: 14, archer: 16, shield: 10 }, // the tower's signal brings the column
     };
 }
 /** Keep assault: a walled fort, one gate, a Captain. */
 function keepSpec() {
     return {
+        reinforce: foeMix(WAR.battleReinforce.keep),
         kind: 'keep', name: 'Thornwall Keep', tier: 1, scenery: 'ruins', seed: 1337 + 41, captainName: 'Captain Varn',
         foes: { sword: 24, spear: 12, archer: 12, shield: 10 }, foeElites: ['caster', 'shade'], commander: null,
-        reinforce: { sword: 20, spear: 10, archer: 10, shield: 8 }, // the keep's barracks
         allies: { sword: 8, spear: 4, archer: 4, shield: 4, ram: 1 },
     };
 }
 /** Castle siege: two gates and a throne; the keep still stands, so the gate is iron. */
 function castleSpec() {
     return {
+        reinforce: foeMix(WAR.battleReinforce.castle),
         kind: 'castle', name: 'Castle Hollin', tier: 2, scenery: 'forest', seed: 1337 + 51, ironGate: true, lordName: 'Lord Edric Hollin',
         foes: { sword: 32, spear: 16, archer: 20, shield: 12 }, foeElites: ['shade', 'caster'], commander: null,
-        reinforce: { sword: 16, spear: 8, archer: 10, shield: 6 }, // the throne room's guard
         allies: { sword: 16, spear: 8, archer: 10, shield: 6, ram: 2 },
     };
 }
 /** Convoy ambush: two wagons of gold and their escort. */
 function convoySpec() {
     return {
+        reinforce: foeMix(WAR.battleReinforce.convoy),
         kind: 'convoy', name: 'Dominion convoy', tier: 1, scenery: 'coast', seed: 1337 + 61, wagons: 3,
         foes: { sword: 12, spear: 6, archer: 6, shield: 4 }, foeElites: ['shade'], commander: null, allies: {},
-        reinforce: { sword: 16, spear: 8, archer: 8, shield: 6 }, // the rearguard, walking behind the wagons
     };
 }
 /** Defense: the Dominion comes for your village, rams and all. */
 function defenseSpec() {
     return {
+        reinforce: { ...foeMix(WAR.battleReinforce.defense), ram: 2 },
         kind: 'defense', name: 'Millbrook (held)', tier: 1, scenery: 'forest', seed: 1337 + 71, houses: 3,
         foes: { sword: 40, spear: 20, archer: 22, shield: 14, ram: 3 }, foeElites: ['shade', 'flyer'], commander: 'bruiser',
-        reinforce: { sword: 50, spear: 25, archer: 25, shield: 16, ram: 2 },
         allies: { sword: 10, spear: 6, archer: 8, shield: 4 },
     };
 }
 /** Rescue raid: a general caged in a castle's north wing. */
 function rescueSpec() {
     return {
+        reinforce: foeMix(WAR.battleReinforce.rescue),
         kind: 'rescue', name: 'Castle Hollin (cells)', tier: 2, scenery: 'forest', seed: 1337 + 81, lordName: 'Lord Edric Hollin', generalName: 'Sir Aldric',
         foes: { sword: 24, spear: 12, archer: 14, shield: 10 }, foeElites: ['shade', 'caster'], commander: null, allies: {},
-        reinforce: { sword: 20, spear: 10, archer: 10, shield: 8 },
     };
+}
+/** n Dominion units in the default recruit mix (PLAN 6: 40/20/25/15). */
+function foeMix(n) {
+    const m = WAR.testMix;
+    const out = { sword: Math.round(n * m.sword), spear: Math.round(n * m.spear), archer: Math.round(n * m.archer) };
+    out.shield = Math.max(0, n - out.sword - out.spear - out.archer);
+    return out;
 }
 /** Counts by type -> a shuffled list of unit types. */
 function unitList(counts) {
@@ -8865,6 +8898,8 @@ class Game {
         this.pickups.length = 0;
         this.army.clear();
         this.army.streamTier = spec.tier;
+        this.army.streamMult[TEAM_PLAYER] = 1;
+        this.army.streamMult[TEAM_ENEMY] = WAR.battlePace[spec.kind] || 1;
         p.lock = null;
         this.order = 'follow';
         this.wheelOpen = false;
@@ -8982,8 +9017,10 @@ class Game {
             if (spec.kind === 'defense')
                 c.aggro = false;
         }
-        for (const k of unitList(spec.reinforce || {}))
-            this.army.addReserve('enemy', k);
+        // a rescue's reinforcements wait for the alarm (the general walking free)
+        if (spec.kind !== 'rescue')
+            for (const k of unitList(spec.reinforce || {}))
+                this.army.addReserve('enemy', k);
         b.startFoes = this.foeStrength();
         b.startAllies = this.army.live('player') + this.army.reserveCount('player');
         if (spec.kind === 'convoy')
@@ -9131,7 +9168,9 @@ class Game {
             case 'rescue': {
                 const c = b.cell;
                 if (!b.general) {
-                    if (p.alive && dist(p.x, p.y, c.x, c.y) <= c.ringR)
+                    // held like the outpost's ring: an enemy inside pauses it (never resets)
+                    c.contested = this.sideIn('enemy', c.x, c.y, c.ringR);
+                    if (p.alive && !c.contested && dist(p.x, p.y, c.x, c.y) <= c.ringR)
                         c.progress += dt;
                     if (c.progress >= c.need)
                         this.freeGeneral();
@@ -9179,7 +9218,11 @@ class Game {
         this.enemies.push(g);
         b.general = g;
         c.hp = 0;
-        this.banner(`${(b.spec.generalName || 'the general').toUpperCase()} IS FREE`, 'now get out: your edge, the general alive', '#4fe08a');
+        // the alarm: the throne room's guard pours out after you
+        for (const k of unitList(b.spec.reinforce || {}))
+            this.army.addReserve('enemy', k);
+        b.startFoes = Math.max(b.startFoes, this.foeStrength());
+        this.banner(`${(b.spec.generalName || 'the general').toUpperCase()} IS FREE`, 'the alarm is up  ·  get out: your edge, the general alive', '#4fe08a');
         this.sfx.levelUp();
     }
     /** Decide the battle: tally spoils on a win and show the results screen. */
@@ -9229,7 +9272,7 @@ class Game {
         if (!this.autopilot || b.spec.kind === 'test' || b.result || !p.alive)
             return;
         const kind = b.spec.kind;
-        if (b.time < 0.1 && this.order === 'follow' && kind !== 'outpost' && kind !== 'rescue')
+        if (b.time < 0.1 && this.order === 'follow' && kind !== 'outpost' && kind !== 'rescue' && kind !== 'defense')
             this.issueOrder('charge');
         if (p.hp < p.stats.maxHp * 0.35 && p.potions > 0 && inp.frame % 30 === 0)
             inp.press('item');
