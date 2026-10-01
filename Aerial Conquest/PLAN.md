@@ -11,7 +11,7 @@
 
 1. **Fork, don't share.** Copy the open-world Aerial Finisher (`Documents\GitHub\Retro Games\Aerial Finisher`) into `Documents\GitHub\Retro Games\Aerial Conquest` and evolve it there. Never edit Aerial Finisher.
 2. Same toolchain: TypeScript, `tsc -p tsconfig.json` (`module: none`, `outFile`), `node build.js` inlines into one HTML. **No dependencies, no bundler, no npm installs.**
-3. **Deliver files only. No `git add`, `commit` or `push`.** Michael commits with GitHub Desktop.
+3. **Commit and push each finished phase** to the session's working branch. No force-push, no history rewrites, nothing to `main` without Michael's say-so.
 4. Every build also gets copied to `Desktop\Claude\Aerial Conquest` (playable HTML + `src/` + build files + README). A build is not delivered until it is in both folders.
 5. Output file: `aerial-conquest.html`. Save keys: `aerial-conquest-slot1/2/3`. Never touch `aerial-finisher-save-*`.
 6. **Phone is equal priority.** Every phase must work on touch before it counts as done. Unit caps scale down on phones.
