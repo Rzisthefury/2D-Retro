@@ -32,6 +32,79 @@ No dependencies, no bundler, nothing to install.
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
 
+# Phase 13: music war layer, touch polish, phone caps
+
+**What changed** (PLAN 13 music; PLAN 10.1 / 15 touch):
+
+- **Intensity ladder** (`Game.musicLevel`, fed to `Music.target` every
+  frame):
+
+  | level | when | music |
+  |---|---|---|
+  | 0 | calm map, title, victory screen | theme only |
+  | 1 | map under threat: a muster or a Dominion army heading for your land, or a fight at one of your nodes | soft war layer |
+  | 2 | any battle | combat layer + war layer |
+  | 3 | 60+ live units (back to 2 under 50, so it doesn't flap), or a castle siege past its outer gate | full war layer |
+  | 4 | a Lord in the fight, or the warlord once his gates are down | the boss theme |
+
+- **Themes:**
+  - Title and victory: AF's title theme. The map: *Above the Storm*.
+  - Battles: the scenery's theme (forest, coast, ruins). Level 4
+    switches to *Crown of Thorns*.
+- **War layer** (`music.ts`):
+  - A snare march with a four-stroke roll into each bar line, plus low
+    brass on the root and fifth: saw + square through a 380 Hz lowpass.
+  - Its bus comes in and out on bar lines only (gain by level:
+    0 / 0.5 / 0.6 / 0.95 / 0.75), kept under the melody bus.
+- **Portrait:** the rotate prompt already existed, but the game kept
+  running behind it. Now nothing ticks while a phone is upright, and it
+  resumes on turning back.
+- **Phone caps:** 60 live per side (`WAR.liveCapPhone`), already in
+  since Phase 2; now checked in a full siege.
+- The page's help strip and footer described Aerial Finisher; they now
+  describe this game.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13. Phase 13
+suite 16/16.
+
+- **The ladder:**
+  - Title 0 → calm map 0 (*sky*) → a muster on the Last Camp 1 → an
+    army marching on it 1 → back to 0.
+  - Village raid 2 (*forest*). 62 live units → 3; 55 → still 3; 48 → 2.
+  - Siege: outer gate up 2 → broken 3 → the Lord aggro 4 (*boss*) → the
+    Lord down 3.
+  - The warlord's seat: 4 once its gates fall.
+- **Live audio:** with the score running, after a bar line at level 3
+  the war bus read 0.95.
+- **Offline render (6 s):** no war events at 0, 20 at each of levels
+  1-4.
+  - With seeded noise, level 1 is louder than level 0.
+  - The layer adds about 6% of the mix's RMS (0.0126 vs 0.218), so it
+    sits under the tune.
+- **Phone siege:**
+  - Tap Millbrook Castle on the map → tap Attack → the siege.
+  - 60 enemy units live, 60 more in reserve.
+  - CMD tap cycled Follow → Charge; ATK tap swung.
+  - 8 s of real-time play: 60 fps, frame work avg 1.7 ms, p99 3.4 ms.
+  - On autopilot it played to a win. Tapping Recruit, then back, left
+    the castle yours.
+- **Portrait** (390×844 mid-battle): stage hidden, rotate prompt shown,
+  battle time frozen for 1.2 s. Landscape resumed it.
+- Regressions: Phases 0-12 all pass: 30/30, 17/17, 23/23, 24/24,
+  24/24, 46/46 functional, 31/31, 24/24, 17/17, 20/20, 28/28, 34/34,
+  19/19.
+  - Phase 2's 120-unit phone check failed once at 54.9 fps (55 needed).
+    Frame work was 1.0 ms avg, but the browser delivered frames every
+    18 ms. It passed on the rerun at 57.8 fps (p99 work 1.6 ms).
+
+**Assumed / not yet verified:**
+- How it sounds. The checks prove the war layer is scheduled and sits
+  under the tune, not that the mix is right; that needs your ears.
+- Real phone hardware: the iPhone was emulated on a desktop CPU.
+- **Balance note for Phase 14:** the autopilot siege at Millbrook (tier
+  2) took 744 simulated seconds with a 12-unit warband against the phone
+  cap. The band is 240-360 s.
+
 # Phase 12: story, difficulty, New Game+, victory, 3 slots
 
 **What changed** (PLAN 13):
