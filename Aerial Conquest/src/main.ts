@@ -183,9 +183,10 @@ class Game {
   touchSpell = 0;              // which spell the MAG button casts
 
   menuOpen = false;
-  menuTab = 0;                 // 0 gear · 1 forge · 2 talents · 3 status
+  menuTab = 0;                 // 0 gear · 1 forge · 2 talents · 3 knight · 4 status
   gearIndex = 0;
   synthIndex = 0;
+  knightIndex = 0;
   talentBranch = 0;
   talentIndex = 0;
   lastMusicVol = -1;
@@ -366,6 +367,7 @@ class Game {
     const sv = loadSave();
     this.camp.load(sv.war);
     this.war.load(sv.econ);
+    this.syncWar();
     this.war.refillWarband();
     this.mapConvoy = -1;
   }
@@ -466,11 +468,12 @@ class Game {
         const g = this.war.garrison[n.id];
         out.push({ label: 'Send army', enabled: !!g && troopTotal(g) > 0, act: () => this.beginSend(n), why: 'NO TROOPS IN THE GARRISON' });
         out.push({ label: `Mix: ${RECRUIT_MIXES[this.war.mix[n.id]].name}`, enabled: true, act: () => { this.war.mix[n.id] = (this.war.mix[n.id] + 1) % RECRUIT_MIXES.length; this.sfx.guard(); } });
+        out.push({ label: 'Forge', enabled: true, act: () => { this.sfx.guard(); this.openMenu(MENU_FORGE); } });
       }
       const cost = this.war.upgradeCost(n);
       if (n.type !== 'outpost') {
         out.push({
-          label: cost ? `Upgrade to L${n.level + 1}  ·  ${cost} g` : 'Level 3 (max)', enabled: cost > 0 && this.player.gold >= cost,
+          label: cost ? `Upgrade L${n.level + 1} · ${cost} g` : 'Level 3 (max)', enabled: cost > 0 && this.player.gold >= cost,
           act: () => { if (this.war.upgrade(n, this.player)) { this.sfx.levelUp(); this.toast(`${n.name.toUpperCase()} NOW LEVEL ${n.level}`); this.save(); } },
           why: cost ? `NEED ${cost} GOLD` : 'ALREADY LEVEL 3',
         });
@@ -569,9 +572,12 @@ class Game {
     f.joined = true;
     this.startBattle(spec);
   }
-  /** Top-left of panel button i of n. */
-  mapButtonAt(i: number, n: number): { x: number; y: number } {
-    return { x: MAP_PANEL.x + MAP_PANEL.pad, y: MAP_PANEL.y + MAP_PANEL.h - MAP_PANEL.pad - (n - i) * (MAP_BTN.h + MAP_BTN.gap) + MAP_BTN.gap };
+  /** Top-left and width of panel button i of n: one per row, or two per row once there are MAP_BTN.pairFrom or more. */
+  mapButtonAt(i: number, n: number): { x: number; y: number; w: number } {
+    const x0 = MAP_PANEL.x + MAP_PANEL.pad, bottom = MAP_PANEL.y + MAP_PANEL.h - MAP_PANEL.pad + MAP_BTN.gap, step = MAP_BTN.h + MAP_BTN.gap;
+    if (n < MAP_BTN.pairFrom) return { x: x0, y: bottom - (n - i) * step, w: MAP_BTN.w };
+    const rows = Math.ceil(n / 2), w = (MAP_BTN.w - MAP_BTN.gap) / 2;
+    return { x: x0 + (i % 2) * (w + MAP_BTN.gap), y: bottom - (rows - Math.floor(i / 2)) * step, w };
   }
 
   /** Attack a node: its battle, with your warband (PLAN 7.1). */
@@ -624,13 +630,21 @@ class Game {
 
   private handleMap(dt: number) {
     const inp = this.input;
+    // the pause menu works on the map too (PLAN 7.1), and pauses map time; the forge is only here
+    if (inp.wasPressed('menu')) { if (this.menuOpen) this.closeMenu(); else this.openMenu(this.menuTab); inp.clearBuffer(); }
+    if (!this.menuOpen) {
+      const c = inp.takeClick();
+      if (c && c.x >= MAP_MENU_HIT.x && c.x <= MAP_MENU_HIT.x + MAP_MENU_HIT.w && c.y >= MAP_MENU_HIT.y && c.y <= MAP_MENU_HIT.y + MAP_MENU_HIT.h) { this.openMenu(this.menuTab); inp.takeTap(); }
+      else if (c) inp.pushClick(c);
+    }
+    if (this.menuOpen) { this.handleBigMenu(); return; }
     // map time: income, convoys, production, armies and their fights (PLAN 7: real time; battles pause it)
     this.war.tick(dt, this.player);
     if (this.mapConvoy >= 0 && !this.selectedConvoy()) this.mapConvoy = -1;   // it arrived
     if (this.mapArmy >= 0 && !this.selectedArmy()) this.mapArmy = -1;
     if (this.mapFight >= 0 && !this.selectedFight()) this.mapFight = -1;
     if ((this.mapMode === 'send' || this.mapMode === 'target') && (this.sendFrom < 0 || this.camp.nodes[this.sendFrom].owner !== 'player')) this.mapMode = 'browse';
-    this.war.loyaltyMult = this.player.hasT('presence') ? WAR.presenceMult : 1;   // Warlord's Presence (Phase 11)
+    this.syncWar();
     if (inp.wasPressed('generals')) { this.mapMode = this.mapMode === 'generals' ? 'browse' : 'generals'; this.clearPick(); this.sfx.guard(); }
     // the Dominion's moves (PLAN 8), and your generals' fortunes (PLAN 9)
     for (const e of this.war.events) {
@@ -645,6 +659,7 @@ class Game {
       else if (e.kind === 'attacked') { this.banner(`${nm(e.node).toUpperCase()} UNDER ATTACK`, 'select the fight to join the defense', '#ff6b6b'); }
       else if (e.kind === 'reinforce') this.toast(`${nm(e.node).toUpperCase()} SENDS HELP TO ${nm(e.target).toUpperCase()}`);
       else if (e.kind === 'convoyLost') this.toast(`A CONVOY FROM ${nm(e.node).toUpperCase()} WAS TAKEN (${e.target} GOLD)`);
+      else if (e.kind === 'sp') this.banner(`+${e.target} SKILL POINT${e.target > 1 ? 'S' : ''}`, `${nm(e.node)} is yours for the first time  ·  spend them in TALENTS`, '#ffd54a');
       else if (e.kind === 'won') this.banner('THE BLACK SEAT HAS FALLEN', 'the Dominion\'s offensives stop  ·  the victory screen arrives in Phase 12', '#ffd54a');
     }
     if (this.war.events.length) this.save();
@@ -693,7 +708,7 @@ class Game {
       const btns = this.mapButtons();
       for (let i = 0; i < btns.length && !used; i++) {
         const b = this.mapButtonAt(i, btns.length);
-        if (click.x >= b.x && click.x <= b.x + MAP_BTN.w && click.y >= b.y && click.y <= b.y + MAP_BTN.h) {
+        if (click.x >= b.x && click.x <= b.x + b.w && click.y >= b.y && click.y <= b.y + MAP_BTN.h) {
           used = true;
           if (btns[i].enabled) btns[i].act(); else { this.sfx.guard(); this.toast(btns[i].why || ''); }
         }
@@ -765,6 +780,7 @@ class Game {
       { label: 'Field battle — Dominion column', sub: 'tier 1  ·  rout or destroy  ·  2-3 min', spec: fieldSpec() },
       { label: 'Defense — Millbrook (held)', sub: 'tier 1  ·  rout them or hold 3:00  ·  2-3 min', spec: defenseSpec() },
       { label: 'Rescue raid — Hollin cells', sub: 'tier 2  ·  free Sir Aldric, get out  ·  ~3 min', spec: rescueSpec() },
+      { label: "The warlord — Thorne's Seat", sub: 'tier 5  ·  four phases, Thornhounds', spec: warlordSpec() },
       { label: 'Test field', sub: 'endless groups, combat sandbox', spec: testSpec() },
       { label: 'Back to title', sub: '', spec: null, act: () => { this.screen = 'title'; this.titleIndex = 0; } },
     ];
@@ -821,8 +837,13 @@ class Game {
     this.enemies.length = 0; this.projectiles.length = 0; this.pickups.length = 0;
     this.army.clear();
     this.army.streamTier = spec.tier;
-    this.army.streamMult[TEAM_PLAYER] = 1;
     this.army.streamMult[TEAM_ENEMY] = WAR.battlePace[spec.kind] || 1;
+    // the Command talents (PLAN 12.2): your troops' HP and damage, Muster's faster stream, Warlord's Presence
+    const tl = p.talents, cm = WAR.command;
+    this.army.streamMult[TEAM_PLAYER] = tl.muster ? 1 / cm.musterStream : 1;
+    this.army.troopHp = 1 + (tl.drill ? cm.drill : 0) + (tl.host ? cm.hostHp : 0);
+    this.army.troopDmg = 1 + (tl.steel ? cm.steel : 0);
+    this.army.presence.on = !!tl.presence;
     p.lock = null;
     this.order = 'follow';
     this.wheelOpen = false; this.wheelTouch = false; this.input.suppressMove = false;
@@ -908,7 +929,11 @@ class Game {
         const t = b.throne!;
         // the castle's own Lord from the roster: their pattern, moves, colours and level (PLAN 9.1)
         const lg = this.battleFrom === 'map' ? this.war.general(spec.lordId || null) : null;
-        b.lord = lg ? boss(lg.name, lg.title, WAR.lordStats, lg.pattern, lg.moves, lg.color, lg.accent, t.x - 110, t.y, lg.level)
+        if (spec.warlord) {
+          // Warlord Garrick Thorne (PLAN 11.3): Thornline and Howl, and a new pattern every quarter of his HP
+          b.lord = boss(spec.lordName || 'Warlord Garrick Thorne', 'Warlord of the Umbral Dominion', WAR.warlordStats, WAR.warlordPhases[0], ['thorns', 'howl'], '#2b1d1a', '#ff5a3c', t.x - 110, t.y, WAR.warlordLevel);
+          b.lord.boss!.phases = WAR.warlordPhases; b.lord.boss!.phaseNames = WAR.warlordPhaseNames;
+        } else b.lord = lg ? boss(lg.name, lg.title, WAR.lordStats, lg.pattern, lg.moves, lg.color, lg.accent, t.x - 110, t.y, lg.level)
           : boss(spec.lordName || 'the Lord', 'Castle Lord', WAR.lordStats, 'brute', ['slam', 'rush'], '#3d2f5c', '#c79bff', t.x - 110, t.y);
         b.lord.aggro = false;
         break;
@@ -1021,7 +1046,7 @@ class Game {
             b.lordFled = true;
             b.lord.fleeing = true; b.lord.leader = false;
             b.notes.push(`${b.spec.lordName || 'The Lord'} fled — not recruitable`);
-          } else if (b.lordBeatenFirst) b.notes.push(`${b.spec.lordName || 'The Lord'} beaten first: Recruit or Release`);
+          } else if (b.lordBeatenFirst && b.spec.lordId) b.notes.push(`${b.spec.lordName || 'The Lord'} beaten first: Recruit or Release`);
           b.outcome = `${b.spec.name} taken — the throne is destroyed`;
           this.finishBattle('win'); return;
         }
@@ -1134,6 +1159,10 @@ class Game {
         if (result === 'win') b.notes.push('the Dominion army is broken');
       }
       this.war.liveGenerals.clear();
+      // first captures pay skill points (PLAN 12.2): say so here rather than as a banner on the map
+      for (const e of this.war.events) if (e.kind === 'sp') b.notes.push(`+${e.target} SP: ${this.camp.nodes[e.node].name}, first capture`);
+      this.war.events = this.war.events.filter((e) => e.kind !== 'sp');
+      this.syncWar();
       if (b.spec.generalId) {
         const g = this.war.general(b.spec.generalId)!;
         b.notes.push(result === 'win' ? `${g.name}: loyalty ${Math.round(g.loyalty)} (fought beside you)` : result === 'lose' ? `${g.name} is taken` : `${g.name} withdraws with you`);
@@ -1165,10 +1194,18 @@ class Game {
         this.camp.capture(n);
         this.war.onCapture(n);
         b.notes.push(n.type === 'castle' ? `${this.camp.territories[n.territory].name} is yours` : `${n.name} is yours (level ${n.level})`);
+        for (const e of this.war.events) if (e.kind === 'sp') b.notes.push(`+${e.target} SP: first capture`);
+        this.war.events = this.war.events.filter((e) => e.kind !== 'sp');
+        this.syncWar();
       }
-      const commons: MatId[] = ['shard', 'plate', 'sigil', 'ember'];
+      // spoils (PLAN 12.3): 1-3 commons x tier; a castle's Lord pays its territory's rare, the warlord the top one
       const n = rndInt(WAR.spoilMats[0], WAR.spoilMats[1]) * b.spec.tier;
-      for (let k = 0; k < n; k++) { const m = pick(commons); b.spoils.mats[m] = (b.spoils.mats[m] || 0) + 1; }
+      for (let k = 0; k < n; k++) { const m = pick(COMMON_MATS); b.spoils.mats[m] = (b.spoils.mats[m] || 0) + 1; }
+      if (b.spec.kind === 'castle') {
+        const tt = b.spec.nodeId !== undefined ? this.camp.territories[this.camp.nodes[b.spec.nodeId].territory].tier : b.spec.tier;
+        const rare = b.spec.warlord ? RARE_MATS[RARE_MATS.length - 1] : WAR.lordRare[clamp(tt, 1, 5) - 1];
+        b.spoils.mats[rare] = (b.spoils.mats[rare] || 0) + (b.spec.warlord ? WAR.warlordRareCount : WAR.lordRareCount);
+      }
       if (b.spec.convoyId !== undefined && this.battleFrom === 'map') this.war.convoys = this.war.convoys.filter((c) => c.id !== b.spec.convoyId);
       p.gold += b.spoils.gold;
       for (const m of Object.keys(b.spoils.mats) as MatId[]) p.inv[m] = (p.inv[m] || 0) + (b.spoils.mats[m] || 0);
@@ -1691,7 +1728,15 @@ class Game {
   }
 
   /** The warband's size cap (PLAN 12.2: 12 base; talents and L3 castles add up to 60 in Phase 11). */
-  warbandCap(): number { return this.war.warbandCap(); }
+  warbandCap(): number { this.syncWar(); return this.war.warbandCap(); }
+
+  /** Hand the war the knight's talents, and the knight the SP the war has awarded for first captures (PLAN 12.2). */
+  syncWar() {
+    const p = this.player, w = this.war;
+    w.talents = p.talents;
+    w.loyaltyMult = p.hasT('presence') ? WAR.presenceMult : 1;   // Warlord's Presence
+    if (w.spPending > 0) { p.skillPoints += w.spPending; w.spPending = 0; }
+  }
 
   /** Spawn `kinds` as a block of ranks around (cx, cy); archers at the back. Past the live cap they go to reserve. */
   private spawnBlock(kinds: UnitType[], side: Team, cx: number, cy: number, tier = WAR.testFieldTier) {
@@ -2072,7 +2117,7 @@ class Game {
   unitStrike(a: Army, i: number, t: Combatant) {
     const d = a.def(i);
     const ang = Math.atan2(t.y - a.y[i], t.x - a.x[i]);
-    const power = a.atk[i];
+    const power = a.power(i);
     if (t instanceof Structure) {
       const m = t.mult(d.id === 'ram' ? 'ram' : 'unit');
       if (!t.alive || t.team === teamName(a.team[i]) || m <= 0) return;
@@ -2278,7 +2323,7 @@ class Game {
     const p = this.player;
     const out: SynthEntry[] = [];
     const add = (kind: 'w' | 'a', id: string, name: string, recipe: Recipe, owned: boolean) => {
-      const state: SynthState = owned ? 'owned' : canAfford(p.inv, recipe.needs) ? 'ready' : 'lack';
+      const state: SynthState = owned ? 'owned' : canAfford(p.inv, recipe.needs) && p.gold >= recipe.gold ? 'ready' : 'lack';
       out.push({ kind, id, name, recipe, state });
     };
     for (const w of WEAPONS) if (w.recipe) add('w', w.id, w.name, w.recipe, p.ownedWeapons.includes(w.id));
@@ -2288,7 +2333,8 @@ class Game {
 
   private handleBigMenu() {
     const inp = this.input;
-    const tap = inp.takeTap();
+    const click = inp.takeClick();             // the map hands taps over as clicks
+    const tap = inp.takeTap() || click;
     if (tap && this.tapBigMenu(tap)) return;
     if (inp.wasPressed('cancel')) { this.closeMenu(); return; }
 
@@ -2298,9 +2344,10 @@ class Game {
 
     const cycle = (d: number) => { this.menuTab = (this.menuTab + d + MENU_TABS) % MENU_TABS; };
 
-    if (this.menuTab === 2) {
-      if (inp.wasPressed('left')) { this.talentBranch = (this.talentBranch + 2) % 3; this.talentIndex = 0; this.sfx.guard(); }
-      if (inp.wasPressed('right')) { this.talentBranch = (this.talentBranch + 1) % 3; this.talentIndex = 0; this.sfx.guard(); }
+    if (this.menuTab === MENU_TALENTS) {
+      const nb = BRANCHES.length;
+      if (inp.wasPressed('left')) { this.talentBranch = (this.talentBranch + nb - 1) % nb; this.talentIndex = 0; this.sfx.guard(); }
+      if (inp.wasPressed('right')) { this.talentBranch = (this.talentBranch + 1) % nb; this.talentIndex = 0; this.sfx.guard(); }
       const list = talentsIn(BRANCHES[this.talentBranch].id);
       if (inp.wasPressed('down')) { this.talentIndex = (this.talentIndex + 1) % list.length; this.sfx.guard(); }
       if (inp.wasPressed('up')) { this.talentIndex = (this.talentIndex - 1 + list.length) % list.length; this.sfx.guard(); }
@@ -2319,7 +2366,12 @@ class Game {
         const e = this.gearEntries()[this.gearIndex];
         if (e) this.equip(e);
       }
-    } else if (this.menuTab === 1) {
+    } else if (this.menuTab === MENU_KNIGHT) {
+      const n = KNIGHT_UPGRADES.length;
+      if (inp.wasPressed('down')) { this.knightIndex = (this.knightIndex + 1) % n; this.sfx.guard(); }
+      if (inp.wasPressed('up')) { this.knightIndex = (this.knightIndex - 1 + n) % n; this.sfx.guard(); }
+      if (inp.wasPressed('confirm')) this.buyUpgrade(KNIGHT_UPGRADES[this.knightIndex].id);
+    } else if (this.menuTab === MENU_FORGE) {
       const n = Math.max(1, this.synthEntries().length);
       if (inp.wasPressed('down')) { this.synthIndex = (this.synthIndex + 1) % n; this.sfx.guard(); }
       if (inp.wasPressed('up')) { this.synthIndex = (this.synthIndex - 1 + n) % n; this.sfx.guard(); }
@@ -2348,17 +2400,43 @@ class Game {
     this.save();
   }
 
-  /** Forge anywhere for now; Phase 11 moves the forge to castles you hold and adds the gold fee. */
+  /** PLAN 12.3: forging needs a castle you hold, so it's done from the map (the menu, or a castle's Forge button). */
+  canForge(): boolean {
+    return this.screen === 'campaign' && this.camp.nodes.some((n) => n.type === 'castle' && n.owner === 'player');
+  }
+
+  /** Forge for gold + materials (PLAN 12.3). */
   craft(e: SynthEntry) {
     const p = this.player;
     if (e.state === 'owned') { this.toast('ALREADY FORGED'); return; }
+    if (!this.canForge()) { this.toast('FORGE AT A CASTLE: OPEN THE MENU ON THE MAP'); return; }
+    if (p.gold < e.recipe.gold) { this.toast(`NEED ${e.recipe.gold} GOLD`); return; }
     if (e.state === 'lack') { this.toast('NOT ENOUGH MATERIALS'); return; }
+    p.gold -= e.recipe.gold;
     spend(p.inv, e.recipe.needs);
     if (e.kind === 'w') { p.ownedWeapons.push(e.id); p.weapon = weaponById(e.id); }
     else { p.ownedArmors.push(e.id); p.armor = armorById(e.id); }
     p.refreshStats(false);
     this.sfx.levelUp();
     this.banner('FORGED', e.name, '#ffd54a');
+    this.save();
+  }
+
+  /** Gold for the next rank of a knight upgrade: 100 x rank^2 (PLAN 12.1); 0 at max. */
+  upgradeCost(k: keyof KnightUpgrades): number {
+    const r = this.player.upgrades[k];
+    return r >= WAR.upgradeRanks ? 0 : WAR.upgradeCost * (r + 1) * (r + 1);
+  }
+
+  buyUpgrade(k: keyof KnightUpgrades) {
+    const p = this.player, cost = this.upgradeCost(k);
+    if (!cost) { this.toast('ALREADY AT MAX RANK'); return; }
+    if (p.gold < cost) { this.toast(`NEED ${cost} GOLD`); return; }
+    p.gold -= cost;
+    p.upgrades[k]++;
+    p.refreshStats(false);
+    this.sfx.levelUp();
+    this.banner(`${KNIGHT_UPGRADES.find((u) => u.id === k)!.name.toUpperCase()} ${p.upgrades[k]}`, `${cost} gold`, '#ffd54a');
     this.save();
   }
 
@@ -2450,7 +2528,8 @@ class Game {
     if (e === b.lord && b.throne && b.throne.alive && !b.result) {
       // PLAN 10.2: beating the Lord before the throne falls allows recruiting
       b.lordBeatenFirst = true;
-      this.banner(`${(b.spec.lordName || 'the Lord').toUpperCase()} YIELDS`, b.spec.kind === 'castle' ? 'beaten first: can be recruited  ·  now the throne' : 'the castle is leaderless', '#4fe08a');
+      if (b.spec.warlord) this.banner(`${(b.spec.lordName || 'the warlord').toUpperCase()} FALLS`, 'now the throne', '#ffd54a');
+      else this.banner(`${(b.spec.lordName || 'the Lord').toUpperCase()} YIELDS`, b.spec.kind === 'castle' && b.spec.lordId ? 'beaten first: can be recruited  ·  now the throne' : b.spec.kind === 'castle' ? 'now the throne' : 'the castle is leaderless', '#4fe08a');
     } else if (e === b.captain && !b.result) {
       this.banner(`${(b.spec.captainName || 'the Captain').toUpperCase()} FALLS`, b.gates.some((s) => s.alive) ? 'now break the gate' : '', '#4fe08a');
     } else if (e === b.leader && !b.result) {
@@ -2462,6 +2541,20 @@ class Game {
     this.shake(4 * TUNING.shakeScale);
     this.hitstop(4 * TUNING.hitstopScale);
     if (this.player.lock === e) this.player.lock = null;
+  }
+
+  /** The warlord's Howl: a Thornhound pack at his side, while fewer than WAR.howlMaxHounds hounds are on the field. */
+  warlordHowl(e: Enemy) {
+    const a = this.army, hi = UNIT_ORDER.indexOf('hound');
+    let n = 0;
+    for (let i = 0; i < a.cap; i++) if (a.alive[i] && a.type[i] === hi && a.team[i] === TEAM_ENEMY) n++;
+    if (n >= WAR.howlMaxHounds) return;
+    for (let k = 0; k < WAR.houndPack; k++) {
+      const ang = (k / WAR.houndPack) * Math.PI * 2;
+      // the pack comes at his call even past the live cap (6 at most, WAR.howlMaxHounds on the field)
+      if (a.spawn('hound', 'enemy', e.x + Math.cos(ang) * 70, e.y + Math.sin(ang) * 70, this.battle.spec.tier, true) < 0) a.addReserve('enemy', 'hound');
+    }
+    this.toast('THE HOUNDS ANSWER');
   }
 
   onPlayerDeath() {
@@ -2512,7 +2605,7 @@ class Game {
         return true;
       }
     }
-    if (this.menuTab === 1 && inList) {
+    if (this.menuTab === MENU_FORGE && inList) {
       const i = Math.floor((tap.y - MENU_LIST.y - MENU_LIST.pad) / SYNTH_ROW_H);
       const list = this.synthEntries();
       if (i >= 0 && i < list.length) {
@@ -2520,9 +2613,17 @@ class Game {
         return true;
       }
     }
-    if (this.menuTab === 2) {
-      const colW = (VIEW_W - 52 - 20) / 3;
-      for (let b = 0; b < 3; b++) {
+    if (this.menuTab === MENU_KNIGHT) {
+      for (let i = 0; i < KNIGHT_UPGRADES.length; i++) {
+        const r = knightRowAt(i);
+        if (tap.x < r.x || tap.x > r.x + KNIGHT_ROW.w || tap.y < r.y || tap.y > r.y + KNIGHT_ROW.h) continue;
+        if (this.knightIndex === i) this.buyUpgrade(KNIGHT_UPGRADES[i].id); else { this.knightIndex = i; this.sfx.guard(); }
+        return true;
+      }
+    }
+    if (this.menuTab === MENU_TALENTS) {
+      const nb = BRANCHES.length, colW = talentColW();
+      for (let b = 0; b < nb; b++) {
         const x = 26 + b * (colW + 10);
         if (tap.x < x || tap.x > x + colW) continue;
         const i = Math.floor((tap.y - (MENU_LIST.y + 40)) / 26);

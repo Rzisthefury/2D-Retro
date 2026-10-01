@@ -319,6 +319,13 @@ class Campaign {
     }
   }
 
+  /** The Dominion's full force at a node: its garrison in the default mix, plus Thornhound packs at tier 4-5 (PLAN 11.2). */
+  foeForce(n: MapNode): Reserve {
+    const r: Reserve = { ...emptyReserve(), ...foeMix(this.garrison(n)) };
+    r.hound = WAR.houndPacks[this.battleTier(n) - 1] * WAR.houndPack;
+    return r;
+  }
+
   /** Battle tier for a node: its territory's, +1 for a castle or keep while the Dominion holds the outpost. */
   battleTier(n: MapNode): number {
     const t = this.territories[n.territory];
@@ -340,7 +347,7 @@ class Campaign {
     const elites = ['shade', 'caster', 'flyer', 'bruiser', 'shade'].slice(0, 1 + Math.floor(tier / 2));
     const spec: BattleSpec = {
       kind, name: n.name, tier, scenery: t.scenery, seed: 1000 + n.id * 7919,
-      foes: foeMix(this.garrison(n)), foeElites: elites, commander: null, allies: {},
+      foes: this.foeForce(n), foeElites: elites, commander: null, allies: {},
       reinforce: foeMix(WAR.battleReinforce[kind]),
       nodeId: n.id,
     };
@@ -348,6 +355,7 @@ class Campaign {
     if (kind === 'keep') spec.captainName = `Captain ${CAPTAIN_NAMES[t.id % CAPTAIN_NAMES.length]}`;
     if (kind === 'castle') {
       spec.lordName = t.id === WAR.capitalTerritory ? 'Warlord Garrick Thorne' : `Lord ${LORD_NAMES[t.id % LORD_NAMES.length]} of ${t.name}`;
+      spec.warlord = t.id === WAR.capitalTerritory;
       spec.ironGate = !!keep && keep.owner !== 'player';
       spec.gateMult = WAR.castleGateLevel[n.level - 1];
     }

@@ -1,11 +1,12 @@
 /* =========================================================================
- * talents.ts — three branches, 18 nodes, bought with skill points (SP) won
- * by conquest (PLAN 12.2). The Command branch arrives in Phase 11.
+ * talents.ts — four branches, 24 nodes, bought with skill points (SP) won
+ * by conquest (PLAN 12.2). Blade, Arcana and Survival are AF's; Command
+ * grows the warband and strengthens your troops. 42 SP buys the lot.
  * Dash, the Whirl finisher and the combo extensions all live here, so the
  * moveset is something you build rather than something you're handed.
  * ========================================================================= */
 
-type Branch = 'blade' | 'arcana' | 'survival';
+type Branch = 'blade' | 'arcana' | 'survival' | 'command';
 
 interface TalentDef {
   id: string;
@@ -58,12 +59,27 @@ const TALENTS: TalentDef[] = [
     desc: 'An extra 8% damage reduction on top of your armour.' },
   { id: 'secondwind', name: 'Second Wind', branch: 'survival', cost: 3, needs: 'vitality',
     desc: 'The first killing blow each wave leaves you at 35% HP instead.' },
+
+  // ---- Command: the warband (PLAN 12.2; numbers in WAR.command)
+  { id: 'banner', name: 'Rally Banner', branch: 'command', cost: 1,
+    desc: 'Warband +8.' },
+  { id: 'drill', name: 'Drillmaster', branch: 'command', cost: 1,
+    desc: 'Your troops have +15% HP.' },
+  { id: 'steel', name: 'Sharpened Steel', branch: 'command', cost: 1,
+    desc: 'Your troops deal +15% damage.' },
+  { id: 'muster', name: 'Muster', branch: 'command', cost: 2, needs: 'banner',
+    desc: 'Warband +12, and reinforcements stream in 30% faster.' },
+  { id: 'presence', name: "Warlord's Presence", branch: 'command', cost: 2,
+    desc: 'Troops within 300 px of you deal +20% damage. General loyalty gains x1.5.' },
+  { id: 'host', name: 'Grand Host', branch: 'command', cost: 3, needs: 'muster',
+    desc: 'Warband +16, and your troops have a further +15% HP.' },
 ];
 
 const BRANCHES: { id: Branch; name: string; color: string }[] = [
   { id: 'blade', name: 'Blade', color: '#ff9d5c' },
   { id: 'arcana', name: 'Arcana', color: '#7fb4ff' },
   { id: 'survival', name: 'Survival', color: '#69e29a' },
+  { id: 'command', name: 'Command', color: '#ffd54a' },
 ];
 
 function talentsIn(b: Branch): TalentDef[] { return TALENTS.filter((t) => t.branch === b); }

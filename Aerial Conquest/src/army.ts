@@ -59,6 +59,9 @@ class Army {
   reserve: Reserve[] = [emptyReserve(), emptyReserve()];
   streamT = [0, 0];
   streamMult = [1, 1];                // < 1 streams faster (the Muster talent, Phase 11)
+  // the Command talents (PLAN 12.2), set by the game per battle / per frame
+  troopHp = 1; troopDmg = 1;          // your troops' HP and damage, applied as they spawn
+  presence = { on: false, x: 0, y: 0 };   // Warlord's Presence: your troops near the knight hit harder
   edge = [{ x: 0, y: 0, spread: 200 }, { x: 0, y: 0, spread: 200 }];
   streamTier = 1;
   /** where each side's fighters are massed (knight and elites included), for units with nothing in sight */
@@ -165,13 +168,14 @@ class Army {
 
   live(t: Team): number { return this.liveCount[teamIndex(t)]; }
 
-  /** Spawn one minion. Returns its slot, or -1 if the side is at its live cap or the arrays are full. */
-  spawn(kind: UnitType, side: Team, x: number, y: number, tier: number): number {
+  /** Spawn one minion. Returns its slot, or -1 if the side is at its live cap (unless `overCap`) or the arrays are full. */
+  spawn(kind: UnitType, side: Team, x: number, y: number, tier: number, overCap = false): number {
     const t = teamIndex(side);
-    if (this.liveCount[t] >= Army.liveCap() || !this.freeList.length) return -1;
+    if ((!overCap && this.liveCount[t] >= Army.liveCap()) || !this.freeList.length) return -1;
     const i = this.freeList.pop()!;
     const d = UNITS[kind];
     const tm = side === 'player' ? WAR.playerTroopMult : 1;
+    const hm = side === 'player' ? this.troopHp : 1, dm = side === 'player' ? this.troopDmg : 1;
     const ts = Math.max(1, tier);
     this.used[i] = 1; this.alive[i] = 1;
     this.uid[i] = this.nextUid++;
@@ -179,8 +183,8 @@ class Army {
     this.team[i] = t;
     this.state[i] = ST_ADVANCE;
     this.x[i] = x; this.y[i] = y; this.vx[i] = 0; this.vy[i] = 0;
-    this.maxHp[i] = this.hp[i] = Math.round(d.hp * TIER_SCALING.hpMultiplier(ts) * tm);
-    this.atk[i] = d.dmg * TIER_SCALING.attackMultiplier(ts) * tm;
+    this.maxHp[i] = this.hp[i] = Math.round(d.hp * TIER_SCALING.hpMultiplier(ts) * tm * hm);
+    this.atk[i] = d.dmg * TIER_SCALING.attackMultiplier(ts) * tm * dm;
     this.armor[i] = d.def * TIER_SCALING.defenseMultiplier(ts);
     this.facing[i] = side === 'player' ? 0 : Math.PI;
     this.cd[i] = rnd(0, d.cooldown);
@@ -194,6 +198,16 @@ class Army {
   }
 
   def(i: number): UnitDef { return UNITS[UNIT_ORDER[this.type[i]]]; }
+
+  /** Minion i's hit: its attack, +20% for your troops near the knight with Warlord's Presence. */
+  power(i: number): number {
+    const pr = this.presence, r = WAR.command.presenceRange;
+    if (pr.on && this.team[i] === TEAM_PLAYER) {
+      const dx = this.x[i] - pr.x, dy = this.y[i] - pr.y;
+      if (dx * dx + dy * dy < r * r) return this.atk[i] * (1 + WAR.command.presence);
+    }
+    return this.atk[i];
+  }
 
   /** A Combatant handle for slot i (cached per spawn). */
   ref(i: number): MinionRef {
@@ -290,6 +304,7 @@ class Army {
 
   update(g: Game, dt: number) {
     this.frame++;
+    this.presence.x = g.player.x; this.presence.y = g.player.y;
     const f = g.field;
     this.gx0 = f.x; this.gy0 = f.y;
     this.rebuildGrid(f);
@@ -567,7 +582,7 @@ class Army {
     this.ax[k] = this.x[i]; this.ay[k] = this.y[i];
     this.avx[k] = Math.cos(a) * WAR.arrowSpeed; this.avy[k] = Math.sin(a) * WAR.arrowSpeed;
     this.alife[k] = (this.def(i).reach * 1.4) / WAR.arrowSpeed;
-    this.admg[k] = this.atk[i];
+    this.admg[k] = this.power(i);
     this.ateam[k] = this.team[i];
   }
 

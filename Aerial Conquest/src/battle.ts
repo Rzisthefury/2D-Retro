@@ -29,6 +29,7 @@ interface BattleSpec {
   wagons?: number;                            // convoy ambush
   lordName?: string;                          // castle / rescue
   captainName?: string;                       // keep
+  warlord?: boolean;                          // castle: the capital, held by Warlord Garrick Thorne (PLAN 11.3)
   generalName?: string;                       // rescue: who you came for
   gateMult?: number;                          // castle gate HP x (castle level, PLAN 5.2)
   nodeId?: number;                            // the map node this battle is for (none: the debug battle list)
@@ -588,6 +589,16 @@ function castleSpec(): BattleSpec {
     reinforce: foeMix(WAR.battleReinforce.castle),
     kind: 'castle', name: 'Castle Hollin', tier: 2, scenery: 'forest', seed: 1337 + 51, ironGate: true, lordName: 'Lord Edric Hollin',
     foes: { sword: 32, spear: 16, archer: 20, shield: 12 }, foeElites: ['shade', 'caster'], commander: null,
+    allies: { sword: 16, spear: 8, archer: 10, shield: 6, ram: 2 },
+  };
+}
+
+/** The warlord's seat (debug list): tier 5, his four phases, two hound packs. */
+function warlordSpec(): BattleSpec {
+  return {
+    reinforce: foeMix(WAR.battleReinforce.castle),
+    kind: 'castle', name: "Thorne's Seat", tier: 5, scenery: 'ruins', seed: 1337 + 53, ironGate: false, lordName: 'Warlord Garrick Thorne', warlord: true,
+    foes: { sword: 30, spear: 14, archer: 18, shield: 10, hound: WAR.houndPacks[4] * WAR.houndPack }, foeElites: ['shade', 'caster', 'bruiser'], commander: null,
     allies: { sword: 16, spear: 8, archer: 10, shield: 6, ram: 2 },
   };
 }

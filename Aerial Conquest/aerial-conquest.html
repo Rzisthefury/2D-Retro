@@ -412,6 +412,12 @@ const UNIT_ORDER = ['sword', 'spear', 'archer', 'shield', 'ram', 'hound'];
 /** HUD colour of each order. */
 const ORDER_COLOR = { follow: '#8fb4ff', charge: '#ff8a5c', hold: '#69e29a', focus: '#ffd54a' };
 function freshUpgrades() { return { vitality: 0, might: 0, arcana: 0 }; }
+/** The Knight tab's rows (PLAN 12.1). */
+const KNIGHT_UPGRADES = [
+    { id: 'vitality', name: 'Vitality', desc: 'max HP', color: '#ff7a7a' },
+    { id: 'might', name: 'Might', desc: 'strength and defense', color: '#ffb35c' },
+    { id: 'arcana', name: 'Arcana', desc: 'magic, magic resist and max MP', color: '#7fb4ff' },
+];
 /** The knight's base stats: AF's level-1 values plus whatever the upgrades buy. */
 function statsForKnight(u) {
     const v = u.vitality * WAR.levelsPerRank, m = u.might * WAR.levelsPerRank, a = u.arcana * WAR.levelsPerRank;
@@ -428,9 +434,23 @@ function statsForKnight(u) {
 // Every new tunable number for the conquest layer lives here (PLAN rule 0.8).
 const WAR = {
     // knight progression
-    startSkillPoints: 5, // PLAN 12.2: 5 + castles 2 each + keeps 1 each + capital 3 = 42
+    // PLAN 12.2: 5 + 11 castles x 2 + 11 keeps x 1 + capital 4 = 42 (the map has 11 enemy keeps, not 12,
+    // so the capital bonus is 4 rather than PLAN's 3 to land the whole tree on 42)
+    startSkillPoints: 5,
+    spCastle: 2, // first capture of each enemy castle
+    spKeep: 1, // first capture of each enemy keep
+    spCapital: 4, // on top of spCastle for the warlord's seat
     levelsPerRank: 4, // knight upgrade rank -> AF level-curve equivalent (rank 10 ~ level 41)
     upgradeRanks: 10,
+    upgradeCost: 100, // gold for a rank: this x (the rank being bought)^2 (PLAN 12.1)
+    // the Command branch (PLAN 12.2)
+    command: {
+        banner: 8, muster: 12, host: 16, // warband cap +
+        drill: 0.15, hostHp: 0.15, // troop HP +
+        steel: 0.15, // troop damage +
+        musterStream: 1.3, // your reserves stream this much faster
+        presence: 0.2, presenceRange: 300, // troops this near the knight deal + this
+    },
     // teams (Phase 1): allied and hostile Enemy entities
     retargetFrames: 10, // how often a unit re-picks its nearest hostile
     retargetSwitch: 0.8, // only switch if the new target is this much closer (no flip-flopping)
@@ -473,6 +493,9 @@ const WAR = {
     spoilGold: { field: 120, village: 90, outpost: 90, keep: 150, castle: 220, convoy: 40, defense: 100, rescue: 120, test: 0 }, // x tier, on a win
     spoilGoldPerKill: 1, // plus this per Dominion unit killed
     spoilMats: [1, 3], // common materials won (PLAN 12.3), x tier
+    lordRare: ['ember', 'ember', 'crystal', 'crystal', 'core'], // a castle Lord's rare, by territory tier
+    lordRareCount: 2, // rares a beaten castle pays
+    warlordRareCount: 3, // the warlord pays the top rare (Void Core)
     exitPushTime: 0.35, // seconds pushing into your own edge before you leave the field
     // the other battle types (Phase 5, PLAN 10.2)
     ringRadius: 110, // outpost capture ring
@@ -564,6 +587,16 @@ const WAR = {
     captiveDrainEvery: 20, // -1 loyalty per this many seconds held
     loyaltyWarn: 25, // at or under: the warning (red border, a line)
     presenceMult: 1.5, // Warlord's Presence (Command talent, Phase 11): loyalty gains x this
+    // Thornhounds and the warlord (Phase 11, PLAN 11.2 / 11.3)
+    houndPack: 6,
+    houndPacks: [0, 0, 0, 1, 2], // packs guarding a node, by battle tier
+    warlordArmyPacks: 1, // packs added to every army marching out of the warlord's land
+    warlordStats: { hp: 1500, attack: 18, defense: 12 },
+    warlordLevel: 20,
+    warlordPhases: ['brute', 'stalker', 'sorcerer', 'skylord'], // one per quarter of his HP
+    warlordPhaseNames: ['the Iron Lord', 'the Hunter', 'the Hexer', 'Skyborne'],
+    howlMaxHounds: 12, // Howl calls a pack only while fewer hounds than this are on the field
+    thornsCount: 6, thornsGap: 70, thornsRadius: 62, thornsEvery: 5, // Thornline: shocks marching at you
     // the Phase 0 test battlefield
     testField: { w: 1920, h: 1200 },
     testFieldTier: 1,
@@ -604,24 +637,31 @@ const TOUCH_CHIPS = { x: 920, y: 186, dy: 38, r: 16 };
 // Menu geometry lives here because the renderer draws from it and the input
 // layer hit-tests against it — one source of truth or taps land in the wrong row.
 const MENU_TAB = { x: 26, y: 18, w: 116, h: 28, gap: 8 };
-const MENU_TABS = 4; // gear · forge · talents · status
+const MENU_TABS = 5; // gear · forge · talents · knight · status
+const MENU_FORGE = 1, MENU_TALENTS = 2, MENU_KNIGHT = 3, MENU_STATUS = 4;
+/** Knight tab rows (shared by drawing and taps). */
+const KNIGHT_ROW = { x: 26, y0: 74, w: VIEW_W - 52, h: 92, gap: 14 };
+function knightRowAt(i) { return { x: KNIGHT_ROW.x, y: KNIGHT_ROW.y0 + i * (KNIGHT_ROW.h + KNIGHT_ROW.gap) }; }
+/** Talents tab: one column per branch. */
+function talentColW() { return (VIEW_W - 52 - 10 * (BRANCHES.length - 1)) / BRANCHES.length; }
 const SYNTH_ROW_H = 20; // the recipe list is long now, so its rows are tighter
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 /** The campaign map's node panel and its buttons (render and hit-testing share these). */
 const MAP_PANEL = { x: 640, y: 62, w: 306, h: 412, pad: 14 };
-const MAP_BTN = { w: 278, h: 46, gap: 8 };
+const MAP_BTN = { w: 278, h: 46, gap: 8, pairFrom: 5 }; // 5+ buttons (your castle): two per row
 const MAP_BAR = { h: 44 };
 /** The results screen's Recruit / Release buttons (PLAN 9.1). */
 const RECRUIT_BTN = { x0: 270, y: 430, w: 200, h: 46, gap: 20 };
 /** The top bar's generals readout (opens the roster). */
 const MAP_GEN_HIT = { x: 560, w: 140 };
+const MAP_MENU_HIT = { x: 12, y: VIEW_H - 66, w: 104, h: 34 }; // the map's MENU button (bottom left): gear, forge, talents, knight
 /** The Generals roster panel. */
 const MAP_ROSTER = { y0: 58, rowH: 52 };
 /** The Send army panel: a row per troop type with -/+ (step), then Half / All. */
 const MAP_SEND = { y0: 74, rowH: 36, btnW: 44, btnH: 30, step: 5, quickH: 34 };
 const SEND_TYPES = ['sword', 'spear', 'archer', 'shield', 'ram']; // the top bar: treasury, warband, skill points, territories
-const CAMP_ROW = { x: 70, y0: 170, w: 400, h: 50, gap: 8, colGap: 20, perCol: 5 }; // the campaign stub's battle list: two columns
+const CAMP_ROW = { x: 70, y0: 170, w: 400, h: 50, gap: 8, colGap: 20, perCol: 6 }; // the campaign stub's battle list: two columns
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
 // How the hero and the sword are drawn. Colours still come from the
 // equipped armour and weapon tier; these pick the silhouette.
@@ -972,6 +1012,8 @@ class InputState {
     takePan() { const p = { ...this.pan }; this.pan.x = this.pan.y = 0; return p; }
     takeZoom() { const z = this.zoomSteps; this.zoomSteps = 0; return z; }
     takeClick() { const c = this.lastClick; this.lastClick = null; return c; }
+    /** Put a click back for the next reader (the map's menu button peeks first). */
+    pushClick(c) { this.lastClick = c; }
     /** Read and clear the most recent tap, for whichever UI is on screen. */
     takeTap() {
         const t = this.lastTap;
@@ -1180,34 +1222,24 @@ class Sfx {
     }
 }
 /* =========================================================================
- * items.ts — materials, equipment tiers, synthesis recipes, drop tables.
- * Weapons raise power and reach; armour cuts damage taken. Every tier is
- * gated on owning the previous one, so progression is a ladder, not a shop.
+ * items.ts — materials, equipment tiers, forge recipes (PLAN 12.3).
+ * Weapons raise power and reach; armour cuts damage taken. Six tiers of
+ * each, forged at a castle you hold for gold plus battle spoils.
  * ========================================================================= */
 const MATS = {
     shard: { id: 'shard', name: 'Shadow Shard', color: '#8f7dff', rank: 1 },
-    plate: { id: 'plate', name: 'Bulwark Plate', color: '#ff8b8b', rank: 2 },
-    sigil: { id: 'sigil', name: 'Chant Sigil', color: '#8fd0ff', rank: 2 },
+    plate: { id: 'plate', name: 'Bulwark Plate', color: '#ff8b8b', rank: 1 },
+    sigil: { id: 'sigil', name: 'Chant Sigil', color: '#8fd0ff', rank: 1 },
+    iron: { id: 'iron', name: 'Dark Iron', color: '#c9d2e8', rank: 1 },
     ember: { id: 'ember', name: 'Wisp Ember', color: '#e79bff', rank: 2 },
-    iron: { id: 'iron', name: 'Dark Iron', color: '#c9d2e8', rank: 3 },
-    crystal: { id: 'crystal', name: 'Radiant Crystal', color: '#ffe27a', rank: 4 },
-    core: { id: 'core', name: 'Void Core', color: '#ff5fd2', rank: 5 },
-    heartwood: { id: 'heartwood', name: 'Heartwood', color: '#7fe0a0', rank: 6 },
-    tidepearl: { id: 'tidepearl', name: 'Tidepearl', color: '#7fd8ff', rank: 6 },
-    relic: { id: 'relic', name: 'Relic Gear', color: '#d0b090', rank: 6 },
-    sunglass: { id: 'sunglass', name: 'Sunglass', color: '#ffd27a', rank: 7 },
-    magma: { id: 'magma', name: 'Magma Heart', color: '#ff6a3d', rank: 7 },
-    rime: { id: 'rime', name: 'Rimeshard', color: '#d8f0ff', rank: 8 },
-    storm: { id: 'storm', name: 'Stormfeather', color: '#fff08a', rank: 8 },
-    voidcrown: { id: 'voidcrown', name: 'Crownshard', color: '#c070ff', rank: 9 },
-    star: { id: 'star', name: 'Star Fragment', color: '#ffffff', rank: 10 },
+    crystal: { id: 'crystal', name: 'Radiant Crystal', color: '#ffe27a', rank: 3 },
+    core: { id: 'core', name: 'Void Core', color: '#ff5fd2', rank: 4 },
 };
-const MAT_ORDER = [
-    'shard', 'plate', 'sigil', 'ember', 'iron', 'crystal', 'core',
-    'heartwood', 'tidepearl', 'relic', 'sunglass', 'magma', 'rime', 'storm', 'voidcrown', 'star',
-];
-/** Boss materials never come from ordinary enemies. */
-const BOSS_MATS = ['heartwood', 'tidepearl', 'relic', 'sunglass', 'magma', 'rime', 'storm', 'voidcrown', 'star'];
+const MAT_ORDER = ['shard', 'plate', 'sigil', 'iron', 'ember', 'crystal', 'core'];
+/** Won battles pay these (1-3 x tier). */
+const COMMON_MATS = ['shard', 'plate', 'sigil', 'iron'];
+/** Only Lords and the warlord pay these. */
+const RARE_MATS = ['ember', 'crystal', 'core'];
 const WEAPONS = [
     {
         id: 'w1', name: 'Worn Edge', tier: 1,
@@ -1219,71 +1251,36 @@ const WEAPONS = [
         id: 'w2', name: 'Iron Fang', tier: 2,
         powerMult: 1.18, rangeBonus: 4, critBonus: 0.02, magBonus: 0, poiseMult: 1.1,
         blade: { color: '#9fb0cc', edge: '#f2f7ff', glow: 0.1, length: 1.06, width: 7, teeth: true, flame: false },
-        recipe: { needs: { shard: 8, iron: 2 } },
+        recipe: { gold: 150, needs: { shard: 4, iron: 3 } },
         desc: 'Heavier steel. A little more reach, a little more bite.',
     },
     {
         id: 'w3', name: 'Shadowsteel', tier: 3,
         powerMult: 1.38, rangeBonus: 8, critBonus: 0.04, magBonus: 1, poiseMult: 1.2,
         blade: { color: '#6c5fa8', edge: '#c6b4ff', glow: 0.35, length: 1.12, width: 7, teeth: true, flame: false },
-        recipe: { needs: { shard: 18, sigil: 8, iron: 6 } },
+        recipe: { gold: 400, needs: { shard: 8, sigil: 6, iron: 6, ember: 1 } },
         desc: 'Quenched in shade. Staggers heavier things than it should.',
     },
     {
         id: 'w4', name: 'Emberfang', tier: 4,
         powerMult: 1.62, rangeBonus: 12, critBonus: 0.07, magBonus: 2, poiseMult: 1.35,
         blade: { color: '#a34a2a', edge: '#ffb066', glow: 0.6, length: 1.18, width: 8, teeth: true, flame: true },
-        recipe: { needs: { ember: 16, plate: 10, iron: 12, crystal: 2 } },
+        recipe: { gold: 900, needs: { sigil: 10, iron: 10, ember: 3, crystal: 1 } },
         desc: 'Burns on the swing. Crits far more often.',
     },
     {
         id: 'w5', name: 'Stormcaller', tier: 5,
         powerMult: 1.90, rangeBonus: 16, critBonus: 0.09, magBonus: 5, poiseMult: 1.5,
         blade: { color: '#3e6fa8', edge: '#8fe4ff', glow: 0.8, length: 1.24, width: 9, teeth: true, flame: true },
-        recipe: { needs: { sigil: 24, crystal: 8, iron: 20, core: 1 } },
+        recipe: { gold: 1800, needs: { shard: 16, iron: 16, crystal: 3 } },
         desc: 'Long reach and real magic behind it.',
     },
     {
         id: 'w6', name: 'Oblivion Fang', tier: 6,
         powerMult: 2.25, rangeBonus: 21, critBonus: 0.12, magBonus: 8, poiseMult: 1.75,
         blade: { color: '#5a1f4e', edge: '#ff7ae0', glow: 1, length: 1.32, width: 10, teeth: true, flame: true },
-        recipe: { needs: { core: 5, crystal: 20, iron: 40, ember: 30 } },
+        recipe: { gold: 3500, needs: { iron: 24, sigil: 20, crystal: 3, core: 1 } },
         desc: 'Nothing guards against it for long.',
-    },
-    {
-        id: 'w7', name: 'Tidebreaker', tier: 7,
-        powerMult: 2.60, rangeBonus: 24, critBonus: 0.13, magBonus: 10, poiseMult: 1.9,
-        blade: { color: '#2a6a8a', edge: '#7fd8ff', glow: 0.8, length: 1.36, width: 10, teeth: true, flame: false },
-        recipe: { needs: { tidepearl: 8, heartwood: 8, iron: 40, core: 4 } },
-        desc: 'Forest and sea, bound in one edge. Heavy as a wave.',
-    },
-    {
-        id: 'w8', name: 'Magmaheart', tier: 8,
-        powerMult: 3.00, rangeBonus: 27, critBonus: 0.15, magBonus: 12, poiseMult: 2.05,
-        blade: { color: '#8a2a1a', edge: '#ff9a5c', glow: 1, length: 1.40, width: 11, teeth: true, flame: true },
-        recipe: { needs: { magma: 10, sunglass: 10, relic: 8, core: 6 } },
-        desc: 'Still molten at the core. It never quite cools.',
-    },
-    {
-        id: 'w9', name: 'Rimestorm', tier: 9,
-        powerMult: 3.45, rangeBonus: 30, critBonus: 0.17, magBonus: 15, poiseMult: 2.2,
-        blade: { color: '#6a8ab0', edge: '#e8f8ff', glow: 1, length: 1.44, width: 11, teeth: true, flame: false },
-        recipe: { needs: { rime: 12, storm: 12, crystal: 30, core: 8 } },
-        desc: 'Frost on the blade, thunder in the swing.',
-    },
-    {
-        id: 'w10', name: 'Hollow Crown', tier: 10,
-        powerMult: 4.00, rangeBonus: 34, critBonus: 0.20, magBonus: 18, poiseMult: 2.5,
-        blade: { color: '#3a1060', edge: '#d890ff', glow: 1, length: 1.50, width: 12, teeth: true, flame: true },
-        recipe: { needs: { voidcrown: 14, storm: 10, magma: 10, core: 12 } },
-        desc: 'Taken from the Rift itself. The end of the main road.',
-    },
-    {
-        id: 'w11', name: 'Starforged', tier: 11,
-        powerMult: 4.60, rangeBonus: 38, critBonus: 0.25, magBonus: 22, poiseMult: 2.8,
-        blade: { color: '#c8c8f0', edge: '#ffffff', glow: 1, length: 1.55, width: 12, teeth: true, flame: true },
-        recipe: { needs: { star: 12, voidcrown: 10, core: 15 } },
-        desc: 'Only Ascendant bosses drop what this is made of.',
     },
 ];
 const ARMORS = [
@@ -1297,131 +1294,40 @@ const ARMORS = [
         id: 'a2', name: 'Iron Cuirass', tier: 2,
         dr: 0.06, hpBonus: 16, mresBonus: 1,
         look: { plate: '#42507e', trim: '#b3c4ec', cape: '#ad2a3c', shoulder: 12, spikes: 0, capeLen: 27, crest: 2 },
-        recipe: { needs: { plate: 8, shard: 6 } },
+        recipe: { gold: 150, needs: { plate: 4, shard: 3 } },
         desc: 'Proper plate. Takes the edge off everything.',
     },
     {
         id: 'a3', name: 'Shadowmail', tier: 3,
         dr: 0.12, hpBonus: 38, mresBonus: 3,
         look: { plate: '#332b57', trim: '#c4adff', cape: '#8a2359', shoulder: 15, spikes: 2, capeLen: 33, crest: 5 },
-        recipe: { needs: { plate: 16, shard: 20, iron: 8 } },
+        recipe: { gold: 400, needs: { plate: 8, shard: 6, iron: 6, ember: 1 } },
         desc: 'Shoulders start getting in the way of doorframes.',
     },
     {
         id: 'a4', name: 'Emberplate', tier: 4,
         dr: 0.18, hpBonus: 66, mresBonus: 5,
         look: { plate: '#331d22', trim: '#ffab5e', cape: '#9c2418', shoulder: 17, spikes: 3, capeLen: 38, crest: 7 },
-        recipe: { needs: { ember: 18, plate: 22, iron: 14, crystal: 3 } },
+        recipe: { gold: 900, needs: { plate: 10, iron: 10, ember: 3, crystal: 1 } },
         desc: 'Forge-blackened, gold-veined, faintly warm.',
     },
     {
         id: 'a5', name: 'Stormward', tier: 5,
         dr: 0.24, hpBonus: 100, mresBonus: 9,
         look: { plate: '#1d2c44', trim: '#8fe4ff', cape: '#123a5c', shoulder: 20, spikes: 4, capeLen: 44, crest: 10 },
-        recipe: { needs: { sigil: 26, crystal: 10, iron: 24, core: 1 } },
+        recipe: { gold: 1800, needs: { plate: 16, sigil: 16, crystal: 3 } },
         desc: 'Turns magic aside as easily as steel.',
     },
     {
         id: 'a6', name: 'Oblivion Aegis', tier: 6,
         dr: 0.30, hpBonus: 145, mresBonus: 14,
         look: { plate: '#1a1024', trim: '#ff7ae0', cape: '#3d0b2e', shoulder: 24, spikes: 5, capeLen: 52, crest: 14 },
-        recipe: { needs: { core: 5, crystal: 24, plate: 40, iron: 44 } },
+        recipe: { gold: 3500, needs: { plate: 24, iron: 20, crystal: 3, core: 1 } },
         desc: 'Nothing about the silhouette is subtle.',
-    },
-    {
-        id: 'a7', name: 'Tidewall', tier: 7,
-        dr: 0.33, hpBonus: 200, mresBonus: 18,
-        look: { plate: '#1a3a4a', trim: '#7fd8ff', cape: '#0e3a52', shoulder: 25, spikes: 5, capeLen: 54, crest: 15 },
-        recipe: { needs: { tidepearl: 8, heartwood: 8, plate: 50, core: 4 } },
-        desc: 'Scaled like a sea wall, grown like bark.',
-    },
-    {
-        id: 'a8', name: 'Magmaforged', tier: 8,
-        dr: 0.36, hpBonus: 260, mresBonus: 22,
-        look: { plate: '#3a1410', trim: '#ff8a4a', cape: '#6a1a0e', shoulder: 26, spikes: 6, capeLen: 56, crest: 17 },
-        recipe: { needs: { magma: 10, sunglass: 10, relic: 8, core: 6 } },
-        desc: 'Cooled obsidian over a glowing seam.',
-    },
-    {
-        id: 'a9', name: 'Rimeguard', tier: 9,
-        dr: 0.39, hpBonus: 330, mresBonus: 27,
-        look: { plate: '#2a3a4e', trim: '#e8f8ff', cape: '#3a5a7a', shoulder: 27, spikes: 6, capeLen: 58, crest: 19 },
-        recipe: { needs: { rime: 12, storm: 12, crystal: 30, core: 8 } },
-        desc: 'Frost-hardened plate that sheds lightning.',
-    },
-    {
-        id: 'a10', name: 'Hollow Regalia', tier: 10,
-        dr: 0.42, hpBonus: 410, mresBonus: 32,
-        look: { plate: '#1e0e30', trim: '#d890ff', cape: '#4a1060', shoulder: 28, spikes: 7, capeLen: 60, crest: 22 },
-        recipe: { needs: { voidcrown: 14, rime: 10, sunglass: 10, core: 12 } },
-        desc: 'A king\'s armour, from a king who is no longer there.',
-    },
-    {
-        id: 'a11', name: 'Starwoven', tier: 11,
-        dr: 0.46, hpBonus: 520, mresBonus: 40,
-        look: { plate: '#d8d8ec', trim: '#ffffff', cape: '#8a8ad0', shoulder: 29, spikes: 7, capeLen: 62, crest: 24 },
-        recipe: { needs: { star: 12, voidcrown: 10, core: 15 } },
-        desc: 'Woven from Ascendant spoils. Faintly warm, faintly humming.',
     },
 ];
 function weaponById(id) { return WEAPONS.find((w) => w.id === id) || WEAPONS[0]; }
 function armorById(id) { return ARMORS.find((a) => a.id === id) || ARMORS[0]; }
-const DROPS = {
-    shade: {
-        mats: [
-            { id: 'shard', chance: 0.62, min: 1, max: 2 },
-            { id: 'iron', chance: 0.07, min: 1, max: 1 },
-        ],
-        potion: 0.10, ether: 0.07,
-    },
-    bruiser: {
-        mats: [
-            { id: 'plate', chance: 0.85, min: 1, max: 3 },
-            { id: 'iron', chance: 0.22, min: 1, max: 2 },
-            { id: 'crystal', chance: 0.06, min: 1, max: 1 },
-        ],
-        potion: 0.26, ether: 0.13,
-    },
-    caster: {
-        mats: [
-            { id: 'sigil', chance: 0.66, min: 1, max: 2 },
-            { id: 'iron', chance: 0.12, min: 1, max: 1 },
-            { id: 'crystal', chance: 0.05, min: 1, max: 1 },
-        ],
-        potion: 0.12, ether: 0.24,
-    },
-    flyer: {
-        mats: [
-            { id: 'ember', chance: 0.66, min: 1, max: 2 },
-            { id: 'iron', chance: 0.12, min: 1, max: 1 },
-            { id: 'crystal', chance: 0.06, min: 1, max: 1 },
-        ],
-        potion: 0.13, ether: 0.16,
-    },
-};
-/** Void Cores only drop from tier 5 up — the late-tier gate is depth, not luck. */
-function coreChance(tier) {
-    if (tier < 5)
-        return 0;
-    return Math.min(0.12, 0.02 + (tier - 5) * 0.018);
-}
-function rollDrops(enemyId, tier, luck) {
-    const t = DROPS[enemyId] || DROPS.shade;
-    const out = [];
-    const tierBonus = 1 + Math.min(0.6, tier * 0.06);
-    for (const m of t.mats) {
-        if (Math.random() < m.chance * luck * tierBonus) {
-            out.push({ kind: 'mat', id: m.id, count: rndInt(m.min, m.max) });
-        }
-    }
-    if (Math.random() < coreChance(tier) * luck)
-        out.push({ kind: 'mat', id: 'core', count: 1 });
-    if (Math.random() < t.potion)
-        out.push({ kind: 'potion', id: null, count: 1 });
-    if (Math.random() < t.ether)
-        out.push({ kind: 'ether', id: null, count: 1 });
-    return out;
-}
 function have(inv, id) { return inv[id] || 0; }
 function canAfford(inv, needs) {
     for (const k of Object.keys(needs)) {
@@ -1436,8 +1342,9 @@ function spend(inv, needs) {
     }
 }
 /* =========================================================================
- * talents.ts — three branches, 18 nodes, bought with skill points (SP) won
- * by conquest (PLAN 12.2). The Command branch arrives in Phase 11.
+ * talents.ts — four branches, 24 nodes, bought with skill points (SP) won
+ * by conquest (PLAN 12.2). Blade, Arcana and Survival are AF's; Command
+ * grows the warband and strengthens your troops. 42 SP buys the lot.
  * Dash, the Whirl finisher and the combo extensions all live here, so the
  * moveset is something you build rather than something you're handed.
  * ========================================================================= */
@@ -1481,11 +1388,25 @@ const TALENTS = [
         desc: 'An extra 8% damage reduction on top of your armour.' },
     { id: 'secondwind', name: 'Second Wind', branch: 'survival', cost: 3, needs: 'vitality',
         desc: 'The first killing blow each wave leaves you at 35% HP instead.' },
+    // ---- Command: the warband (PLAN 12.2; numbers in WAR.command)
+    { id: 'banner', name: 'Rally Banner', branch: 'command', cost: 1,
+        desc: 'Warband +8.' },
+    { id: 'drill', name: 'Drillmaster', branch: 'command', cost: 1,
+        desc: 'Your troops have +15% HP.' },
+    { id: 'steel', name: 'Sharpened Steel', branch: 'command', cost: 1,
+        desc: 'Your troops deal +15% damage.' },
+    { id: 'muster', name: 'Muster', branch: 'command', cost: 2, needs: 'banner',
+        desc: 'Warband +12, and reinforcements stream in 30% faster.' },
+    { id: 'presence', name: "Warlord's Presence", branch: 'command', cost: 2,
+        desc: 'Troops within 300 px of you deal +20% damage. General loyalty gains x1.5.' },
+    { id: 'host', name: 'Grand Host', branch: 'command', cost: 3, needs: 'muster',
+        desc: 'Warband +16, and your troops have a further +15% HP.' },
 ];
 const BRANCHES = [
     { id: 'blade', name: 'Blade', color: '#ff9d5c' },
     { id: 'arcana', name: 'Arcana', color: '#7fb4ff' },
     { id: 'survival', name: 'Survival', color: '#69e29a' },
+    { id: 'command', name: 'Command', color: '#ffd54a' },
 ];
 function talentsIn(b) { return TALENTS.filter((t) => t.branch === b); }
 function talentById(id) { return TALENTS.find((t) => t.id === id); }
@@ -1548,6 +1469,10 @@ class Army {
         this.reserve = [emptyReserve(), emptyReserve()];
         this.streamT = [0, 0];
         this.streamMult = [1, 1]; // < 1 streams faster (the Muster talent, Phase 11)
+        // the Command talents (PLAN 12.2), set by the game per battle / per frame
+        this.troopHp = 1;
+        this.troopDmg = 1; // your troops' HP and damage, applied as they spawn
+        this.presence = { on: false, x: 0, y: 0 }; // Warlord's Presence: your troops near the knight hit harder
         this.edge = [{ x: 0, y: 0, spread: 200 }, { x: 0, y: 0, spread: 200 }];
         this.streamTier = 1;
         /** where each side's fighters are massed (knight and elites included), for units with nothing in sight */
@@ -1673,14 +1598,15 @@ class Army {
         return null;
     }
     live(t) { return this.liveCount[teamIndex(t)]; }
-    /** Spawn one minion. Returns its slot, or -1 if the side is at its live cap or the arrays are full. */
-    spawn(kind, side, x, y, tier) {
+    /** Spawn one minion. Returns its slot, or -1 if the side is at its live cap (unless `overCap`) or the arrays are full. */
+    spawn(kind, side, x, y, tier, overCap = false) {
         const t = teamIndex(side);
-        if (this.liveCount[t] >= Army.liveCap() || !this.freeList.length)
+        if ((!overCap && this.liveCount[t] >= Army.liveCap()) || !this.freeList.length)
             return -1;
         const i = this.freeList.pop();
         const d = UNITS[kind];
         const tm = side === 'player' ? WAR.playerTroopMult : 1;
+        const hm = side === 'player' ? this.troopHp : 1, dm = side === 'player' ? this.troopDmg : 1;
         const ts = Math.max(1, tier);
         this.used[i] = 1;
         this.alive[i] = 1;
@@ -1692,8 +1618,8 @@ class Army {
         this.y[i] = y;
         this.vx[i] = 0;
         this.vy[i] = 0;
-        this.maxHp[i] = this.hp[i] = Math.round(d.hp * TIER_SCALING.hpMultiplier(ts) * tm);
-        this.atk[i] = d.dmg * TIER_SCALING.attackMultiplier(ts) * tm;
+        this.maxHp[i] = this.hp[i] = Math.round(d.hp * TIER_SCALING.hpMultiplier(ts) * tm * hm);
+        this.atk[i] = d.dmg * TIER_SCALING.attackMultiplier(ts) * tm * dm;
         this.armor[i] = d.def * TIER_SCALING.defenseMultiplier(ts);
         this.facing[i] = side === 'player' ? 0 : Math.PI;
         this.cd[i] = rnd(0, d.cooldown);
@@ -1709,6 +1635,16 @@ class Army {
         return i;
     }
     def(i) { return UNITS[UNIT_ORDER[this.type[i]]]; }
+    /** Minion i's hit: its attack, +20% for your troops near the knight with Warlord's Presence. */
+    power(i) {
+        const pr = this.presence, r = WAR.command.presenceRange;
+        if (pr.on && this.team[i] === TEAM_PLAYER) {
+            const dx = this.x[i] - pr.x, dy = this.y[i] - pr.y;
+            if (dx * dx + dy * dy < r * r)
+                return this.atk[i] * (1 + WAR.command.presence);
+        }
+        return this.atk[i];
+    }
     /** A Combatant handle for slot i (cached per spawn). */
     ref(i) {
         const r = this.refs[i];
@@ -1810,6 +1746,8 @@ class Army {
     /* --------------------------------------------------------------- update */
     update(g, dt) {
         this.frame++;
+        this.presence.x = g.player.x;
+        this.presence.y = g.player.y;
         const f = g.field;
         this.gx0 = f.x;
         this.gy0 = f.y;
@@ -2155,7 +2093,7 @@ class Army {
         this.avx[k] = Math.cos(a) * WAR.arrowSpeed;
         this.avy[k] = Math.sin(a) * WAR.arrowSpeed;
         this.alife[k] = (this.def(i).reach * 1.4) / WAR.arrowSpeed;
-        this.admg[k] = this.atk[i];
+        this.admg[k] = this.power(i);
         this.ateam[k] = this.team[i];
     }
     updateArrows(g, dt) {
@@ -2776,6 +2714,15 @@ function castleSpec() {
         allies: { sword: 16, spear: 8, archer: 10, shield: 6, ram: 2 },
     };
 }
+/** The warlord's seat (debug list): tier 5, his four phases, two hound packs. */
+function warlordSpec() {
+    return {
+        reinforce: foeMix(WAR.battleReinforce.castle),
+        kind: 'castle', name: "Thorne's Seat", tier: 5, scenery: 'ruins', seed: 1337 + 53, ironGate: false, lordName: 'Warlord Garrick Thorne', warlord: true,
+        foes: { sword: 30, spear: 14, archer: 18, shield: 10, hound: WAR.houndPacks[4] * WAR.houndPack }, foeElites: ['shade', 'caster', 'bruiser'], commander: null,
+        allies: { sword: 16, spear: 8, archer: 10, shield: 6, ram: 2 },
+    };
+}
 /** Convoy ambush: two wagons of gold and their escort. */
 function convoySpec() {
     return {
@@ -3140,6 +3087,12 @@ class Campaign {
             }
         }
     }
+    /** The Dominion's full force at a node: its garrison in the default mix, plus Thornhound packs at tier 4-5 (PLAN 11.2). */
+    foeForce(n) {
+        const r = { ...emptyReserve(), ...foeMix(this.garrison(n)) };
+        r.hound = WAR.houndPacks[this.battleTier(n) - 1] * WAR.houndPack;
+        return r;
+    }
     /** Battle tier for a node: its territory's, +1 for a castle or keep while the Dominion holds the outpost. */
     battleTier(n) {
         const t = this.territories[n.territory];
@@ -3159,7 +3112,7 @@ class Campaign {
         const elites = ['shade', 'caster', 'flyer', 'bruiser', 'shade'].slice(0, 1 + Math.floor(tier / 2));
         const spec = {
             kind, name: n.name, tier, scenery: t.scenery, seed: 1000 + n.id * 7919,
-            foes: foeMix(this.garrison(n)), foeElites: elites, commander: null, allies: {},
+            foes: this.foeForce(n), foeElites: elites, commander: null, allies: {},
             reinforce: foeMix(WAR.battleReinforce[kind]),
             nodeId: n.id,
         };
@@ -3169,6 +3122,7 @@ class Campaign {
             spec.captainName = `Captain ${CAPTAIN_NAMES[t.id % CAPTAIN_NAMES.length]}`;
         if (kind === 'castle') {
             spec.lordName = t.id === WAR.capitalTerritory ? 'Warlord Garrick Thorne' : `Lord ${LORD_NAMES[t.id % LORD_NAMES.length]} of ${t.name}`;
+            spec.warlord = t.id === WAR.capitalTerritory;
             spec.ironGate = !!keep && keep.owner !== 'player';
             spec.gateMult = WAR.castleGateLevel[n.level - 1];
         }
@@ -3314,6 +3268,10 @@ class War {
         // generals (Phase 10)
         this.generals = [];
         this.loyaltyMult = 1; // Warlord's Presence (Phase 11): set by the game from the knight's talents
+        this.talents = {}; // the knight's (Phase 11): Command talents grow the warband and your troops
+        // skill points from conquest (PLAN 12.2)
+        this.spTaken = []; // castles and keeps whose first capture has paid (yours at the start count as paid)
+        this.spPending = 0; // earned on the map, not yet handed to the knight (Game.syncWar)
         this.liveGenerals = new Set(); // generals who fought beside the knight in the battle being settled
         this.camp = camp;
         const N = camp.nodes.length;
@@ -3349,6 +3307,8 @@ class War {
         this.musters = [];
         this.won = false;
         this.events = [];
+        this.spTaken = this.camp.nodes.filter((n) => n.owner === 'player' && (n.type === 'castle' || n.type === 'keep')).map((n) => n.id);
+        this.spPending = 0;
         // every territory castle but yours and the warlord's has a Lord (PLAN 9.1)
         this.generals = this.camp.territories.filter((t) => t.id !== WAR.startTerritory && t.id !== WAR.capitalTerritory).map((t) => makeLord(t, this.camp.castleOf(t.id).id));
         this.clock = WAR.warClock[this.difficulty];
@@ -3398,10 +3358,26 @@ class War {
         n.level++;
         return true;
     }
-    /** The warband's cap: 12, +3 per level-3 castle you hold (max +12); talents add in Phase 11. */
+    /** The warband's cap (PLAN 12.2): 12, + Command talents (max +36), +3 per level-3 castle you hold (max +12) = 60. */
     warbandCap() {
         const l3 = this.camp.nodes.filter((n) => n.type === 'castle' && n.owner === 'player' && n.level === 3).length;
-        return WAR.warbandBase + Math.min(WAR.l3WarbandMax, l3 * WAR.l3Warband);
+        const t = this.talents, c = WAR.command;
+        const talents = (t.banner ? c.banner : 0) + (t.muster ? c.muster : 0) + (t.host ? c.host : 0);
+        return WAR.warbandBase + talents + Math.min(WAR.l3WarbandMax, l3 * WAR.l3Warband);
+    }
+    /** Your troops' Command talents as one sim multiplier: HP (Drillmaster, Grand Host) x damage (Sharpened Steel). */
+    troopMult() {
+        const t = this.talents, c = WAR.command;
+        return (1 + (t.drill ? c.drill : 0) + (t.host ? c.hostHp : 0)) * (1 + (t.steel ? c.steel : 0));
+    }
+    /** SP the first time a castle or keep is yours (PLAN 12.2): 2 a castle (+4 the capital), 1 a keep. */
+    awardSP(n) {
+        if (n.owner !== 'player' || (n.type !== 'castle' && n.type !== 'keep') || this.spTaken.includes(n.id))
+            return;
+        this.spTaken.push(n.id);
+        const sp = n.type === 'keep' ? WAR.spKeep : WAR.spCastle + (n.territory === WAR.capitalTerritory ? WAR.spCapital : 0);
+        this.spPending += sp;
+        this.events.push({ kind: 'sp', node: n.id, target: sp });
     }
     /** Your castle nearest by road to node `from` (or -1). */
     nearestCastle(from, team) {
@@ -3616,6 +3592,7 @@ class War {
     }
     /** A node changed hands: a captured castle starts with an empty garrison, a village with an empty store. */
     onCapture(n) {
+        this.awardSP(n);
         // PLAN 8: grace - no offensive targets a territory for 90 s after you take its castle
         if (n.type === 'castle' && n.owner === 'player')
             this.grace[n.territory] = WAR.grace;
@@ -3716,7 +3693,7 @@ class War {
             const g = this.nodeForce[n.id];
             if (!g)
                 continue; // still full
-            const full = camp.garrison(n);
+            const full = troopTotal(camp.foeForce(n)); // garrison + hound packs
             this.refill[n.id] = Math.min(1, this.refill[n.id] + WAR.enemyRefill / 60 * dt);
             while (this.refill[n.id] >= 1 && troopTotal(g) < full) {
                 const k = this.nextType(g, 0), cost = WAR.troopCost[k];
@@ -3742,6 +3719,9 @@ class War {
                     g[type]--;
                     units[type]++;
                 }
+                // the warlord's own armies bring Thornhounds (PLAN 11.2)
+                if (troopTotal(units) && from.territory === WAR.capitalTerritory)
+                    units.hound += WAR.warlordArmyPacks * WAR.houndPack;
                 const a = troopTotal(units) ? this.spawnEnemyArmy(from.id, to.id, units) : null;
                 if (a) {
                     a.offensive = true;
@@ -3943,6 +3923,7 @@ class War {
         const lord = this.lordAt(n.id);
         spec.lordId = lord ? lord.id : undefined;
         spec.lordName = lord ? lord.name : n.territory === WAR.capitalTerritory ? 'Warlord Garrick Thorne' : 'the Castellan';
+        spec.warlord = !lord && n.territory === WAR.capitalTerritory;
     }
     /** PLAN 9.3: a rescue raid on the castle holding one of your generals, without taking it. */
     rescueSpecFor(n, g) {
@@ -3975,12 +3956,12 @@ class War {
     /** An army's multiplier: x(1 + command) with a general, -20% without (PLAN 7.3); your troops' per-unit edge. */
     sideMult(team, general) {
         const g = this.general(general);
-        return (g ? 1 + command(g) : WAR.noGeneralMult) * (team === 'player' ? WAR.playerTroopMult : 1);
+        return (g ? 1 + command(g) : WAR.noGeneralMult) * (team === 'player' ? WAR.playerTroopMult * this.troopMult() : 1);
     }
     /** A node's defenders' multiplier (before fortification): x(1 + command) of its general or Lord. */
     nodeMult(n) {
         const g = n.owner === 'player' ? this.generalAt(n.id) : n.type === 'castle' ? this.lordAt(n.id) : null;
-        return (g ? 1 + command(g) : 1) * (n.owner === 'player' ? WAR.playerTroopMult : 1);
+        return (g ? 1 + command(g) : 1) * (n.owner === 'player' ? WAR.playerTroopMult * this.troopMult() : 1);
     }
     /** Where an army is on the map. */
     armyPos(a) {
@@ -4030,7 +4011,7 @@ class War {
     defendersOf(n) {
         if (n.owner === 'player')
             return n.type === 'castle' ? (this.garrison[n.id] || (this.garrison[n.id] = emptyReserve())) : (this.nodeForce[n.id] || (this.nodeForce[n.id] = emptyReserve()));
-        return this.nodeForce[n.id] || (this.nodeForce[n.id] = { ...emptyReserve(), ...foeMix(this.camp.garrison(n)) });
+        return this.nodeForce[n.id] || (this.nodeForce[n.id] = this.camp.foeForce(n));
     }
     fightAt(node) { return this.fights.find((f) => f.node === node); }
     /** Armies march; arrivals and meetings start fights; fights run (PLAN 7.3). */
@@ -4347,7 +4328,7 @@ class War {
         this.dressCastle(s, n);
         if (att.general)
             s.generalId = att.general;
-        const d = this.defendersOf(n), full = this.camp.garrison(n);
+        const d = this.defendersOf(n), full = troopTotal(this.camp.foeForce(n));
         s.foes = { ...d };
         // the battle's reinforcements shrink with the garrison the sim has already worn down
         const k = full > 0 ? troopTotal(d) / full : 1;
@@ -4437,6 +4418,7 @@ class War {
             ai: { difficulty: this.difficulty, gold: Math.round(this.enemyGold), clock: +this.clock.toFixed(1), won: this.won,
                 musters: this.musters.map((m) => [m.from, m.target, m.size, +m.t.toFixed(1)]), grace: this.grace.map((g) => Math.round(g)), refill: this.refill.map((r) => +r.toFixed(2)),
                 offensive: this.armies.filter((a) => a.offensive).map((a) => a.id) },
+            sp: { taken: this.spTaken, pending: this.spPending },
         };
     }
     /** Restore, keeping only what fits this continent (PLAN 13: validate on load). */
@@ -4545,6 +4527,12 @@ class War {
                 for (const a of this.armies)
                     if (ai.offensive.includes(a.id))
                         a.offensive = true;
+        }
+        if (s.sp && Array.isArray(s.sp.taken)) {
+            for (const id of s.sp.taken)
+                if (id >= 0 && id < N && !this.spTaken.includes(id | 0))
+                    this.spTaken.push(id | 0);
+            this.spPending = Math.max(0, s.sp.pending | 0);
         }
         this.nextArmyId = Math.max(1, +s.nextArmyId || 1, ...this.armies.map((a) => a.id + 1));
         this.nextFightId = Math.max(1, +s.nextFightId || 1, ...this.fights.map((f) => f.id + 1));
@@ -6073,6 +6061,7 @@ class Enemy {
         this.moveY = 0; // where the move lands
         this.specialCd = 150;
         this.enraged = false;
+        this.phase = 0; // a phased boss's current pattern (the warlord)
         this.def = def;
         this.x = x;
         this.y = y;
@@ -6142,6 +6131,9 @@ class Enemy {
             }
             return;
         }
+        // the warlord changes pattern as his HP falls, whatever he's doing (PLAN 11.3)
+        if (this.boss && this.boss.phases)
+            this.phaseShift(g, this.boss);
         if (!this.aggro) {
             this.idle(g, dt);
             this.physics(g, dt);
@@ -6569,7 +6561,8 @@ class Enemy {
         const p = this.target;
         if (!this.enraged && this.hp < this.maxHp * 0.5) {
             this.enraged = true;
-            g.banner('ENRAGED', b.name, b.accent);
+            if (!b.phases)
+                g.banner('ENRAGED', b.name, b.accent);
             g.shake(8);
             g.ring(this.x, this.y, this.z, 10, 140, b.accent);
         }
@@ -6593,6 +6586,28 @@ class Enemy {
         this.moveX = this.x;
         this.moveY = this.y;
         return true;
+    }
+    /**
+     * The warlord (PLAN 11.3): every quarter of his HP he takes up the next of
+     * the four patterns - its body, speed and base AI - keeping his HP and moves.
+     * Shifts wait for a move to finish.
+     */
+    phaseShift(g, b) {
+        const ph = b.phases;
+        const k = Math.min(ph.length - 1, Math.floor((1 - this.hp / this.maxHp) * ph.length));
+        if (k <= this.phase || this.state === 'special')
+            return;
+        this.phase = k;
+        const d = bossEnemyDef({ ...b, pattern: ph[k] });
+        this.def = d;
+        this.radius = d.radius;
+        this.speed = d.speed;
+        this.maxPoise = d.poise;
+        this.poise = d.poise;
+        this.specialCd = Math.min(this.specialCd, 40);
+        g.banner(b.name.toUpperCase(), (b.phaseNames && b.phaseNames[k]) || '', b.accent);
+        g.shake(10);
+        g.ring(this.x, this.y, this.z, 10, 160, b.accent);
     }
     endMove() {
         this.state = 'chase';
@@ -6686,6 +6701,42 @@ class Enemy {
                     }
                 }
                 else if (f >= rise + track + fall + 28)
+                    this.endMove();
+                break;
+            }
+            case 'thorns': {
+                // Thornline: plants his blade, then a line of thorns bursts toward you one after another.
+                const t = this.tell(40), n = WAR.thornsCount, every = WAR.thornsEvery;
+                if (f < t) {
+                    this.faceTarget(p, dt, 8);
+                    this.moveX = this.x;
+                    this.moveY = this.y;
+                }
+                else {
+                    const k = f - t;
+                    if (k % every === 0 && k / every < n) {
+                        const i = k / every + 1;
+                        const x = this.moveX + Math.cos(this.facing) * WAR.thornsGap * i, y = this.moveY + Math.sin(this.facing) * WAR.thornsGap * i;
+                        g.bossShock(this, x, y, WAR.thornsRadius, SHOCK_MULT * 0.8);
+                        g.ring(x, y, 0, 8, WAR.thornsRadius, this.def.accent);
+                        g.burst(x, y, 0, 8, this.def.accent);
+                        if (i === 1)
+                            g.shake(6);
+                    }
+                    if (k >= n * every + 24)
+                        this.endMove();
+                }
+                break;
+            }
+            case 'howl': {
+                // Howl: a long roar, and a pack of Thornhounds answers from behind him.
+                const t = this.tell(36);
+                if (f === t) {
+                    g.warlordHowl(this);
+                    g.ring(this.x, this.y, this.z, 16, 220, this.def.accent);
+                    g.shake(8);
+                }
+                if (f >= t + 30)
                     this.endMove();
                 break;
             }
@@ -7540,6 +7591,8 @@ class Renderer {
         for (const m of g.war.musters)
             this.drawMuster(c, g, m);
         this.drawMapHud(c, g);
+        if (g.menuOpen)
+            this.drawBigMenu(c, g);
     }
     /** The Generals roster (PLAN 7.1 Generals tab): level, command, loyalty, where they are; red at 25 or under. */
     drawRoster(c, g) {
@@ -7732,18 +7785,27 @@ class Renderer {
         c.fillText(title, P.x + P.pad, P.y + P.pad + 18);
         return { x: P.x + P.pad, y: P.y + P.pad + 40 };
     }
+    /** A centred button label, its font shrunk (to 9 px at least) until it fits `w`. */
+    buttonLabel(c, text, x, y, w, size) {
+        c.textAlign = 'center';
+        let s = size;
+        for (; s > 9; s--) {
+            c.font = `900 ${s}px ui-monospace, Menlo, Consolas, monospace`;
+            if (c.measureText(text).width <= w)
+                break;
+        }
+        c.fillText(s > 9 ? text : this.clip(c, text, w), x, y);
+    }
     /** The panel's buttons from Game.mapButtons (drawing and hit-testing share the geometry). */
     panelButtons(c, g, main) {
         const btns = g.mapButtons();
         btns.forEach((b, i) => {
             const at = g.mapButtonAt(i, btns.length), hot = main.some((m) => b.label.startsWith(m));
             c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : hot ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
-            this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8);
+            this.roundRect(c, at.x, at.y, at.w, MAP_BTN.h, 8);
             c.fill();
-            c.textAlign = 'center';
-            c.font = `900 ${hot ? 15 : 14}px ui-monospace, Menlo, Consolas, monospace`;
             c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
-            c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+            this.buttonLabel(c, b.label.toUpperCase(), at.x + at.w / 2, at.y + MAP_BTN.h / 2 + 5, at.w - 12, hot ? 15 : 14);
         });
     }
     panelRow(c, at, k, v, col = PAL.text) {
@@ -8146,6 +8208,18 @@ class Renderer {
         c.fillRect(0, VIEW_H - 24, VIEW_W, 24);
         c.fillStyle = 'rgba(232,236,247,0.75)';
         c.fillText(help, VIEW_W / 2, VIEW_H - 8);
+        // the MENU button (shared hit area MAP_MENU_HIT): gear, forge, talents, knight upgrades
+        const M = MAP_MENU_HIT, sp = g.apFree();
+        c.fillStyle = 'rgba(40,50,80,0.88)';
+        this.roundRect(c, M.x, M.y, M.w, M.h, 7);
+        c.fill();
+        c.strokeStyle = sp > 0 ? '#ffd54a' : 'rgba(120,150,220,0.5)';
+        c.lineWidth = 1.5;
+        this.roundRect(c, M.x, M.y, M.w, M.h, 7);
+        c.stroke();
+        c.fillStyle = PAL.text;
+        c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+        c.fillText(IS_TOUCH ? 'MENU' : 'MENU (TAB)', M.x + M.w / 2, M.y + 22);
         c.restore();
         const cv = g.selectedConvoy(), ar = g.selectedArmy(), fi = g.selectedFight();
         if (g.mapMode === 'generals')
@@ -8215,12 +8289,10 @@ class Renderer {
         btns.forEach((b, i) => {
             const at = g.mapButtonAt(i, btns.length), main = b.label === 'Ambush';
             c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : main ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
-            this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8);
+            this.roundRect(c, at.x, at.y, at.w, MAP_BTN.h, 8);
             c.fill();
-            c.textAlign = 'center';
-            c.font = `900 ${main ? 16 : 14}px ui-monospace, Menlo, Consolas, monospace`;
             c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
-            c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+            this.buttonLabel(c, b.label.toUpperCase(), at.x + at.w / 2, at.y + MAP_BTN.h / 2 + 5, at.w - 12, main ? 16 : 14);
         });
         c.restore();
     }
@@ -8312,7 +8384,6 @@ class Renderer {
                 const status = tot >= cap ? 'full' : g.player.gold < WAR.troopCost.sword ? 'waiting for gold' : `+${w.production(n)} / min`;
                 row('Recruiting', status, tot >= cap || g.player.gold < WAR.troopCost.sword ? '#ffb070' : '#9fe8b0');
                 row('Warband', `${troopTotal(w.warband)} / ${g.warbandCap()}`);
-                note('Send army and generals arrive in Phases 8 and 10', PAL.dim);
             }
             else if (n.type === 'village') {
                 row('Income', `${w.income(n)} gold / min`, '#ffd54a');
@@ -8333,12 +8404,10 @@ class Renderer {
             const at = g.mapButtonAt(i, btns.length);
             const main = b.label === 'Attack';
             c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : main ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
-            this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8);
+            this.roundRect(c, at.x, at.y, at.w, MAP_BTN.h, 8);
             c.fill();
-            c.textAlign = 'center';
-            c.font = `900 ${main ? 16 : 14}px ui-monospace, Menlo, Consolas, monospace`;
             c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
-            c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+            this.buttonLabel(c, b.label.toUpperCase(), at.x + at.w / 2, at.y + MAP_BTN.h / 2 + 5, at.w - 12, main ? 16 : 14);
         });
         c.restore();
     }
@@ -10786,7 +10855,7 @@ class Renderer {
         c.save();
         c.fillStyle = 'rgba(6,8,14,0.975)';
         c.fillRect(0, 0, VIEW_W, VIEW_H);
-        const tabs = ['GEAR', 'FORGE', 'TALENTS', 'STATUS'];
+        const tabs = ['GEAR', 'FORGE', 'TALENTS', 'KNIGHT', 'STATUS'];
         c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
         for (let i = 0; i < tabs.length; i++) {
             const on = i === g.menuTab;
@@ -10821,21 +10890,25 @@ class Renderer {
         c.fillStyle = ap > 0 ? PAL.mpCharge : PAL.dim;
         c.font = '800 14px ui-monospace, Menlo, Consolas, monospace';
         c.fillText(`SP ${ap}`, VIEW_W - 70, 38);
+        c.fillStyle = '#ffd54a';
+        c.fillText(`${p.gold} g`, VIEW_W - 70 - c.measureText(`SP ${ap}`).width - 18, 38);
         c.textAlign = 'left';
         const top = MENU_LIST.y;
         if (g.menuTab === 0)
             this.drawGearTab(c, g, top);
-        else if (g.menuTab === 1)
+        else if (g.menuTab === MENU_FORGE)
             this.drawSynthTab(c, g, top);
-        else if (g.menuTab === 2)
+        else if (g.menuTab === MENU_TALENTS)
             this.drawTalentTab(c, g, top);
+        else if (g.menuTab === MENU_KNIGHT)
+            this.drawKnightTab(c, g);
         else
             this.drawStatusTab(c, g, top);
         c.fillStyle = PAL.dim;
         c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
         c.fillText(IS_TOUCH
             ? 'tap a tab  ·  tap a row to select, tap again to confirm  ·  \u2715 to close'
-            : '1-4 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close', 26, VIEW_H - 18);
+            : '1-5 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close', 26, VIEW_H - 18);
         void p;
         c.restore();
     }
@@ -10950,7 +11023,8 @@ class Renderer {
         y += 17;
         c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
-        c.fillText(this.clip(c, 'Forging works anywhere for now; castles and the gold fee come later.', dw - 32), dx + 16, y);
+        c.fillStyle = g.canForge() ? PAL.dim : '#ff9d7a';
+        c.fillText(this.clip(c, g.canForge() ? 'At the forge: gold plus battle spoils.' : 'Forging needs a castle: open this menu from the map.', dw - 32), dx + 16, y);
         y += 26;
         const sel = entries[g.synthIndex];
         if (!sel)
@@ -10969,13 +11043,22 @@ class Renderer {
         c.fillText('MATERIALS', dx + 16, y);
         y += 18;
         c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = '#ffd54a';
+        c.fillRect(dx + 16, y - 8, 8, 8);
+        c.fillStyle = PAL.text;
+        c.fillText('Gold', dx + 32, y);
+        c.textAlign = 'right';
+        c.fillStyle = p.gold >= sel.recipe.gold ? '#69e29a' : '#ff6b6b';
+        c.fillText(`${p.gold} / ${sel.recipe.gold}`, dx + dw - 16, y);
+        c.textAlign = 'left';
+        y += 20;
         for (const k of Object.keys(sel.recipe.needs)) {
             const need = sel.recipe.needs[k] || 0;
             const has = have(p.inv, k);
             c.fillStyle = MATS[k].color;
             c.fillRect(dx + 16, y - 8, 8, 8);
             c.fillStyle = PAL.text;
-            c.fillText(MATS[k].name + (BOSS_MATS.includes(k) ? '  (rare)' : ''), dx + 32, y);
+            c.fillText(MATS[k].name + (RARE_MATS.includes(k) ? '  (rare)' : ''), dx + 32, y);
             c.textAlign = 'right';
             c.fillStyle = has >= need ? '#69e29a' : '#ff6b6b';
             c.fillText(`${has} / ${need}`, dx + dw - 16, y);
@@ -10985,12 +11068,12 @@ class Renderer {
         c.fillStyle = sel.state === 'ready' ? PAL.mpCharge : PAL.dim;
         c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
         c.fillText(sel.state === 'ready' ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to forge and equip`
-            : sel.state === 'owned' ? 'Already yours — equip it from GEAR' : 'Materials come from battle spoils', dx + 16, VIEW_H - 62);
+            : sel.state === 'owned' ? 'Already yours — equip it from GEAR' : 'Gold and materials come from battle spoils', dx + 16, VIEW_H - 62);
     }
     drawTalentTab(c, g, top) {
         const p = g.player;
-        const colW = (VIEW_W - 52 - 20) / 3;
-        for (let b = 0; b < 3; b++) {
+        const colW = talentColW();
+        for (let b = 0; b < BRANCHES.length; b++) {
             const br = BRANCHES[b];
             const x = 26 + b * (colW + 10);
             const active = b === g.talentBranch;
@@ -11014,7 +11097,7 @@ class Renderer {
                 if (active && i === g.talentIndex)
                     this.rowHighlight(c, x + 8, y - 2, colW - 16, 24);
                 c.fillStyle = owned ? br.color : locked ? '#5d6480' : PAL.text;
-                c.fillText(t.name, x + 16, y + 15);
+                c.fillText(this.clip(c, t.name, colW - 52), x + 16, y + 15);
                 c.textAlign = 'right';
                 c.fillStyle = owned ? br.color : PAL.dim;
                 c.fillText(owned ? '\u2713' : String(t.cost), x + colW - 14, y + 15);
@@ -11040,6 +11123,54 @@ class Renderer {
         c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
         c.fillText(owned ? 'LEARNED' : `${t.cost} SP  ·  ENTER to learn`, VIEW_W - 42, y + 27);
         c.textAlign = 'left';
+    }
+    /** Knight tab (PLAN 12.1): three gold upgrades, 10 ranks each, 100 x rank^2. Rows: KNIGHT_ROW. */
+    drawKnightTab(c, g) {
+        const p = g.player, R = KNIGHT_ROW;
+        const now = statsForKnight(p.upgrades);
+        for (let i = 0; i < KNIGHT_UPGRADES.length; i++) {
+            const u = KNIGHT_UPGRADES[i], at = knightRowAt(i), rank = p.upgrades[u.id], cost = g.upgradeCost(u.id);
+            this.listBox(c, at.x, at.y, R.w, R.h);
+            if (i === g.knightIndex) {
+                c.strokeStyle = u.color;
+                c.lineWidth = 2;
+                this.roundRect(c, at.x, at.y, R.w, R.h, 8);
+                c.stroke();
+            }
+            c.textAlign = 'left';
+            c.font = '800 17px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = u.color;
+            c.fillText(u.name.toUpperCase(), at.x + 18, at.y + 28);
+            c.font = '500 12px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = PAL.dim;
+            c.fillText(`each rank: ${u.desc}`, at.x + 18, at.y + 48);
+            // rank pips
+            for (let k = 0; k < WAR.upgradeRanks; k++) {
+                c.fillStyle = k < rank ? u.color : 'rgba(120,150,220,0.22)';
+                this.roundRect(c, at.x + 18 + k * 22, at.y + 62, 18, 12, 3);
+                c.fill();
+            }
+            // the stat it moves, now -> next
+            const next = { ...p.upgrades, [u.id]: Math.min(WAR.upgradeRanks, rank + 1) };
+            const nx = statsForKnight(next);
+            const line = u.id === 'vitality' ? `HP ${now.maxHp} \u2192 ${nx.maxHp}`
+                : u.id === 'might' ? `STR ${now.str.toFixed(1)} \u2192 ${nx.str.toFixed(1)}   DEF ${now.def.toFixed(1)} \u2192 ${nx.def.toFixed(1)}`
+                    : `MAG ${now.mag.toFixed(1)} \u2192 ${nx.mag.toFixed(1)}   MP ${now.maxMp} \u2192 ${nx.maxMp}`;
+            c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = PAL.text;
+            c.fillText(cost ? line : line.replace(/ \u2192 [\d.]+/g, ''), at.x + 260, at.y + 72);
+            c.textAlign = 'right';
+            c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = !cost ? '#69e29a' : p.gold >= cost ? '#ffd54a' : '#ff6b6b';
+            c.fillText(cost ? `rank ${rank + 1}: ${cost} gold` : 'MAX', at.x + R.w - 18, at.y + 30);
+            c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = PAL.dim;
+            c.fillText(`rank ${rank}/${WAR.upgradeRanks}`, at.x + R.w - 18, at.y + 50);
+            c.textAlign = 'left';
+        }
+        c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.dim;
+        c.fillText(`treasury ${p.gold} gold  ·  ${IS_TOUCH ? 'tap a row, tap again to buy' : 'ENTER buys the next rank'}`, 26, KNIGHT_ROW.y0 - 10);
     }
     drawStatusTab(c, g, top) {
         const p = g.player;
@@ -11091,7 +11222,7 @@ class Renderer {
             c.fillStyle = MATS[k].color;
             c.fillRect(mx + 16, my - 8, 9, 9);
             c.fillStyle = n > 0 ? PAL.text : '#5d6480';
-            c.fillText(MATS[k].name + (BOSS_MATS.includes(k) ? '  *' : ''), mx + 32, my);
+            c.fillText(MATS[k].name + (RARE_MATS.includes(k) ? '  *' : ''), mx + 32, my);
             c.textAlign = 'right';
             c.fillText(String(n), mx + halfW - 16, my);
             c.textAlign = 'left';
@@ -11632,9 +11763,10 @@ class Game {
         this.waveIntro = 0; // grace period before a fresh group activates
         this.touchSpell = 0; // which spell the MAG button casts
         this.menuOpen = false;
-        this.menuTab = 0; // 0 gear · 1 forge · 2 talents · 3 status
+        this.menuTab = 0; // 0 gear · 1 forge · 2 talents · 3 knight · 4 status
         this.gearIndex = 0;
         this.synthIndex = 0;
+        this.knightIndex = 0;
         this.talentBranch = 0;
         this.talentIndex = 0;
         this.lastMusicVol = -1;
@@ -11855,6 +11987,7 @@ class Game {
         const sv = loadSave();
         this.camp.load(sv.war);
         this.war.load(sv.econ);
+        this.syncWar();
         this.war.refillWarband();
         this.mapConvoy = -1;
     }
@@ -11951,11 +12084,12 @@ class Game {
                 const g = this.war.garrison[n.id];
                 out.push({ label: 'Send army', enabled: !!g && troopTotal(g) > 0, act: () => this.beginSend(n), why: 'NO TROOPS IN THE GARRISON' });
                 out.push({ label: `Mix: ${RECRUIT_MIXES[this.war.mix[n.id]].name}`, enabled: true, act: () => { this.war.mix[n.id] = (this.war.mix[n.id] + 1) % RECRUIT_MIXES.length; this.sfx.guard(); } });
+                out.push({ label: 'Forge', enabled: true, act: () => { this.sfx.guard(); this.openMenu(MENU_FORGE); } });
             }
             const cost = this.war.upgradeCost(n);
             if (n.type !== 'outpost') {
                 out.push({
-                    label: cost ? `Upgrade to L${n.level + 1}  ·  ${cost} g` : 'Level 3 (max)', enabled: cost > 0 && this.player.gold >= cost,
+                    label: cost ? `Upgrade L${n.level + 1} · ${cost} g` : 'Level 3 (max)', enabled: cost > 0 && this.player.gold >= cost,
                     act: () => { if (this.war.upgrade(n, this.player)) {
                         this.sfx.levelUp();
                         this.toast(`${n.name.toUpperCase()} NOW LEVEL ${n.level}`);
@@ -12087,9 +12221,13 @@ class Game {
         f.joined = true;
         this.startBattle(spec);
     }
-    /** Top-left of panel button i of n. */
+    /** Top-left and width of panel button i of n: one per row, or two per row once there are MAP_BTN.pairFrom or more. */
     mapButtonAt(i, n) {
-        return { x: MAP_PANEL.x + MAP_PANEL.pad, y: MAP_PANEL.y + MAP_PANEL.h - MAP_PANEL.pad - (n - i) * (MAP_BTN.h + MAP_BTN.gap) + MAP_BTN.gap };
+        const x0 = MAP_PANEL.x + MAP_PANEL.pad, bottom = MAP_PANEL.y + MAP_PANEL.h - MAP_PANEL.pad + MAP_BTN.gap, step = MAP_BTN.h + MAP_BTN.gap;
+        if (n < MAP_BTN.pairFrom)
+            return { x: x0, y: bottom - (n - i) * step, w: MAP_BTN.w };
+        const rows = Math.ceil(n / 2), w = (MAP_BTN.w - MAP_BTN.gap) / 2;
+        return { x: x0 + (i % 2) * (w + MAP_BTN.gap), y: bottom - (rows - Math.floor(i / 2)) * step, w };
     }
     /** Attack a node: its battle, with your warband (PLAN 7.1). */
     attackNode(n) {
@@ -12157,6 +12295,27 @@ class Game {
     }
     handleMap(dt) {
         const inp = this.input;
+        // the pause menu works on the map too (PLAN 7.1), and pauses map time; the forge is only here
+        if (inp.wasPressed('menu')) {
+            if (this.menuOpen)
+                this.closeMenu();
+            else
+                this.openMenu(this.menuTab);
+            inp.clearBuffer();
+        }
+        if (!this.menuOpen) {
+            const c = inp.takeClick();
+            if (c && c.x >= MAP_MENU_HIT.x && c.x <= MAP_MENU_HIT.x + MAP_MENU_HIT.w && c.y >= MAP_MENU_HIT.y && c.y <= MAP_MENU_HIT.y + MAP_MENU_HIT.h) {
+                this.openMenu(this.menuTab);
+                inp.takeTap();
+            }
+            else if (c)
+                inp.pushClick(c);
+        }
+        if (this.menuOpen) {
+            this.handleBigMenu();
+            return;
+        }
         // map time: income, convoys, production, armies and their fights (PLAN 7: real time; battles pause it)
         this.war.tick(dt, this.player);
         if (this.mapConvoy >= 0 && !this.selectedConvoy())
@@ -12167,7 +12326,7 @@ class Game {
             this.mapFight = -1;
         if ((this.mapMode === 'send' || this.mapMode === 'target') && (this.sendFrom < 0 || this.camp.nodes[this.sendFrom].owner !== 'player'))
             this.mapMode = 'browse';
-        this.war.loyaltyMult = this.player.hasT('presence') ? WAR.presenceMult : 1; // Warlord's Presence (Phase 11)
+        this.syncWar();
         if (inp.wasPressed('generals')) {
             this.mapMode = this.mapMode === 'generals' ? 'browse' : 'generals';
             this.clearPick();
@@ -12196,6 +12355,8 @@ class Game {
                 this.toast(`${nm(e.node).toUpperCase()} SENDS HELP TO ${nm(e.target).toUpperCase()}`);
             else if (e.kind === 'convoyLost')
                 this.toast(`A CONVOY FROM ${nm(e.node).toUpperCase()} WAS TAKEN (${e.target} GOLD)`);
+            else if (e.kind === 'sp')
+                this.banner(`+${e.target} SKILL POINT${e.target > 1 ? 'S' : ''}`, `${nm(e.node)} is yours for the first time  ·  spend them in TALENTS`, '#ffd54a');
             else if (e.kind === 'won')
                 this.banner('THE BLACK SEAT HAS FALLEN', 'the Dominion\'s offensives stop  ·  the victory screen arrives in Phase 12', '#ffd54a');
         }
@@ -12266,7 +12427,7 @@ class Game {
             const btns = this.mapButtons();
             for (let i = 0; i < btns.length && !used; i++) {
                 const b = this.mapButtonAt(i, btns.length);
-                if (click.x >= b.x && click.x <= b.x + MAP_BTN.w && click.y >= b.y && click.y <= b.y + MAP_BTN.h) {
+                if (click.x >= b.x && click.x <= b.x + b.w && click.y >= b.y && click.y <= b.y + MAP_BTN.h) {
                     used = true;
                     if (btns[i].enabled)
                         btns[i].act();
@@ -12383,6 +12544,7 @@ class Game {
             { label: 'Field battle — Dominion column', sub: 'tier 1  ·  rout or destroy  ·  2-3 min', spec: fieldSpec() },
             { label: 'Defense — Millbrook (held)', sub: 'tier 1  ·  rout them or hold 3:00  ·  2-3 min', spec: defenseSpec() },
             { label: 'Rescue raid — Hollin cells', sub: 'tier 2  ·  free Sir Aldric, get out  ·  ~3 min', spec: rescueSpec() },
+            { label: "The warlord — Thorne's Seat", sub: 'tier 5  ·  four phases, Thornhounds', spec: warlordSpec() },
             { label: 'Test field', sub: 'endless groups, combat sandbox', spec: testSpec() },
             { label: 'Back to title', sub: '', spec: null, act: () => { this.screen = 'title'; this.titleIndex = 0; } },
         ];
@@ -12451,8 +12613,13 @@ class Game {
         this.pickups.length = 0;
         this.army.clear();
         this.army.streamTier = spec.tier;
-        this.army.streamMult[TEAM_PLAYER] = 1;
         this.army.streamMult[TEAM_ENEMY] = WAR.battlePace[spec.kind] || 1;
+        // the Command talents (PLAN 12.2): your troops' HP and damage, Muster's faster stream, Warlord's Presence
+        const tl = p.talents, cm = WAR.command;
+        this.army.streamMult[TEAM_PLAYER] = tl.muster ? 1 / cm.musterStream : 1;
+        this.army.troopHp = 1 + (tl.drill ? cm.drill : 0) + (tl.host ? cm.hostHp : 0);
+        this.army.troopDmg = 1 + (tl.steel ? cm.steel : 0);
+        this.army.presence.on = !!tl.presence;
         p.lock = null;
         this.order = 'follow';
         this.wheelOpen = false;
@@ -12549,8 +12716,15 @@ class Game {
                 const t = b.throne;
                 // the castle's own Lord from the roster: their pattern, moves, colours and level (PLAN 9.1)
                 const lg = this.battleFrom === 'map' ? this.war.general(spec.lordId || null) : null;
-                b.lord = lg ? boss(lg.name, lg.title, WAR.lordStats, lg.pattern, lg.moves, lg.color, lg.accent, t.x - 110, t.y, lg.level)
-                    : boss(spec.lordName || 'the Lord', 'Castle Lord', WAR.lordStats, 'brute', ['slam', 'rush'], '#3d2f5c', '#c79bff', t.x - 110, t.y);
+                if (spec.warlord) {
+                    // Warlord Garrick Thorne (PLAN 11.3): Thornline and Howl, and a new pattern every quarter of his HP
+                    b.lord = boss(spec.lordName || 'Warlord Garrick Thorne', 'Warlord of the Umbral Dominion', WAR.warlordStats, WAR.warlordPhases[0], ['thorns', 'howl'], '#2b1d1a', '#ff5a3c', t.x - 110, t.y, WAR.warlordLevel);
+                    b.lord.boss.phases = WAR.warlordPhases;
+                    b.lord.boss.phaseNames = WAR.warlordPhaseNames;
+                }
+                else
+                    b.lord = lg ? boss(lg.name, lg.title, WAR.lordStats, lg.pattern, lg.moves, lg.color, lg.accent, t.x - 110, t.y, lg.level)
+                        : boss(spec.lordName || 'the Lord', 'Castle Lord', WAR.lordStats, 'brute', ['slam', 'rush'], '#3d2f5c', '#c79bff', t.x - 110, t.y);
                 b.lord.aggro = false;
                 break;
             }
@@ -12691,7 +12865,7 @@ class Game {
                         b.lord.leader = false;
                         b.notes.push(`${b.spec.lordName || 'The Lord'} fled — not recruitable`);
                     }
-                    else if (b.lordBeatenFirst)
+                    else if (b.lordBeatenFirst && b.spec.lordId)
                         b.notes.push(`${b.spec.lordName || 'The Lord'} beaten first: Recruit or Release`);
                     b.outcome = `${b.spec.name} taken — the throne is destroyed`;
                     this.finishBattle('win');
@@ -12851,6 +13025,12 @@ class Game {
                     b.notes.push('the Dominion army is broken');
             }
             this.war.liveGenerals.clear();
+            // first captures pay skill points (PLAN 12.2): say so here rather than as a banner on the map
+            for (const e of this.war.events)
+                if (e.kind === 'sp')
+                    b.notes.push(`+${e.target} SP: ${this.camp.nodes[e.node].name}, first capture`);
+            this.war.events = this.war.events.filter((e) => e.kind !== 'sp');
+            this.syncWar();
             if (b.spec.generalId) {
                 const g = this.war.general(b.spec.generalId);
                 b.notes.push(result === 'win' ? `${g.name}: loyalty ${Math.round(g.loyalty)} (fought beside you)` : result === 'lose' ? `${g.name} is taken` : `${g.name} withdraws with you`);
@@ -12901,12 +13081,22 @@ class Game {
                 this.camp.capture(n);
                 this.war.onCapture(n);
                 b.notes.push(n.type === 'castle' ? `${this.camp.territories[n.territory].name} is yours` : `${n.name} is yours (level ${n.level})`);
+                for (const e of this.war.events)
+                    if (e.kind === 'sp')
+                        b.notes.push(`+${e.target} SP: first capture`);
+                this.war.events = this.war.events.filter((e) => e.kind !== 'sp');
+                this.syncWar();
             }
-            const commons = ['shard', 'plate', 'sigil', 'ember'];
+            // spoils (PLAN 12.3): 1-3 commons x tier; a castle's Lord pays its territory's rare, the warlord the top one
             const n = rndInt(WAR.spoilMats[0], WAR.spoilMats[1]) * b.spec.tier;
             for (let k = 0; k < n; k++) {
-                const m = pick(commons);
+                const m = pick(COMMON_MATS);
                 b.spoils.mats[m] = (b.spoils.mats[m] || 0) + 1;
+            }
+            if (b.spec.kind === 'castle') {
+                const tt = b.spec.nodeId !== undefined ? this.camp.territories[this.camp.nodes[b.spec.nodeId].territory].tier : b.spec.tier;
+                const rare = b.spec.warlord ? RARE_MATS[RARE_MATS.length - 1] : WAR.lordRare[clamp(tt, 1, 5) - 1];
+                b.spoils.mats[rare] = (b.spoils.mats[rare] || 0) + (b.spec.warlord ? WAR.warlordRareCount : WAR.lordRareCount);
             }
             if (b.spec.convoyId !== undefined && this.battleFrom === 'map')
                 this.war.convoys = this.war.convoys.filter((c) => c.id !== b.spec.convoyId);
@@ -13556,7 +13746,17 @@ class Game {
         return out;
     }
     /** The warband's size cap (PLAN 12.2: 12 base; talents and L3 castles add up to 60 in Phase 11). */
-    warbandCap() { return this.war.warbandCap(); }
+    warbandCap() { this.syncWar(); return this.war.warbandCap(); }
+    /** Hand the war the knight's talents, and the knight the SP the war has awarded for first captures (PLAN 12.2). */
+    syncWar() {
+        const p = this.player, w = this.war;
+        w.talents = p.talents;
+        w.loyaltyMult = p.hasT('presence') ? WAR.presenceMult : 1; // Warlord's Presence
+        if (w.spPending > 0) {
+            p.skillPoints += w.spPending;
+            w.spPending = 0;
+        }
+    }
     /** Spawn `kinds` as a block of ranks around (cx, cy); archers at the back. Past the live cap they go to reserve. */
     spawnBlock(kinds, side, cx, cy, tier = WAR.testFieldTier) {
         const f = this.field;
@@ -13973,7 +14173,7 @@ class Game {
     unitStrike(a, i, t) {
         const d = a.def(i);
         const ang = Math.atan2(t.y - a.y[i], t.x - a.x[i]);
-        const power = a.atk[i];
+        const power = a.power(i);
         if (t instanceof Structure) {
             const m = t.mult(d.id === 'ram' ? 'ram' : 'unit');
             if (!t.alive || t.team === teamName(a.team[i]) || m <= 0)
@@ -14206,7 +14406,7 @@ class Game {
         const p = this.player;
         const out = [];
         const add = (kind, id, name, recipe, owned) => {
-            const state = owned ? 'owned' : canAfford(p.inv, recipe.needs) ? 'ready' : 'lack';
+            const state = owned ? 'owned' : canAfford(p.inv, recipe.needs) && p.gold >= recipe.gold ? 'ready' : 'lack';
             out.push({ kind, id, name, recipe, state });
         };
         for (const w of WEAPONS)
@@ -14219,7 +14419,8 @@ class Game {
     }
     handleBigMenu() {
         const inp = this.input;
-        const tap = inp.takeTap();
+        const click = inp.takeClick(); // the map hands taps over as clicks
+        const tap = inp.takeTap() || click;
         if (tap && this.tapBigMenu(tap))
             return;
         if (inp.wasPressed('cancel')) {
@@ -14231,14 +14432,15 @@ class Game {
                 this.menuTab = i;
         }
         const cycle = (d) => { this.menuTab = (this.menuTab + d + MENU_TABS) % MENU_TABS; };
-        if (this.menuTab === 2) {
+        if (this.menuTab === MENU_TALENTS) {
+            const nb = BRANCHES.length;
             if (inp.wasPressed('left')) {
-                this.talentBranch = (this.talentBranch + 2) % 3;
+                this.talentBranch = (this.talentBranch + nb - 1) % nb;
                 this.talentIndex = 0;
                 this.sfx.guard();
             }
             if (inp.wasPressed('right')) {
-                this.talentBranch = (this.talentBranch + 1) % 3;
+                this.talentBranch = (this.talentBranch + 1) % nb;
                 this.talentIndex = 0;
                 this.sfx.guard();
             }
@@ -14279,7 +14481,20 @@ class Game {
                     this.equip(e);
             }
         }
-        else if (this.menuTab === 1) {
+        else if (this.menuTab === MENU_KNIGHT) {
+            const n = KNIGHT_UPGRADES.length;
+            if (inp.wasPressed('down')) {
+                this.knightIndex = (this.knightIndex + 1) % n;
+                this.sfx.guard();
+            }
+            if (inp.wasPressed('up')) {
+                this.knightIndex = (this.knightIndex - 1 + n) % n;
+                this.sfx.guard();
+            }
+            if (inp.wasPressed('confirm'))
+                this.buyUpgrade(KNIGHT_UPGRADES[this.knightIndex].id);
+        }
+        else if (this.menuTab === MENU_FORGE) {
             const n = Math.max(1, this.synthEntries().length);
             if (inp.wasPressed('down')) {
                 this.synthIndex = (this.synthIndex + 1) % n;
@@ -14317,17 +14532,30 @@ class Game {
         this.sfx.cast(520);
         this.save();
     }
-    /** Forge anywhere for now; Phase 11 moves the forge to castles you hold and adds the gold fee. */
+    /** PLAN 12.3: forging needs a castle you hold, so it's done from the map (the menu, or a castle's Forge button). */
+    canForge() {
+        return this.screen === 'campaign' && this.camp.nodes.some((n) => n.type === 'castle' && n.owner === 'player');
+    }
+    /** Forge for gold + materials (PLAN 12.3). */
     craft(e) {
         const p = this.player;
         if (e.state === 'owned') {
             this.toast('ALREADY FORGED');
             return;
         }
+        if (!this.canForge()) {
+            this.toast('FORGE AT A CASTLE: OPEN THE MENU ON THE MAP');
+            return;
+        }
+        if (p.gold < e.recipe.gold) {
+            this.toast(`NEED ${e.recipe.gold} GOLD`);
+            return;
+        }
         if (e.state === 'lack') {
             this.toast('NOT ENOUGH MATERIALS');
             return;
         }
+        p.gold -= e.recipe.gold;
         spend(p.inv, e.recipe.needs);
         if (e.kind === 'w') {
             p.ownedWeapons.push(e.id);
@@ -14340,6 +14568,28 @@ class Game {
         p.refreshStats(false);
         this.sfx.levelUp();
         this.banner('FORGED', e.name, '#ffd54a');
+        this.save();
+    }
+    /** Gold for the next rank of a knight upgrade: 100 x rank^2 (PLAN 12.1); 0 at max. */
+    upgradeCost(k) {
+        const r = this.player.upgrades[k];
+        return r >= WAR.upgradeRanks ? 0 : WAR.upgradeCost * (r + 1) * (r + 1);
+    }
+    buyUpgrade(k) {
+        const p = this.player, cost = this.upgradeCost(k);
+        if (!cost) {
+            this.toast('ALREADY AT MAX RANK');
+            return;
+        }
+        if (p.gold < cost) {
+            this.toast(`NEED ${cost} GOLD`);
+            return;
+        }
+        p.gold -= cost;
+        p.upgrades[k]++;
+        p.refreshStats(false);
+        this.sfx.levelUp();
+        this.banner(`${KNIGHT_UPGRADES.find((u) => u.id === k).name.toUpperCase()} ${p.upgrades[k]}`, `${cost} gold`, '#ffd54a');
         this.save();
     }
     learnTalent(id) {
@@ -14451,7 +14701,10 @@ class Game {
         if (e === b.lord && b.throne && b.throne.alive && !b.result) {
             // PLAN 10.2: beating the Lord before the throne falls allows recruiting
             b.lordBeatenFirst = true;
-            this.banner(`${(b.spec.lordName || 'the Lord').toUpperCase()} YIELDS`, b.spec.kind === 'castle' ? 'beaten first: can be recruited  ·  now the throne' : 'the castle is leaderless', '#4fe08a');
+            if (b.spec.warlord)
+                this.banner(`${(b.spec.lordName || 'the warlord').toUpperCase()} FALLS`, 'now the throne', '#ffd54a');
+            else
+                this.banner(`${(b.spec.lordName || 'the Lord').toUpperCase()} YIELDS`, b.spec.kind === 'castle' && b.spec.lordId ? 'beaten first: can be recruited  ·  now the throne' : b.spec.kind === 'castle' ? 'now the throne' : 'the castle is leaderless', '#4fe08a');
         }
         else if (e === b.captain && !b.result) {
             this.banner(`${(b.spec.captainName || 'the Captain').toUpperCase()} FALLS`, b.gates.some((s) => s.alive) ? 'now break the gate' : '', '#4fe08a');
@@ -14466,6 +14719,23 @@ class Game {
         this.hitstop(4 * TUNING.hitstopScale);
         if (this.player.lock === e)
             this.player.lock = null;
+    }
+    /** The warlord's Howl: a Thornhound pack at his side, while fewer than WAR.howlMaxHounds hounds are on the field. */
+    warlordHowl(e) {
+        const a = this.army, hi = UNIT_ORDER.indexOf('hound');
+        let n = 0;
+        for (let i = 0; i < a.cap; i++)
+            if (a.alive[i] && a.type[i] === hi && a.team[i] === TEAM_ENEMY)
+                n++;
+        if (n >= WAR.howlMaxHounds)
+            return;
+        for (let k = 0; k < WAR.houndPack; k++) {
+            const ang = (k / WAR.houndPack) * Math.PI * 2;
+            // the pack comes at his call even past the live cap (6 at most, WAR.howlMaxHounds on the field)
+            if (a.spawn('hound', 'enemy', e.x + Math.cos(ang) * 70, e.y + Math.sin(ang) * 70, this.battle.spec.tier, true) < 0)
+                a.addReserve('enemy', 'hound');
+        }
+        this.toast('THE HOUNDS ANSWER');
     }
     onPlayerDeath() {
         this.deathT = 0;
@@ -14519,7 +14789,7 @@ class Game {
                 return true;
             }
         }
-        if (this.menuTab === 1 && inList) {
+        if (this.menuTab === MENU_FORGE && inList) {
             const i = Math.floor((tap.y - MENU_LIST.y - MENU_LIST.pad) / SYNTH_ROW_H);
             const list = this.synthEntries();
             if (i >= 0 && i < list.length) {
@@ -14532,9 +14802,23 @@ class Game {
                 return true;
             }
         }
-        if (this.menuTab === 2) {
-            const colW = (VIEW_W - 52 - 20) / 3;
-            for (let b = 0; b < 3; b++) {
+        if (this.menuTab === MENU_KNIGHT) {
+            for (let i = 0; i < KNIGHT_UPGRADES.length; i++) {
+                const r = knightRowAt(i);
+                if (tap.x < r.x || tap.x > r.x + KNIGHT_ROW.w || tap.y < r.y || tap.y > r.y + KNIGHT_ROW.h)
+                    continue;
+                if (this.knightIndex === i)
+                    this.buyUpgrade(KNIGHT_UPGRADES[i].id);
+                else {
+                    this.knightIndex = i;
+                    this.sfx.guard();
+                }
+                return true;
+            }
+        }
+        if (this.menuTab === MENU_TALENTS) {
+            const nb = BRANCHES.length, colW = talentColW();
+            for (let b = 0; b < nb; b++) {
                 const x = 26 + b * (colW + 10);
                 if (tap.x < x || tap.x > x + colW)
                     continue;

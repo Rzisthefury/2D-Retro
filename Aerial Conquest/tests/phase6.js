@@ -111,7 +111,7 @@ async function desktop(browser) {
   const sel = await page.evaluate(() => ({ sel: GAME.mapSel, btns: GAME.mapButtons().map((x) => x.label + (x.enabled ? '' : '(off)')) }));
   check('click a node -> it is selected and its panel offers Attack', sel.sel === watch && sel.btns[0] === 'Attack', JSON.stringify(sel));
   await page.screenshot({ path: OUT + '/p6-panel.png' });
-  const ab = await page.evaluate(() => { const n = GAME.mapButtons().length, a = GAME.mapButtonAt(0, n); return { x: a.x + MAP_BTN.w / 2, y: a.y + MAP_BTN.h / 2 }; });
+  const ab = await page.evaluate(() => { const n = GAME.mapButtons().length, a = GAME.mapButtonAt(0, n); return { x: a.x + (a.w || MAP_BTN.w) / 2, y: a.y + MAP_BTN.h / 2 }; });
   q = toPage(b, ab.x, ab.y); await page.mouse.click(q.x, q.y); await wait(400);
   const bt = await page.evaluate(() => ({ screen: GAME.screen, kind: GAME.battle.spec.kind, node: GAME.battle.spec.nodeId, name: GAME.battle.spec.name, tier: GAME.battle.spec.tier }));
   check('Attack -> the node\'s battle (outpost capture, its name and tier)', bt.screen === 'battle' && bt.kind === 'outpost' && bt.node === watch && bt.name === 'Millbrook Watch', JSON.stringify(bt));
@@ -239,7 +239,7 @@ async function phone(browser) {
   let p = await nodeScreen(page, gwatch); s = toPage(b, p.x, p.y);
   await page.touchscreen.tap(s.x, s.y); await wait(250);
   await page.screenshot({ path: OUT + '/p6-phone-panel.png' });
-  const ab = await page.evaluate(() => { const n = GAME.mapButtons().length, a = GAME.mapButtonAt(0, n); return { x: a.x + MAP_BTN.w / 2, y: a.y + MAP_BTN.h / 2 }; });
+  const ab = await page.evaluate(() => { const n = GAME.mapButtons().length, a = GAME.mapButtonAt(0, n); return { x: a.x + (a.w || MAP_BTN.w) / 2, y: a.y + MAP_BTN.h / 2 }; });
   s = toPage(b, ab.x, ab.y); await page.touchscreen.tap(s.x, s.y); await wait(500);
   const st = await page.evaluate(() => ({ screen: GAME.screen, kind: GAME.battle.spec.kind, node: GAME.battle.spec.nodeId }));
   check('phone: tap a node -> panel -> tap Attack -> its battle', st.screen === 'battle' && st.kind === 'outpost' && st.node === gwatch, JSON.stringify(st));

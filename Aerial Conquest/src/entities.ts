@@ -668,6 +668,7 @@ class Enemy {
   moveX = 0; moveY = 0;       // where the move lands
   specialCd = 150;
   enraged = false;
+  phase = 0;                  // a phased boss's current pattern (the warlord)
 
   /**
    * `level` and `tier` come from the battle (PLAN v2: tiers 1-5 from Phase 11).
@@ -740,6 +741,9 @@ class Enemy {
       if (cut || Math.abs(this.x - ex) < this.radius + 6) { this.state = 'dead'; this.deathT = 1; this.hp = 0; }
       return;
     }
+
+    // the warlord changes pattern as his HP falls, whatever he's doing (PLAN 11.3)
+    if (this.boss && this.boss.phases) this.phaseShift(g, this.boss);
 
     if (!this.aggro) { this.idle(g, dt); this.physics(g, dt); return; }
 
@@ -1094,7 +1098,7 @@ class Enemy {
     const p = this.target;
     if (!this.enraged && this.hp < this.maxHp * 0.5) {
       this.enraged = true;
-      g.banner('ENRAGED', b.name, b.accent);
+      if (!b.phases) g.banner('ENRAGED', b.name, b.accent);
       g.shake(8);
       g.ring(this.x, this.y, this.z, 10, 140, b.accent);
     }
@@ -1110,6 +1114,26 @@ class Enemy {
     this.hasHitThisSwing = false;
     this.moveX = this.x; this.moveY = this.y;
     return true;
+  }
+
+  /**
+   * The warlord (PLAN 11.3): every quarter of his HP he takes up the next of
+   * the four patterns - its body, speed and base AI - keeping his HP and moves.
+   * Shifts wait for a move to finish.
+   */
+  private phaseShift(g: Game, b: BossDefinition) {
+    const ph = b.phases!;
+    const k = Math.min(ph.length - 1, Math.floor((1 - this.hp / this.maxHp) * ph.length));
+    if (k <= this.phase || this.state === 'special') return;
+    this.phase = k;
+    const d = bossEnemyDef({ ...b, pattern: ph[k] });
+    this.def = d;
+    this.radius = d.radius; this.speed = d.speed;
+    this.maxPoise = d.poise; this.poise = d.poise;
+    this.specialCd = Math.min(this.specialCd, 40);
+    g.banner(b.name.toUpperCase(), (b.phaseNames && b.phaseNames[k]) || '', b.accent);
+    g.shake(10);
+    g.ring(this.x, this.y, this.z, 10, 160, b.accent);
   }
 
   private endMove() {
@@ -1193,6 +1217,37 @@ class Enemy {
             g.burst(this.moveX, this.moveY, 0, 18, this.def.accent);
           }
         } else if (f >= rise + track + fall + 28) this.endMove();
+        break;
+      }
+      case 'thorns': {
+        // Thornline: plants his blade, then a line of thorns bursts toward you one after another.
+        const t = this.tell(40), n = WAR.thornsCount, every = WAR.thornsEvery;
+        if (f < t) {
+          this.faceTarget(p, dt, 8);
+          this.moveX = this.x; this.moveY = this.y;
+        } else {
+          const k = f - t;
+          if (k % every === 0 && k / every < n) {
+            const i = k / every + 1;
+            const x = this.moveX + Math.cos(this.facing) * WAR.thornsGap * i, y = this.moveY + Math.sin(this.facing) * WAR.thornsGap * i;
+            g.bossShock(this, x, y, WAR.thornsRadius, SHOCK_MULT * 0.8);
+            g.ring(x, y, 0, 8, WAR.thornsRadius, this.def.accent);
+            g.burst(x, y, 0, 8, this.def.accent);
+            if (i === 1) g.shake(6);
+          }
+          if (k >= n * every + 24) this.endMove();
+        }
+        break;
+      }
+      case 'howl': {
+        // Howl: a long roar, and a pack of Thornhounds answers from behind him.
+        const t = this.tell(36);
+        if (f === t) {
+          g.warlordHowl(this);
+          g.ring(this.x, this.y, this.z, 16, 220, this.def.accent);
+          g.shake(8);
+        }
+        if (f >= t + 30) this.endMove();
         break;
       }
       default: this.endMove();

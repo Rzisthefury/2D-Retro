@@ -515,6 +515,7 @@ class Renderer {
     for (const f of g.war.fights) this.drawMapFight(c, g, f);
     for (const m of g.war.musters) this.drawMuster(c, g, m);
     this.drawMapHud(c, g);
+    if (g.menuOpen) this.drawBigMenu(c, g);
   }
 
   /** The Generals roster (PLAN 7.1 Generals tab): level, command, loyalty, where they are; red at 25 or under. */
@@ -626,16 +627,23 @@ class Renderer {
     return { x: P.x + P.pad, y: P.y + P.pad + 40 };
   }
 
+  /** A centred button label, its font shrunk (to 9 px at least) until it fits `w`. */
+  private buttonLabel(c: CanvasRenderingContext2D, text: string, x: number, y: number, w: number, size: number) {
+    c.textAlign = 'center';
+    let s = size;
+    for (; s > 9; s--) { c.font = `900 ${s}px ui-monospace, Menlo, Consolas, monospace`; if (c.measureText(text).width <= w) break; }
+    c.fillText(s > 9 ? text : this.clip(c, text, w), x, y);
+  }
+
   /** The panel's buttons from Game.mapButtons (drawing and hit-testing share the geometry). */
   private panelButtons(c: CanvasRenderingContext2D, g: Game, main: string[]) {
     const btns = g.mapButtons();
     btns.forEach((b, i) => {
       const at = g.mapButtonAt(i, btns.length), hot = main.some((m) => b.label.startsWith(m));
       c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : hot ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
-      this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8); c.fill();
-      c.textAlign = 'center'; c.font = `900 ${hot ? 15 : 14}px ui-monospace, Menlo, Consolas, monospace`;
+      this.roundRect(c, at.x, at.y, at.w, MAP_BTN.h, 8); c.fill();
       c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
-      c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+      this.buttonLabel(c, b.label.toUpperCase(), at.x + at.w / 2, at.y + MAP_BTN.h / 2 + 5, at.w - 12, hot ? 15 : 14);
     });
   }
 
@@ -897,6 +905,12 @@ class Renderer {
     const help = IS_TOUCH ? 'drag to pan  ·  pinch to zoom  ·  tap a node' : 'drag / WASD pan  ·  wheel / Z zoom  ·  arrows pick a node  ·  ENTER attack  ·  ESC title';
     c.fillStyle = 'rgba(10,14,28,0.6)'; c.fillRect(0, VIEW_H - 24, VIEW_W, 24);
     c.fillStyle = 'rgba(232,236,247,0.75)'; c.fillText(help, VIEW_W / 2, VIEW_H - 8);
+    // the MENU button (shared hit area MAP_MENU_HIT): gear, forge, talents, knight upgrades
+    const M = MAP_MENU_HIT, sp = g.apFree();
+    c.fillStyle = 'rgba(40,50,80,0.88)'; this.roundRect(c, M.x, M.y, M.w, M.h, 7); c.fill();
+    c.strokeStyle = sp > 0 ? '#ffd54a' : 'rgba(120,150,220,0.5)'; c.lineWidth = 1.5; this.roundRect(c, M.x, M.y, M.w, M.h, 7); c.stroke();
+    c.fillStyle = PAL.text; c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillText(IS_TOUCH ? 'MENU' : 'MENU (TAB)', M.x + M.w / 2, M.y + 22);
     c.restore();
     const cv = g.selectedConvoy(), ar = g.selectedArmy(), fi = g.selectedFight();
     if (g.mapMode === 'generals') this.drawRoster(c, g);
@@ -942,10 +956,9 @@ class Renderer {
     btns.forEach((b, i) => {
       const at = g.mapButtonAt(i, btns.length), main = b.label === 'Ambush';
       c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : main ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
-      this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8); c.fill();
-      c.textAlign = 'center'; c.font = `900 ${main ? 16 : 14}px ui-monospace, Menlo, Consolas, monospace`;
+      this.roundRect(c, at.x, at.y, at.w, MAP_BTN.h, 8); c.fill();
       c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
-      c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+      this.buttonLabel(c, b.label.toUpperCase(), at.x + at.w / 2, at.y + MAP_BTN.h / 2 + 5, at.w - 12, main ? 16 : 14);
     });
     c.restore();
   }
@@ -1010,7 +1023,6 @@ class Renderer {
         const status = tot >= cap ? 'full' : g.player.gold < WAR.troopCost.sword ? 'waiting for gold' : `+${w.production(n)} / min`;
         row('Recruiting', status, tot >= cap || g.player.gold < WAR.troopCost.sword ? '#ffb070' : '#9fe8b0');
         row('Warband', `${troopTotal(w.warband)} / ${g.warbandCap()}`);
-        note('Send army and generals arrive in Phases 8 and 10', PAL.dim);
       } else if (n.type === 'village') {
         row('Income', `${w.income(n)} gold / min`, '#ffd54a');
         row('Gold waiting', `${Math.floor(w.stock[n.id])} / ${WAR.villageStockCap}`);
@@ -1028,10 +1040,9 @@ class Renderer {
       const at = g.mapButtonAt(i, btns.length);
       const main = b.label === 'Attack';
       c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : main ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
-      this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8); c.fill();
-      c.textAlign = 'center'; c.font = `900 ${main ? 16 : 14}px ui-monospace, Menlo, Consolas, monospace`;
+      this.roundRect(c, at.x, at.y, at.w, MAP_BTN.h, 8); c.fill();
       c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
-      c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+      this.buttonLabel(c, b.label.toUpperCase(), at.x + at.w / 2, at.y + MAP_BTN.h / 2 + 5, at.w - 12, main ? 16 : 14);
     });
     c.restore();
   }
@@ -2884,7 +2895,7 @@ class Renderer {
     c.fillStyle = 'rgba(6,8,14,0.975)';
     c.fillRect(0, 0, VIEW_W, VIEW_H);
 
-    const tabs = ['GEAR', 'FORGE', 'TALENTS', 'STATUS'];
+    const tabs = ['GEAR', 'FORGE', 'TALENTS', 'KNIGHT', 'STATUS'];
     c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
     for (let i = 0; i < tabs.length; i++) {
       const on = i === g.menuTab;
@@ -2915,19 +2926,22 @@ class Renderer {
     c.fillStyle = ap > 0 ? PAL.mpCharge : PAL.dim;
     c.font = '800 14px ui-monospace, Menlo, Consolas, monospace';
     c.fillText(`SP ${ap}`, VIEW_W - 70, 38);
+    c.fillStyle = '#ffd54a';
+    c.fillText(`${p.gold} g`, VIEW_W - 70 - c.measureText(`SP ${ap}`).width - 18, 38);
     c.textAlign = 'left';
 
     const top = MENU_LIST.y;
     if (g.menuTab === 0) this.drawGearTab(c, g, top);
-    else if (g.menuTab === 1) this.drawSynthTab(c, g, top);
-    else if (g.menuTab === 2) this.drawTalentTab(c, g, top);
+    else if (g.menuTab === MENU_FORGE) this.drawSynthTab(c, g, top);
+    else if (g.menuTab === MENU_TALENTS) this.drawTalentTab(c, g, top);
+    else if (g.menuTab === MENU_KNIGHT) this.drawKnightTab(c, g);
     else this.drawStatusTab(c, g, top);
 
     c.fillStyle = PAL.dim;
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillText(IS_TOUCH
       ? 'tap a tab  ·  tap a row to select, tap again to confirm  ·  \u2715 to close'
-      : '1-4 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close',
+      : '1-5 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close',
       26, VIEW_H - 18);
     void p;
     c.restore();
@@ -3042,7 +3056,8 @@ class Renderer {
     y += 17;
     c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText(this.clip(c, 'Forging works anywhere for now; castles and the gold fee come later.', dw - 32), dx + 16, y);
+    c.fillStyle = g.canForge() ? PAL.dim : '#ff9d7a';
+    c.fillText(this.clip(c, g.canForge() ? 'At the forge: gold plus battle spoils.' : 'Forging needs a castle: open this menu from the map.', dw - 32), dx + 16, y);
     y += 26;
     const sel = entries[g.synthIndex];
     if (!sel) return;
@@ -3061,13 +3076,18 @@ class Renderer {
     c.fillText('MATERIALS', dx + 16, y);
     y += 18;
     c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = '#ffd54a'; c.fillRect(dx + 16, y - 8, 8, 8);
+    c.fillStyle = PAL.text; c.fillText('Gold', dx + 32, y);
+    c.textAlign = 'right'; c.fillStyle = p.gold >= sel.recipe.gold ? '#69e29a' : '#ff6b6b';
+    c.fillText(`${p.gold} / ${sel.recipe.gold}`, dx + dw - 16, y);
+    c.textAlign = 'left'; y += 20;
     for (const k of Object.keys(sel.recipe.needs) as MatId[]) {
       const need = sel.recipe.needs[k] || 0;
       const has = have(p.inv, k);
       c.fillStyle = MATS[k].color;
       c.fillRect(dx + 16, y - 8, 8, 8);
       c.fillStyle = PAL.text;
-      c.fillText(MATS[k].name + (BOSS_MATS.includes(k) ? '  (rare)' : ''), dx + 32, y);
+      c.fillText(MATS[k].name + (RARE_MATS.includes(k) ? '  (rare)' : ''), dx + 32, y);
       c.textAlign = 'right';
       c.fillStyle = has >= need ? '#69e29a' : '#ff6b6b';
       c.fillText(`${has} / ${need}`, dx + dw - 16, y);
@@ -3077,13 +3097,13 @@ class Renderer {
     c.fillStyle = sel.state === 'ready' ? PAL.mpCharge : PAL.dim;
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
     c.fillText(sel.state === 'ready' ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to forge and equip`
-      : sel.state === 'owned' ? 'Already yours — equip it from GEAR' : 'Materials come from battle spoils', dx + 16, VIEW_H - 62);
+      : sel.state === 'owned' ? 'Already yours — equip it from GEAR' : 'Gold and materials come from battle spoils', dx + 16, VIEW_H - 62);
   }
 
   private drawTalentTab(c: CanvasRenderingContext2D, g: Game, top: number) {
     const p = g.player;
-    const colW = (VIEW_W - 52 - 20) / 3;
-    for (let b = 0; b < 3; b++) {
+    const colW = talentColW();
+    for (let b = 0; b < BRANCHES.length; b++) {
       const br = BRANCHES[b];
       const x = 26 + b * (colW + 10);
       const active = b === g.talentBranch;
@@ -3105,7 +3125,7 @@ class Renderer {
         const locked = !!t.needs && !p.talents[t.needs];
         if (active && i === g.talentIndex) this.rowHighlight(c, x + 8, y - 2, colW - 16, 24);
         c.fillStyle = owned ? br.color : locked ? '#5d6480' : PAL.text;
-        c.fillText(t.name, x + 16, y + 15);
+        c.fillText(this.clip(c, t.name, colW - 52), x + 16, y + 15);
         c.textAlign = 'right';
         c.fillStyle = owned ? br.color : PAL.dim;
         c.fillText(owned ? '\u2713' : String(t.cost), x + colW - 14, y + 15);
@@ -3131,6 +3151,44 @@ class Renderer {
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
     c.fillText(owned ? 'LEARNED' : `${t.cost} SP  ·  ENTER to learn`, VIEW_W - 42, y + 27);
     c.textAlign = 'left';
+  }
+
+  /** Knight tab (PLAN 12.1): three gold upgrades, 10 ranks each, 100 x rank^2. Rows: KNIGHT_ROW. */
+  private drawKnightTab(c: CanvasRenderingContext2D, g: Game) {
+    const p = g.player, R = KNIGHT_ROW;
+    const now = statsForKnight(p.upgrades);
+    for (let i = 0; i < KNIGHT_UPGRADES.length; i++) {
+      const u = KNIGHT_UPGRADES[i], at = knightRowAt(i), rank = p.upgrades[u.id], cost = g.upgradeCost(u.id);
+      this.listBox(c, at.x, at.y, R.w, R.h);
+      if (i === g.knightIndex) { c.strokeStyle = u.color; c.lineWidth = 2; this.roundRect(c, at.x, at.y, R.w, R.h, 8); c.stroke(); }
+      c.textAlign = 'left';
+      c.font = '800 17px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = u.color;
+      c.fillText(u.name.toUpperCase(), at.x + 18, at.y + 28);
+      c.font = '500 12px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = PAL.dim;
+      c.fillText(`each rank: ${u.desc}`, at.x + 18, at.y + 48);
+      // rank pips
+      for (let k = 0; k < WAR.upgradeRanks; k++) {
+        c.fillStyle = k < rank ? u.color : 'rgba(120,150,220,0.22)';
+        this.roundRect(c, at.x + 18 + k * 22, at.y + 62, 18, 12, 3); c.fill();
+      }
+      // the stat it moves, now -> next
+      const next = { ...p.upgrades, [u.id]: Math.min(WAR.upgradeRanks, rank + 1) } as KnightUpgrades;
+      const nx = statsForKnight(next);
+      const line = u.id === 'vitality' ? `HP ${now.maxHp} \u2192 ${nx.maxHp}`
+        : u.id === 'might' ? `STR ${now.str.toFixed(1)} \u2192 ${nx.str.toFixed(1)}   DEF ${now.def.toFixed(1)} \u2192 ${nx.def.toFixed(1)}`
+        : `MAG ${now.mag.toFixed(1)} \u2192 ${nx.mag.toFixed(1)}   MP ${now.maxMp} \u2192 ${nx.maxMp}`;
+      c.font = '600 13px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = PAL.text;
+      c.fillText(cost ? line : line.replace(/ \u2192 [\d.]+/g, ''), at.x + 260, at.y + 72);
+      c.textAlign = 'right';
+      c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = !cost ? '#69e29a' : p.gold >= cost ? '#ffd54a' : '#ff6b6b';
+      c.fillText(cost ? `rank ${rank + 1}: ${cost} gold` : 'MAX', at.x + R.w - 18, at.y + 30);
+      c.font = '600 11px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = PAL.dim;
+      c.fillText(`rank ${rank}/${WAR.upgradeRanks}`, at.x + R.w - 18, at.y + 50);
+      c.textAlign = 'left';
+    }
+    c.font = '700 12px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = PAL.dim;
+    c.fillText(`treasury ${p.gold} gold  ·  ${IS_TOUCH ? 'tap a row, tap again to buy' : 'ENTER buys the next rank'}`, 26, KNIGHT_ROW.y0 - 10);
   }
 
   private drawStatusTab(c: CanvasRenderingContext2D, g: Game, top: number) {
@@ -3183,7 +3241,7 @@ class Renderer {
       c.fillStyle = MATS[k].color;
       c.fillRect(mx + 16, my - 8, 9, 9);
       c.fillStyle = n > 0 ? PAL.text : '#5d6480';
-      c.fillText(MATS[k].name + (BOSS_MATS.includes(k) ? '  *' : ''), mx + 32, my);
+      c.fillText(MATS[k].name + (RARE_MATS.includes(k) ? '  *' : ''), mx + 32, my);
       c.textAlign = 'right';
       c.fillText(String(n), mx + halfW - 16, my);
       c.textAlign = 'left';

@@ -9,7 +9,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const ignorable = (t) => /fonts\.(googleapis|gstatic)|ERR_|net::/.test(t);
 const geom = (page) => page.evaluate(() => { const r = document.getElementById('game').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
 const toPage = (b, x, y) => ({ x: b.x + x / 960 * b.w, y: b.y + y / 540 * b.h });
-const btn = (page, label) => page.evaluate((label) => { const bs = GAME.mapButtons(), i = bs.findIndex((b) => b.label.startsWith(label)); if (i < 0) return null; const a = GAME.mapButtonAt(i, bs.length); return { x: a.x + MAP_BTN.w / 2, y: a.y + MAP_BTN.h / 2, enabled: bs[i].enabled }; }, label);
+const btn = (page, label) => page.evaluate((label) => { const bs = GAME.mapButtons(), i = bs.findIndex((b) => b.label.startsWith(label)); if (i < 0) return null; const a = GAME.mapButtonAt(i, bs.length); return { x: a.x + (a.w || MAP_BTN.w) / 2, y: a.y + MAP_BTN.h / 2, enabled: bs[i].enabled }; }, label);
 /** Freeze the live map; tests drive war time. A fresh war each time (difficulty d). */
 const fresh = (page, d = 'normal') => page.evaluate((d) => {
   localStorage.removeItem('aerial-conquest-slot1'); GAME.resetSave(); GAME.enterCampaign();

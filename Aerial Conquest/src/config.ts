@@ -329,7 +329,7 @@ const ORDER_COLOR: Record<string, string> = { follow: '#8fb4ff', charge: '#ff8a5
 
 // AF's boss AI, kept for castle lords, keep captains, generals and the warlord.
 type BossPattern = 'brute' | 'sorcerer' | 'stalker' | 'skylord';
-type BossMove = 'slam' | 'fan' | 'rush' | 'dive';
+type BossMove = 'slam' | 'fan' | 'rush' | 'dive' | 'thorns' | 'howl';   // thorns, howl: the warlord's own
 
 interface BossDefinition {
   id: string;
@@ -340,6 +340,8 @@ interface BossDefinition {
   uniqueMaterials: MatId[];      // spoils only this boss pays
   pattern: BossPattern;
   moves: BossMove[];             // signature attacks layered on the base AI
+  phases?: BossPattern[];        // the warlord: a new pattern every 1/n of his HP (pattern = phases[0])
+  phaseNames?: string[];
   color: string;
   accent: string;
 }
@@ -360,6 +362,13 @@ interface KnightUpgrades { vitality: number; might: number; arcana: number; }
 
 function freshUpgrades(): KnightUpgrades { return { vitality: 0, might: 0, arcana: 0 }; }
 
+/** The Knight tab's rows (PLAN 12.1). */
+const KNIGHT_UPGRADES: { id: keyof KnightUpgrades; name: string; desc: string; color: string }[] = [
+  { id: 'vitality', name: 'Vitality', desc: 'max HP', color: '#ff7a7a' },
+  { id: 'might', name: 'Might', desc: 'strength and defense', color: '#ffb35c' },
+  { id: 'arcana', name: 'Arcana', desc: 'magic, magic resist and max MP', color: '#7fb4ff' },
+];
+
 /** The knight's base stats: AF's level-1 values plus whatever the upgrades buy. */
 function statsForKnight(u: KnightUpgrades): Stats {
   const v = u.vitality * WAR.levelsPerRank, m = u.might * WAR.levelsPerRank, a = u.arcana * WAR.levelsPerRank;
@@ -378,9 +387,23 @@ function statsForKnight(u: KnightUpgrades): Stats {
 // Every new tunable number for the conquest layer lives here (PLAN rule 0.8).
 const WAR = {
   // knight progression
-  startSkillPoints: 5,       // PLAN 12.2: 5 + castles 2 each + keeps 1 each + capital 3 = 42
+  // PLAN 12.2: 5 + 11 castles x 2 + 11 keeps x 1 + capital 4 = 42 (the map has 11 enemy keeps, not 12,
+  // so the capital bonus is 4 rather than PLAN's 3 to land the whole tree on 42)
+  startSkillPoints: 5,
+  spCastle: 2,               // first capture of each enemy castle
+  spKeep: 1,                 // first capture of each enemy keep
+  spCapital: 4,              // on top of spCastle for the warlord's seat
   levelsPerRank: 4,          // knight upgrade rank -> AF level-curve equivalent (rank 10 ~ level 41)
   upgradeRanks: 10,
+  upgradeCost: 100,          // gold for a rank: this x (the rank being bought)^2 (PLAN 12.1)
+  // the Command branch (PLAN 12.2)
+  command: {
+    banner: 8, muster: 12, host: 16,       // warband cap +
+    drill: 0.15, hostHp: 0.15,             // troop HP +
+    steel: 0.15,                           // troop damage +
+    musterStream: 1.3,                     // your reserves stream this much faster
+    presence: 0.2, presenceRange: 300,     // troops this near the knight deal + this
+  },
 
   // teams (Phase 1): allied and hostile Enemy entities
   retargetFrames: 10,        // how often a unit re-picks its nearest hostile
@@ -427,6 +450,9 @@ const WAR = {
   spoilGold: { field: 120, village: 90, outpost: 90, keep: 150, castle: 220, convoy: 40, defense: 100, rescue: 120, test: 0 } as Record<string, number>,   // x tier, on a win
   spoilGoldPerKill: 1,       // plus this per Dominion unit killed
   spoilMats: [1, 3] as [number, number],   // common materials won (PLAN 12.3), x tier
+  lordRare: ['ember', 'ember', 'crystal', 'crystal', 'core'] as MatId[],   // a castle Lord's rare, by territory tier
+  lordRareCount: 2,          // rares a beaten castle pays
+  warlordRareCount: 3,       // the warlord pays the top rare (Void Core)
   exitPushTime: 0.35,        // seconds pushing into your own edge before you leave the field
 
   // the other battle types (Phase 5, PLAN 10.2)
@@ -525,6 +551,17 @@ const WAR = {
   loyaltyWarn: 25,                      // at or under: the warning (red border, a line)
   presenceMult: 1.5,                    // Warlord's Presence (Command talent, Phase 11): loyalty gains x this
 
+  // Thornhounds and the warlord (Phase 11, PLAN 11.2 / 11.3)
+  houndPack: 6,
+  houndPacks: [0, 0, 0, 1, 2],          // packs guarding a node, by battle tier
+  warlordArmyPacks: 1,                  // packs added to every army marching out of the warlord's land
+  warlordStats: { hp: 1500, attack: 18, defense: 12 },
+  warlordLevel: 20,
+  warlordPhases: ['brute', 'stalker', 'sorcerer', 'skylord'] as BossPattern[],   // one per quarter of his HP
+  warlordPhaseNames: ['the Iron Lord', 'the Hunter', 'the Hexer', 'Skyborne'],
+  howlMaxHounds: 12,                    // Howl calls a pack only while fewer hounds than this are on the field
+  thornsCount: 6, thornsGap: 70, thornsRadius: 62, thornsEvery: 5,   // Thornline: shocks marching at you
+
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
   testFieldTier: 1,
@@ -578,25 +615,32 @@ const TOUCH_CHIPS = { x: 920, y: 186, dy: 38, r: 16 };
 // Menu geometry lives here because the renderer draws from it and the input
 // layer hit-tests against it — one source of truth or taps land in the wrong row.
 const MENU_TAB = { x: 26, y: 18, w: 116, h: 28, gap: 8 };
-const MENU_TABS = 4;  // gear · forge · talents · status
+const MENU_TABS = 5;  // gear · forge · talents · knight · status
+const MENU_FORGE = 1, MENU_TALENTS = 2, MENU_KNIGHT = 3, MENU_STATUS = 4;
+/** Knight tab rows (shared by drawing and taps). */
+const KNIGHT_ROW = { x: 26, y0: 74, w: VIEW_W - 52, h: 92, gap: 14 };
+function knightRowAt(i: number): { x: number; y: number } { return { x: KNIGHT_ROW.x, y: KNIGHT_ROW.y0 + i * (KNIGHT_ROW.h + KNIGHT_ROW.gap) }; }
+/** Talents tab: one column per branch. */
+function talentColW(): number { return (VIEW_W - 52 - 10 * (BRANCHES.length - 1)) / BRANCHES.length; }
 const SYNTH_ROW_H = 20;  // the recipe list is long now, so its rows are tighter
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 /** The campaign map's node panel and its buttons (render and hit-testing share these). */
 const MAP_PANEL = { x: 640, y: 62, w: 306, h: 412, pad: 14 };
-const MAP_BTN = { w: 278, h: 46, gap: 8 };
+const MAP_BTN = { w: 278, h: 46, gap: 8, pairFrom: 5 };   // 5+ buttons (your castle): two per row
 const MAP_BAR = { h: 44 };
 /** The results screen's Recruit / Release buttons (PLAN 9.1). */
 const RECRUIT_BTN = { x0: 270, y: 430, w: 200, h: 46, gap: 20 };
 /** The top bar's generals readout (opens the roster). */
 const MAP_GEN_HIT = { x: 560, w: 140 };
+const MAP_MENU_HIT = { x: 12, y: VIEW_H - 66, w: 104, h: 34 };   // the map's MENU button (bottom left): gear, forge, talents, knight
 /** The Generals roster panel. */
 const MAP_ROSTER = { y0: 58, rowH: 52 };
 /** The Send army panel: a row per troop type with -/+ (step), then Half / All. */
 const MAP_SEND = { y0: 74, rowH: 36, btnW: 44, btnH: 30, step: 5, quickH: 34 };
 const SEND_TYPES: UnitType[] = ['sword', 'spear', 'archer', 'shield', 'ram'];             // the top bar: treasury, warband, skill points, territories
 
-const CAMP_ROW = { x: 70, y0: 170, w: 400, h: 50, gap: 8, colGap: 20, perCol: 5 };   // the campaign stub's battle list: two columns
+const CAMP_ROW = { x: 70, y0: 170, w: 400, h: 50, gap: 8, colGap: 20, perCol: 6 };   // the campaign stub's battle list: two columns
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
 
 /* ------------------------------------------------------ hero and blade */

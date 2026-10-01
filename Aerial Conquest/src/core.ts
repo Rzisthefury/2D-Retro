@@ -278,6 +278,8 @@ class InputState {
   takePan(): { x: number; y: number } { const p = { ...this.pan }; this.pan.x = this.pan.y = 0; return p; }
   takeZoom(): number { const z = this.zoomSteps; this.zoomSteps = 0; return z; }
   takeClick(): { x: number; y: number } | null { const c = this.lastClick; this.lastClick = null; return c; }
+  /** Put a click back for the next reader (the map's menu button peeks first). */
+  pushClick(c: { x: number; y: number }) { this.lastClick = c; }
 
   /** Read and clear the most recent tap, for whichever UI is on screen. */
   takeTap(): { x: number; y: number } | null {

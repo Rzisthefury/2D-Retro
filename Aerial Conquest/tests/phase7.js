@@ -17,7 +17,7 @@ async function takeNode(page, name) {
   await page.evaluate(() => GAME.finishBattle('win'));
   await wait(750); await page.keyboard.press('Enter'); await wait(250);
 }
-const btn = (page, label) => page.evaluate((label) => { const bs = GAME.mapButtons(), i = bs.findIndex((b) => b.label.startsWith(label)); if (i < 0) return null; const a = GAME.mapButtonAt(i, bs.length); return { x: a.x + MAP_BTN.w / 2, y: a.y + MAP_BTN.h / 2, enabled: bs[i].enabled, label: bs[i].label }; }, label);
+const btn = (page, label) => page.evaluate((label) => { const bs = GAME.mapButtons(), i = bs.findIndex((b) => b.label.startsWith(label)); if (i < 0) return null; const a = GAME.mapButtonAt(i, bs.length); return { x: a.x + (a.w || MAP_BTN.w) / 2, y: a.y + MAP_BTN.h / 2, enabled: bs[i].enabled, label: bs[i].label }; }, label);
 
 async function desktop(browser) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });

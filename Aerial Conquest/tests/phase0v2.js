@@ -144,21 +144,25 @@ async function desktop(browser) {
   const regroup = await page.evaluate(() => GAME.enemies.filter((e) => e.alive).length);
   check('cleared group -> next group spawns', gc === 1 && regroup > 0, `cleared ${gc}, new group ${regroup}`);
 
-  // ---- menus: 4 tabs, forge with materials, status
+  // ---- menus: 5 tabs since Phase 11 (Knight added), forge with materials, status
   await page.keyboard.press('Tab'); await wait(200);
-  for (let t = 0; t < 4; t++) { await page.keyboard.press('Digit' + (t + 1)); await wait(150); }
+  for (let t = 0; t < 5; t++) { await page.keyboard.press('Digit' + (t + 1)); await wait(150); }
   const menu = await page.evaluate(() => ({ open: GAME.menuOpen, tab: GAME.menuTab, tabs: MENU_TABS }));
-  check('pause menu: 4 tabs (Gear, Forge, Talents, Status)', menu.open && menu.tabs === 4 && menu.tab === 3, JSON.stringify(menu));
+  check('pause menu: 5 tabs (Gear, Forge, Talents, Knight, Status)', menu.open && menu.tabs === 5 && menu.tab === 4, JSON.stringify(menu));
   await page.screenshot({ path: OUT + '/v2-status.png' });
   await page.keyboard.press('Digit2'); await wait(150);
   await page.screenshot({ path: OUT + '/v2-forge.png' });
   const forge = await page.evaluate(() => {
     for (const m of MAT_ORDER) GAME.player.inv[m] = 50;
+    GAME.player.gold = 1000;
     const e = GAME.synthEntries().find((x) => x.id === 'w2');
     GAME.craft(e);
-    return { owned: GAME.player.ownedWeapons.includes('w2'), weapon: GAME.player.weapon.id };
+    const refused = !GAME.player.ownedWeapons.includes('w2');
+    // Phase 11: forging is done on the map at a castle (phase11.js covers it); hand over the blade for the death check
+    GAME.player.ownedWeapons.push('w2'); GAME.equip({ kind: 'w', w: weaponById('w2'), a: null });
+    return { refused, owned: GAME.player.ownedWeapons.includes('w2'), weapon: GAME.player.weapon.id };
   });
-  check('forge crafts and equips gear', forge.owned && forge.weapon === 'w2', JSON.stringify(forge));
+  check('forge in battle is refused (Phase 11: at a castle, from the map); equipping gear works', forge.refused && forge.weapon === 'w2', JSON.stringify(forge));
   await page.keyboard.press('Escape'); await wait(150);
 
   // ---- music

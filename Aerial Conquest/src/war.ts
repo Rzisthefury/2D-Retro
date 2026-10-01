@@ -85,10 +85,14 @@ class War {
   grace: number[] = [];                       // per territory: seconds no offensive may target it
   refill: number[] = [];                      // per node: progress to the next recruit back into a worn garrison
   won = false;                                // their capital has fallen
-  events: { kind: 'muster' | 'depart' | 'attacked' | 'reinforce' | 'convoyLost' | 'won' | 'lowLoyalty' | 'captured' | 'rescued' | 'defected'; node: number; target: number; general?: string }[] = [];
+  events: { kind: 'muster' | 'depart' | 'attacked' | 'reinforce' | 'convoyLost' | 'won' | 'lowLoyalty' | 'captured' | 'rescued' | 'defected' | 'sp'; node: number; target: number; general?: string }[] = [];
   // generals (Phase 10)
   generals: General[] = [];
   loyaltyMult = 1;                            // Warlord's Presence (Phase 11): set by the game from the knight's talents
+  talents: TalentSet = {};                    // the knight's (Phase 11): Command talents grow the warband and your troops
+  // skill points from conquest (PLAN 12.2)
+  spTaken: number[] = [];                     // castles and keeps whose first capture has paid (yours at the start count as paid)
+  spPending = 0;                              // earned on the map, not yet handed to the knight (Game.syncWar)
   liveGenerals = new Set<string>();           // generals who fought beside the knight in the battle being settled
 
   constructor(camp: Campaign) {
@@ -116,6 +120,8 @@ class War {
     this.nodeForce.fill(null);
     this.refill.fill(0); this.grace.fill(0);
     this.enemyGold = 0; this.musters = []; this.won = false; this.events = [];
+    this.spTaken = this.camp.nodes.filter((n) => n.owner === 'player' && (n.type === 'castle' || n.type === 'keep')).map((n) => n.id);
+    this.spPending = 0;
     // every territory castle but yours and the warlord's has a Lord (PLAN 9.1)
     this.generals = this.camp.territories.filter((t) => t.id !== WAR.startTerritory && t.id !== WAR.capitalTerritory).map((t) => makeLord(t, this.camp.castleOf(t.id).id));
     this.clock = WAR.warClock[this.difficulty];
@@ -169,10 +175,27 @@ class War {
     return true;
   }
 
-  /** The warband's cap: 12, +3 per level-3 castle you hold (max +12); talents add in Phase 11. */
+  /** The warband's cap (PLAN 12.2): 12, + Command talents (max +36), +3 per level-3 castle you hold (max +12) = 60. */
   warbandCap(): number {
     const l3 = this.camp.nodes.filter((n) => n.type === 'castle' && n.owner === 'player' && n.level === 3).length;
-    return WAR.warbandBase + Math.min(WAR.l3WarbandMax, l3 * WAR.l3Warband);
+    const t = this.talents, c = WAR.command;
+    const talents = (t.banner ? c.banner : 0) + (t.muster ? c.muster : 0) + (t.host ? c.host : 0);
+    return WAR.warbandBase + talents + Math.min(WAR.l3WarbandMax, l3 * WAR.l3Warband);
+  }
+
+  /** Your troops' Command talents as one sim multiplier: HP (Drillmaster, Grand Host) x damage (Sharpened Steel). */
+  troopMult(): number {
+    const t = this.talents, c = WAR.command;
+    return (1 + (t.drill ? c.drill : 0) + (t.host ? c.hostHp : 0)) * (1 + (t.steel ? c.steel : 0));
+  }
+
+  /** SP the first time a castle or keep is yours (PLAN 12.2): 2 a castle (+4 the capital), 1 a keep. */
+  private awardSP(n: MapNode) {
+    if (n.owner !== 'player' || (n.type !== 'castle' && n.type !== 'keep') || this.spTaken.includes(n.id)) return;
+    this.spTaken.push(n.id);
+    const sp = n.type === 'keep' ? WAR.spKeep : WAR.spCastle + (n.territory === WAR.capitalTerritory ? WAR.spCapital : 0);
+    this.spPending += sp;
+    this.events.push({ kind: 'sp', node: n.id, target: sp });
   }
 
   /** Your castle nearest by road to node `from` (or -1). */
@@ -348,6 +371,7 @@ class War {
 
   /** A node changed hands: a captured castle starts with an empty garrison, a village with an empty store. */
   onCapture(n: MapNode) {
+    this.awardSP(n);
     // PLAN 8: grace - no offensive targets a territory for 90 s after you take its castle
     if (n.type === 'castle' && n.owner === 'player') this.grace[n.territory] = WAR.grace;
     if (n.type === 'castle') { this.garrison[n.id] = emptyReserve(); this.prod[n.id] = 0; this.sinceRam[n.id] = 0; this.mix[n.id] = 0; }
@@ -426,7 +450,7 @@ class War {
       if (n.owner !== 'enemy') continue;
       const g = this.nodeForce[n.id];
       if (!g) continue;                                    // still full
-      const full = camp.garrison(n);
+      const full = troopTotal(camp.foeForce(n));           // garrison + hound packs
       this.refill[n.id] = Math.min(1, this.refill[n.id] + WAR.enemyRefill / 60 * dt);
       while (this.refill[n.id] >= 1 && troopTotal(g) < full) {
         const k = this.nextType(g, 0), cost = WAR.troopCost[k];
@@ -446,6 +470,8 @@ class War {
           const type = (['sword', 'spear', 'archer', 'shield'] as UnitType[]).sort((a, b) => g[b] - g[a])[0];
           g[type]--; units[type]++;
         }
+        // the warlord's own armies bring Thornhounds (PLAN 11.2)
+        if (troopTotal(units) && from.territory === WAR.capitalTerritory) units.hound += WAR.warlordArmyPacks * WAR.houndPack;
         const a = troopTotal(units) ? this.spawnEnemyArmy(from.id, to.id, units) : null;
         if (a) { a.offensive = true; this.events.push({ kind: 'depart', node: from.id, target: to.id }); }
       }
@@ -601,6 +627,7 @@ class War {
     const lord = this.lordAt(n.id);
     spec.lordId = lord ? lord.id : undefined;
     spec.lordName = lord ? lord.name : n.territory === WAR.capitalTerritory ? 'Warlord Garrick Thorne' : 'the Castellan';
+    spec.warlord = !lord && n.territory === WAR.capitalTerritory;
   }
 
   /** PLAN 9.3: a rescue raid on the castle holding one of your generals, without taking it. */
@@ -631,13 +658,13 @@ class War {
   /** An army's multiplier: x(1 + command) with a general, -20% without (PLAN 7.3); your troops' per-unit edge. */
   private sideMult(team: Team, general: string | null): number {
     const g = this.general(general);
-    return (g ? 1 + command(g) : WAR.noGeneralMult) * (team === 'player' ? WAR.playerTroopMult : 1);
+    return (g ? 1 + command(g) : WAR.noGeneralMult) * (team === 'player' ? WAR.playerTroopMult * this.troopMult() : 1);
   }
 
   /** A node's defenders' multiplier (before fortification): x(1 + command) of its general or Lord. */
   nodeMult(n: MapNode): number {
     const g = n.owner === 'player' ? this.generalAt(n.id) : n.type === 'castle' ? this.lordAt(n.id) : null;
-    return (g ? 1 + command(g) : 1) * (n.owner === 'player' ? WAR.playerTroopMult : 1);
+    return (g ? 1 + command(g) : 1) * (n.owner === 'player' ? WAR.playerTroopMult * this.troopMult() : 1);
   }
 
   /** Where an army is on the map. */
@@ -678,7 +705,7 @@ class War {
   /** The units holding a node: your castles' garrisons, the Dominion's (reduced by fighting) garrisons. */
   defendersOf(n: MapNode): Reserve {
     if (n.owner === 'player') return n.type === 'castle' ? (this.garrison[n.id] || (this.garrison[n.id] = emptyReserve())) : (this.nodeForce[n.id] || (this.nodeForce[n.id] = emptyReserve()));
-    return this.nodeForce[n.id] || (this.nodeForce[n.id] = { ...emptyReserve(), ...foeMix(this.camp.garrison(n)) });
+    return this.nodeForce[n.id] || (this.nodeForce[n.id] = this.camp.foeForce(n));
   }
 
   private fightAt(node: number): Fight | undefined { return this.fights.find((f) => f.node === node); }
@@ -913,7 +940,7 @@ class War {
     const s = this.camp.battleSpec(n);
     this.dressCastle(s, n);
     if (att.general) s.generalId = att.general;
-    const d = this.defendersOf(n), full = this.camp.garrison(n);
+    const d = this.defendersOf(n), full = troopTotal(this.camp.foeForce(n));
     s.foes = { ...d };
     // the battle's reinforcements shrink with the garrison the sim has already worn down
     const k = full > 0 ? troopTotal(d) / full : 1;
@@ -986,6 +1013,7 @@ class War {
       ai: { difficulty: this.difficulty, gold: Math.round(this.enemyGold), clock: +this.clock.toFixed(1), won: this.won,
         musters: this.musters.map((m) => [m.from, m.target, m.size, +m.t.toFixed(1)]), grace: this.grace.map((g) => Math.round(g)), refill: this.refill.map((r) => +r.toFixed(2)),
         offensive: this.armies.filter((a) => a.offensive).map((a) => a.id) },
+      sp: { taken: this.spTaken, pending: this.spPending },
     };
   }
 
@@ -1055,6 +1083,10 @@ class War {
       if (Array.isArray(ai.grace) && ai.grace.length === this.grace.length) this.grace = ai.grace.map((g: number) => clamp(+g || 0, 0, WAR.grace));
       if (Array.isArray(ai.refill) && ai.refill.length === N) this.refill = ai.refill.map((r: number) => clamp(+r || 0, 0, 1));
       if (Array.isArray(ai.offensive)) for (const a of this.armies) if (ai.offensive.includes(a.id)) a.offensive = true;
+    }
+    if (s.sp && Array.isArray(s.sp.taken)) {
+      for (const id of s.sp.taken) if (id >= 0 && id < N && !this.spTaken.includes(id | 0)) this.spTaken.push(id | 0);
+      this.spPending = Math.max(0, s.sp.pending | 0);
     }
     this.nextArmyId = Math.max(1, +s.nextArmyId || 1, ...this.armies.map((a) => a.id + 1));
     this.nextFightId = Math.max(1, +s.nextFightId || 1, ...this.fights.map((f) => f.id + 1));
