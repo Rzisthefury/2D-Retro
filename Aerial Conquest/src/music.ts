@@ -9,6 +9,12 @@
  * (drums, a driving bass, brass stabs) fades in on the next bar and the
  * melody moves to a brighter instrument — then fades back out after.
  *
+ * Aerial Conquest adds a war layer (PLAN 13): a snare-roll march and low
+ * brass (saw + square through a lowpass), brought in on bar lines by the
+ * intensity the game asks for (0 calm map, 1 a threatened map, 2 battle,
+ * 3 a big battle or a castle's inner gate, 4 a Lord or the warlord). It
+ * sits under the tune: the lead stays on top.
+ *
  * Notation, so the tunes stay readable:
  *   chords   bars split by '|'; two chords in a bar split by a space.
  *            Roman numerals relative to the key: I ii iii IV V vi viio,
@@ -290,6 +296,15 @@ const DRUMS: Record<string, { kick: number[]; snare: number[]; hat: number[] }> 
   'boss': { kick: [1, 0, 0, 1, 1, 0, 0, 0], snare: [0, 0, 1, 0, 0, 0, 1, 0], hat: [1, 1, 1, 1, 1, 1, 1, 1] },
 };
 
+// The war layer's march (PLAN 13): snare hits per bar, in eighths, and where the roll into the next bar starts.
+const MARCH: Record<number, { hits: number[]; roll: number }> = {
+  4: { hits: [0, 2, 3, 4, 6], roll: 7 },
+  3: { hits: [0, 2, 3], roll: 5 },
+  6: { hits: [0, 3, 4], roll: 5 },
+};
+/** War layer level by intensity 0-4 (its bus gain). Kept under the melody bus (1.0). */
+const WAR_LAYER = [0, 0.5, 0.6, 0.95, 0.75];
+
 // Where the brass stabs land in a bar, in eighths.
 const STABS: Record<number, number[]> = { 4: [0, 3, 6], 3: [0], 6: [0, 3] };
 
@@ -305,6 +320,9 @@ class Music {
   target = 0;
   private combat = false;
   private combatTail = 0;      // bars left to keep scheduling the combat layer as it fades
+  warLevel = 0;                // the war layer's gain as applied at the last bar line (WAR_LAYER[target])
+  private warTail = 0;         // bars left to keep scheduling the war layer as it fades
+  warNotes = 0;                // war-layer events scheduled (for the checks)
 
   private master!: GainNode;
   private trackGain!: GainNode;
@@ -313,6 +331,7 @@ class Music {
   private busBass!: GainNode;
   private busCombat!: GainNode;
   private busPerc!: GainNode;
+  private busWar!: GainNode;
   private noise!: AudioBuffer;
 
   private track: CTrack = COMPILED.title;
@@ -430,6 +449,7 @@ class Music {
     this.busBass = bus(0.9, 0.12);
     this.busCombat = bus(0, 0.22);
     this.busPerc = bus(1, 0.18);
+    this.busWar = bus(0, 0.15);
 
     this.noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const nd = this.noise.getChannelData(0);
@@ -480,6 +500,13 @@ class Music {
         this.busCombat.gain.setTargetAtTime(want ? 1 : 0, t, ed * 2);
         this.busHarm.gain.setTargetAtTime(want ? 0.7 : 0.85, t, ed * 2);
       }
+      // the war layer follows the intensity on bar lines too
+      const war = WAR_LAYER[clamp(Math.round(this.target), 0, 4)];
+      this.warTail = war > 0 ? 2 : Math.max(0, this.warTail - 1);
+      if (war !== this.warLevel || this.bar === 0) {
+        this.warLevel = war;
+        this.busWar.gain.setTargetAtTime(war, t, ed * 2);
+      }
     }
 
     // harmony: pad on each chord change, then the arpeggio and bass
@@ -518,6 +545,7 @@ class Music {
     // combat layer: drums, a driving bass and brass stabs (always scheduled,
     // heard only while its bus is up)
     if (this.combatTail > 0) this.scheduleCombat(t, e, ed, pitches, rootLow);
+    if (this.warTail > 0) this.scheduleWar(t, e, ed, rootLow);
     if (def.shaker) this.shaker(t, e % 2 === 0 ? 0.03 : 0.018);
 
     // advance
@@ -545,6 +573,35 @@ class Music {
       for (const m of pitches) this.play('brass', midiHz(m), t, ed * 1.2, 0.03, this.busCombat);
     }
     if (def.alwaysCombat && e === 0) this.timpani(midiHz(rootLow), t, 0.3);
+  }
+
+  /** The war layer (PLAN 13): a march on the snare with a roll into each bar, and low brass on the root and fifth. */
+  private scheduleWar(t: number, e: number, ed: number, rootLow: number) {
+    const def = this.track.def, m = MARCH[def.meter], bar = this.track.barLen;
+    if (m.hits.includes(e)) { this.snare(t, e === 0 ? 0.1 : 0.06, this.busWar); this.warNotes++; }
+    if (e >= m.roll) {
+      // the roll: four strokes per eighth, rising into the bar line
+      for (let k = 0; k < 4; k++) this.snare(t + k * ed / 4, 0.025 + 0.012 * (k + (e - m.roll) * 4) / 4, this.busWar);
+      this.warNotes++;
+    }
+    if (e === 0) { this.lowBrass(midiHz(rootLow), t, ed * bar * 0.55, 0.05); this.warNotes++; }
+    if (e === Math.floor(bar / 2)) { this.lowBrass(midiHz(rootLow + 7), t, ed * bar * 0.4, 0.04); this.warNotes++; }
+  }
+
+  /** Low brass for the war layer: saw + square through a lowpass, kept dark so it never covers the tune. */
+  private lowBrass(f: number, t: number, d: number, v: number) {
+    const g = this.gain(0, this.busWar);
+    const lp = this.lowpass(380, g, 0.9);
+    lp.frequency.setValueAtTime(260, t);
+    lp.frequency.linearRampToValueAtTime(520, t + 0.12);
+    lp.frequency.setTargetAtTime(380, t + 0.12, 0.3);
+    const end = t + d + 0.4;
+    this.osc('sawtooth', f, t, end, lp);
+    this.osc('square', f, t, end, this.gain(0.35, lp), 6);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(v, t + 0.08);
+    g.gain.setTargetAtTime(v * 0.75, t + 0.08, 0.3);
+    g.gain.setTargetAtTime(0, t + d, 0.15);
   }
 
   /** Close-voiced chord tones around `center`, as MIDI notes. */
@@ -769,9 +826,9 @@ class Music {
     g.gain.setTargetAtTime(0, t, 0.09);
   }
 
-  private snare(t: number, v: number) {
-    this.noiseHit(t, v, 'bandpass', 1900, 0.8, 0.06, this.busCombat);
-    const g = this.gain(0, this.busCombat);
+  private snare(t: number, v: number, out: AudioNode = this.busCombat) {
+    this.noiseHit(t, v, 'bandpass', 1900, 0.8, 0.06, out);
+    const g = this.gain(0, out);
     this.osc('triangle', 190, t, t + 0.25, g);
     g.gain.setValueAtTime(v * 0.6, t);
     g.gain.setTargetAtTime(0, t, 0.04);
@@ -792,17 +849,21 @@ class Music {
 
   /* ------------------------------------------------------------ preview */
 
+  /** War-layer events the last render() scheduled (for the checks). */
+  static lastWarNotes = 0;
+
   /** Render a theme offline (for testing and previews): returns the audio. */
-  static async render(id: string, seconds: number, combat: boolean, volume = 1): Promise<AudioBuffer> {
+  static async render(id: string, seconds: number, combat: boolean, volume = 1, level = -1): Promise<AudioBuffer> {
     const sr = 32000;
     const ctx = new OfflineAudioContext(2, Math.floor(sr * seconds), sr);
     const m = new Music();
     m.volume = volume;
     m.build(ctx);
     m.useTrack(id, 0, 1);
-    m.target = combat ? 3 : 0;
+    m.target = level >= 0 ? level : combat ? 3 : 0;
     m.nextTime = 0.05;
     m.scheduleUntil(seconds);
+    Music.lastWarNotes = m.warNotes;
     return ctx.startRendering();
   }
 }

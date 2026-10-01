@@ -417,6 +417,7 @@ const WAR = {
   // mass units (Phase 2, PLAN 11.1)
   liveCapDesktop: 100,       // live minions per side
   liveCapPhone: 60,
+  musicBigOn: 60, musicBigOff: 50,   // intensity 3 at this many live units (both sides), back to 2 under the second
   unitCapacity: 320,         // slots in the minion arrays (both sides, plus corpses fading out)
   unitSight: 420,            // how far a minion looks for a hostile before marching on the enemy's centre
   eliteSight: 900,           // how far an elite looks for a hostile minion

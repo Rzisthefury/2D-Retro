@@ -1600,6 +1600,9 @@ class Game {
   tick(dt: number) {
     this.input.pollPad();
     this.input.pollTouch();
+    // a phone held upright gets the rotate prompt (shell.html) and the game holds still behind it: nothing ticks
+    this.portrait = IS_TOUCH && typeof window.matchMedia === 'function' && window.matchMedia('(orientation: portrait)').matches;
+    if (this.portrait) { this.music.duck(true); this.input.endTick(); return; }
     this.input.uiMode = this.menuOpen || this.screen !== 'battle' || !!this.battle.result;
 
     if (TUNING.musicVolume !== this.lastMusicVol) {
@@ -1857,18 +1860,51 @@ class Game {
 
   /** Pick the theme for the screen, and whether the combat layer is up. */
   private syncMusic() {
-    const [id, transpose, tempo] = this.musicFor();
+    const level = this.musicLevel();
+    const [id, transpose, tempo] = this.musicFor(level);
     this.music.setTrack(id, transpose, tempo);
-    this.music.duck(this.menuOpen || this.paused);
-    const p = this.player;
-    const fighting = p.alive && (this.army.live('enemy') > 0 || this.enemies.some((e) => e.alive && e.aggro && e.team === 'enemy'));
-    this.music.target = fighting ? 3 : 0;
+    this.music.duck(this.menuOpen || this.paused || !!this.story);
+    this.music.target = level;
   }
 
-  /** [theme, transpose, tempo] for the current screen. Phase 13 maps the war contexts properly. */
-  musicFor(): [string, number, number] {
-    if (this.screen === 'title') return ['title', 0, 1];
-    return ['forest', 0, 1];
+  private musicBig = false;    // hysteresis for the 60+ live units step
+  portrait = false;            // a phone held upright: the game is frozen behind the rotate prompt
+
+  /**
+   * The intensity ladder (PLAN 13): 0 the calm map (and title, victory); 1 the map under threat
+   * (a muster or an army coming for your land, a fight at one of your nodes); 2 a battle;
+   * 3 60+ live units (off again under 50) or a castle siege past its outer gate; 4 a Lord or the
+   * warlord in the fight.
+   */
+  musicLevel(): number {
+    if (this.screen === 'campaign') {
+      const w = this.war, c = this.camp;
+      const threat = w.musters.some((m) => c.nodes[m.target].owner === 'player')
+        || w.armies.some((a) => a.team === 'enemy' && !a.gone && c.nodes[a.target] && c.nodes[a.target].owner === 'player')
+        || w.fights.some((f) => f.node >= 0 && c.nodes[f.node].owner === 'player');
+      return threat ? 1 : 0;
+    }
+    if (this.screen !== 'battle') return 0;
+    const b = this.battle, p = this.player;
+    if (b.result || !p.alive) return 0;
+    if (b.spec.kind === 'test') {
+      const fighting = this.army.live('enemy') > 0 || this.enemies.some((e) => e.alive && e.aggro && e.team === 'enemy');
+      return fighting ? 2 : 0;
+    }
+    if (b.lord && b.lord.alive && !b.lord.fleeing && (b.lord.aggro || b.spec.warlord && b.gates.every((g) => !g.alive))) return 4;
+    const live = this.army.live('player') + this.army.live('enemy');
+    this.musicBig = this.musicBig ? live >= WAR.musicBigOff : live >= WAR.musicBigOn;
+    const innerGate = b.spec.kind === 'castle' && b.gates.length > 0 && !b.gates[0].alive;
+    return this.musicBig || innerGate ? 3 : 2;
+  }
+
+  /** [theme, transpose, tempo]: the title's theme, 'Above the Storm' for the map, the scenery's theme in battle, the boss theme at 4. */
+  musicFor(level = this.musicLevel()): [string, number, number] {
+    if (this.screen === 'title' || this.screen === 'victory') return ['title', 0, 1];
+    if (this.screen === 'campaign') return ['sky', 0, 1];
+    if (level >= 4) return ['boss', 0, 1];
+    const s = this.battle ? this.battle.spec.scenery : 'forest';
+    return [s === 'coast' || s === 'ruins' ? s : 'forest', 0, 1];
   }
 
   private updateVfx(dt: number) {

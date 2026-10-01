@@ -204,19 +204,20 @@
   <div><b>Magic</b> <span class="k">1</span> Fire <span class="k">2</span> Blizzard <span class="k">3</span> Thunder <span class="k">4</span> Cure</div>
   <div><b>Orders</b> hold <span class="k">Q</span> + direction &nbsp; <b>Potion</b> <span class="k">E</span></div>
   <div><b>Pause</b> <span class="k">P</span> &nbsp; <b>Mute</b> <span class="k">M</span></div>
-  <div><b>Gear / Synthesis / Talents</b> <span class="k">Tab</span></div>
+  <div><b>Menu</b> (gear, forge, talents, knight) <span class="k">Tab</span></div>
+  <div><b>Map</b> drag / <span class="k">WASD</span> pan, wheel / <span class="k">Z</span> zoom, <span class="k">G</span> generals</div>
   <div>On a phone: touch controls and auto lock-on turn on automatically.</div>
   <div><b>Retry</b> <span class="k">R</span> &nbsp; <b>Tuning</b> <span class="k">`</span></div>
   <div>Gamepad works too: <b>&#9723;</b> attack, <b>&#10005;</b> jump, triggers lock-on, hold <b>LB</b> + stick for orders.</div>
 </div>
 
 <footer>
-  Everything enemies drop is a crafting material, a potion or an ether. Press <b>Tab</b> to forge the next
-  weapon tier (more power, slightly more reach) or armour tier (flat damage reduction), and to spend AP in the
-  talent tree &mdash; <b>Dash</b> and the <b>Whirl</b> spin finisher both live there, along with the fourth and
-  fifth combo hits. Bulwarks block anything from the front: go around them, or break the guard with a finisher.
-  Cure spends your entire MP bar and locks it while it recharges. The score follows the fight, climbing
-  when the field fills up. Levels, gear, materials and talents all persist: dying costs you the fight, not the grind.
+  Take back the Verdant Reach from the Umbral Dominion. On the map, attack any enemy node your land borders:
+  villages pay gold, keeps and outposts weaken the castle behind them, and a castle takes its whole territory.
+  Your castles turn gold into troops; send armies along the roads, recruit the Lords you beat as generals,
+  and keep them loyal. Gold buys knight upgrades, first captures of castles and keeps pay skill points for
+  talents, and the forge at any castle you hold turns gold and battle spoils into gear. Three save slots;
+  beat Warlord Garrick Thorne for New Game+.
 </footer>
 
 <div id="debug"></div>
@@ -462,6 +463,7 @@ const WAR = {
     // mass units (Phase 2, PLAN 11.1)
     liveCapDesktop: 100, // live minions per side
     liveCapPhone: 60,
+    musicBigOn: 60, musicBigOff: 50, // intensity 3 at this many live units (both sides), back to 2 under the second
     unitCapacity: 320, // slots in the minion arrays (both sides, plus corpses fading out)
     unitSight: 420, // how far a minion looks for a hostile before marching on the enemy's centre
     eliteSight: 900, // how far an elite looks for a hostile minion
@@ -4618,6 +4620,12 @@ War.UPGRADE = { village: [150, 400], castle: [300, 800], keep: [250, 700] };
  * (drums, a driving bass, brass stabs) fades in on the next bar and the
  * melody moves to a brighter instrument — then fades back out after.
  *
+ * Aerial Conquest adds a war layer (PLAN 13): a snare-roll march and low
+ * brass (saw + square through a lowpass), brought in on bar lines by the
+ * intensity the game asks for (0 calm map, 1 a threatened map, 2 battle,
+ * 3 a big battle or a castle's inner gate, 4 a Lord or the warlord). It
+ * sits under the tune: the lead stays on top.
+ *
  * Notation, so the tunes stay readable:
  *   chords   bars split by '|'; two chords in a bar split by a space.
  *            Roman numerals relative to the key: I ii iii IV V vi viio,
@@ -4875,6 +4883,14 @@ const DRUMS = {
     '6': { kick: [1, 0, 0, 0, 0, 0], snare: [0, 0, 0, 1, 0, 0], hat: [1, 1, 1, 1, 1, 1] },
     'boss': { kick: [1, 0, 0, 1, 1, 0, 0, 0], snare: [0, 0, 1, 0, 0, 0, 1, 0], hat: [1, 1, 1, 1, 1, 1, 1, 1] },
 };
+// The war layer's march (PLAN 13): snare hits per bar, in eighths, and where the roll into the next bar starts.
+const MARCH = {
+    4: { hits: [0, 2, 3, 4, 6], roll: 7 },
+    3: { hits: [0, 2, 3], roll: 5 },
+    6: { hits: [0, 3, 4], roll: 5 },
+};
+/** War layer level by intensity 0-4 (its bus gain). Kept under the melody bus (1.0). */
+const WAR_LAYER = [0, 0.5, 0.6, 0.95, 0.75];
 // Where the brass stabs land in a bar, in eighths.
 const STABS = { 4: [0, 3, 6], 3: [0], 6: [0, 3] };
 class Music {
@@ -4889,6 +4905,9 @@ class Music {
         this.target = 0;
         this.combat = false;
         this.combatTail = 0; // bars left to keep scheduling the combat layer as it fades
+        this.warLevel = 0; // the war layer's gain as applied at the last bar line (WAR_LAYER[target])
+        this.warTail = 0; // bars left to keep scheduling the war layer as it fades
+        this.warNotes = 0; // war-layer events scheduled (for the checks)
         this.track = COMPILED.title;
         this.transpose = 0;
         this.tempo = 1;
@@ -5007,6 +5026,7 @@ class Music {
         this.busBass = bus(0.9, 0.12);
         this.busCombat = bus(0, 0.22);
         this.busPerc = bus(1, 0.18);
+        this.busWar = bus(0, 0.15);
         this.noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
         const nd = this.noise.getChannelData(0);
         for (let i = 0; i < nd.length; i++)
@@ -5055,6 +5075,13 @@ class Music {
                 this.busCombat.gain.setTargetAtTime(want ? 1 : 0, t, ed * 2);
                 this.busHarm.gain.setTargetAtTime(want ? 0.7 : 0.85, t, ed * 2);
             }
+            // the war layer follows the intensity on bar lines too
+            const war = WAR_LAYER[clamp(Math.round(this.target), 0, 4)];
+            this.warTail = war > 0 ? 2 : Math.max(0, this.warTail - 1);
+            if (war !== this.warLevel || this.bar === 0) {
+                this.warLevel = war;
+                this.busWar.gain.setTargetAtTime(war, t, ed * 2);
+            }
         }
         // harmony: pad on each chord change, then the arpeggio and bass
         const chord = bar.chords.find((c) => e >= c.at && e < c.at + c.len);
@@ -5100,6 +5127,8 @@ class Music {
         // heard only while its bus is up)
         if (this.combatTail > 0)
             this.scheduleCombat(t, e, ed, pitches, rootLow);
+        if (this.warTail > 0)
+            this.scheduleWar(t, e, ed, rootLow);
         if (def.shaker)
             this.shaker(t, e % 2 === 0 ? 0.03 : 0.018);
         // advance
@@ -5134,6 +5163,43 @@ class Music {
         }
         if (def.alwaysCombat && e === 0)
             this.timpani(midiHz(rootLow), t, 0.3);
+    }
+    /** The war layer (PLAN 13): a march on the snare with a roll into each bar, and low brass on the root and fifth. */
+    scheduleWar(t, e, ed, rootLow) {
+        const def = this.track.def, m = MARCH[def.meter], bar = this.track.barLen;
+        if (m.hits.includes(e)) {
+            this.snare(t, e === 0 ? 0.1 : 0.06, this.busWar);
+            this.warNotes++;
+        }
+        if (e >= m.roll) {
+            // the roll: four strokes per eighth, rising into the bar line
+            for (let k = 0; k < 4; k++)
+                this.snare(t + k * ed / 4, 0.025 + 0.012 * (k + (e - m.roll) * 4) / 4, this.busWar);
+            this.warNotes++;
+        }
+        if (e === 0) {
+            this.lowBrass(midiHz(rootLow), t, ed * bar * 0.55, 0.05);
+            this.warNotes++;
+        }
+        if (e === Math.floor(bar / 2)) {
+            this.lowBrass(midiHz(rootLow + 7), t, ed * bar * 0.4, 0.04);
+            this.warNotes++;
+        }
+    }
+    /** Low brass for the war layer: saw + square through a lowpass, kept dark so it never covers the tune. */
+    lowBrass(f, t, d, v) {
+        const g = this.gain(0, this.busWar);
+        const lp = this.lowpass(380, g, 0.9);
+        lp.frequency.setValueAtTime(260, t);
+        lp.frequency.linearRampToValueAtTime(520, t + 0.12);
+        lp.frequency.setTargetAtTime(380, t + 0.12, 0.3);
+        const end = t + d + 0.4;
+        this.osc('sawtooth', f, t, end, lp);
+        this.osc('square', f, t, end, this.gain(0.35, lp), 6);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(v, t + 0.08);
+        g.gain.setTargetAtTime(v * 0.75, t + 0.08, 0.3);
+        g.gain.setTargetAtTime(0, t + d, 0.15);
     }
     /** Close-voiced chord tones around `center`, as MIDI notes. */
     voice(ch, center) {
@@ -5349,9 +5415,9 @@ class Music {
         g.gain.setValueAtTime(v, t);
         g.gain.setTargetAtTime(0, t, 0.09);
     }
-    snare(t, v) {
-        this.noiseHit(t, v, 'bandpass', 1900, 0.8, 0.06, this.busCombat);
-        const g = this.gain(0, this.busCombat);
+    snare(t, v, out = this.busCombat) {
+        this.noiseHit(t, v, 'bandpass', 1900, 0.8, 0.06, out);
+        const g = this.gain(0, out);
         this.osc('triangle', 190, t, t + 0.25, g);
         g.gain.setValueAtTime(v * 0.6, t);
         g.gain.setTargetAtTime(0, t, 0.04);
@@ -5366,21 +5432,24 @@ class Music {
         g.gain.setTargetAtTime(0, t, 0.45);
         this.noiseHit(t, v * 0.4, 'lowpass', 300, 0.7, 0.05, this.busCombat);
     }
-    /* ------------------------------------------------------------ preview */
     /** Render a theme offline (for testing and previews): returns the audio. */
-    static async render(id, seconds, combat, volume = 1) {
+    static async render(id, seconds, combat, volume = 1, level = -1) {
         const sr = 32000;
         const ctx = new OfflineAudioContext(2, Math.floor(sr * seconds), sr);
         const m = new Music();
         m.volume = volume;
         m.build(ctx);
         m.useTrack(id, 0, 1);
-        m.target = combat ? 3 : 0;
+        m.target = level >= 0 ? level : combat ? 3 : 0;
         m.nextTime = 0.05;
         m.scheduleUntil(seconds);
+        Music.lastWarNotes = m.warNotes;
         return ctx.startRendering();
     }
 }
+/* ------------------------------------------------------------ preview */
+/** War-layer events the last render() scheduled (for the checks). */
+Music.lastWarNotes = 0;
 /** Peak note levels per instrument, so every theme's tune sits at the same height. */
 const LEVELS = {
     piano: 0.2, bell: 0.16, flute: 0.17, strings: 0.11, brass: 0.1, harp: 0.14,
@@ -12070,6 +12139,8 @@ class Game {
         /** Castle: go for the Lord before the throne (the recruit route). */
         this.botLordFirst = true;
         this.orderT = 0;
+        this.musicBig = false; // hysteresis for the 60+ live units step
+        this.portrait = false; // a phone held upright: the game is frozen behind the rotate prompt
         this.renderer = new Renderer(canvas);
         this.input.attach(canvas);
         SAVE_SLOT = lastSlot();
@@ -13809,6 +13880,13 @@ class Game {
     tick(dt) {
         this.input.pollPad();
         this.input.pollTouch();
+        // a phone held upright gets the rotate prompt (shell.html) and the game holds still behind it: nothing ticks
+        this.portrait = IS_TOUCH && typeof window.matchMedia === 'function' && window.matchMedia('(orientation: portrait)').matches;
+        if (this.portrait) {
+            this.music.duck(true);
+            this.input.endTick();
+            return;
+        }
         this.input.uiMode = this.menuOpen || this.screen !== 'battle' || !!this.battle.result;
         if (TUNING.musicVolume !== this.lastMusicVol) {
             this.lastMusicVol = TUNING.musicVolume;
@@ -14135,18 +14213,52 @@ class Game {
     }
     /** Pick the theme for the screen, and whether the combat layer is up. */
     syncMusic() {
-        const [id, transpose, tempo] = this.musicFor();
+        const level = this.musicLevel();
+        const [id, transpose, tempo] = this.musicFor(level);
         this.music.setTrack(id, transpose, tempo);
-        this.music.duck(this.menuOpen || this.paused);
-        const p = this.player;
-        const fighting = p.alive && (this.army.live('enemy') > 0 || this.enemies.some((e) => e.alive && e.aggro && e.team === 'enemy'));
-        this.music.target = fighting ? 3 : 0;
+        this.music.duck(this.menuOpen || this.paused || !!this.story);
+        this.music.target = level;
     }
-    /** [theme, transpose, tempo] for the current screen. Phase 13 maps the war contexts properly. */
-    musicFor() {
-        if (this.screen === 'title')
+    /**
+     * The intensity ladder (PLAN 13): 0 the calm map (and title, victory); 1 the map under threat
+     * (a muster or an army coming for your land, a fight at one of your nodes); 2 a battle;
+     * 3 60+ live units (off again under 50) or a castle siege past its outer gate; 4 a Lord or the
+     * warlord in the fight.
+     */
+    musicLevel() {
+        if (this.screen === 'campaign') {
+            const w = this.war, c = this.camp;
+            const threat = w.musters.some((m) => c.nodes[m.target].owner === 'player')
+                || w.armies.some((a) => a.team === 'enemy' && !a.gone && c.nodes[a.target] && c.nodes[a.target].owner === 'player')
+                || w.fights.some((f) => f.node >= 0 && c.nodes[f.node].owner === 'player');
+            return threat ? 1 : 0;
+        }
+        if (this.screen !== 'battle')
+            return 0;
+        const b = this.battle, p = this.player;
+        if (b.result || !p.alive)
+            return 0;
+        if (b.spec.kind === 'test') {
+            const fighting = this.army.live('enemy') > 0 || this.enemies.some((e) => e.alive && e.aggro && e.team === 'enemy');
+            return fighting ? 2 : 0;
+        }
+        if (b.lord && b.lord.alive && !b.lord.fleeing && (b.lord.aggro || b.spec.warlord && b.gates.every((g) => !g.alive)))
+            return 4;
+        const live = this.army.live('player') + this.army.live('enemy');
+        this.musicBig = this.musicBig ? live >= WAR.musicBigOff : live >= WAR.musicBigOn;
+        const innerGate = b.spec.kind === 'castle' && b.gates.length > 0 && !b.gates[0].alive;
+        return this.musicBig || innerGate ? 3 : 2;
+    }
+    /** [theme, transpose, tempo]: the title's theme, 'Above the Storm' for the map, the scenery's theme in battle, the boss theme at 4. */
+    musicFor(level = this.musicLevel()) {
+        if (this.screen === 'title' || this.screen === 'victory')
             return ['title', 0, 1];
-        return ['forest', 0, 1];
+        if (this.screen === 'campaign')
+            return ['sky', 0, 1];
+        if (level >= 4)
+            return ['boss', 0, 1];
+        const s = this.battle ? this.battle.spec.scenery : 'forest';
+        return [s === 'coast' || s === 'ruins' ? s : 'forest', 0, 1];
     }
     updateVfx(dt) {
         for (const p of this.particles) {
