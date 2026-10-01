@@ -38,6 +38,7 @@ async function takeNode(page, name) {
 }
 const btn = (page, label) => page.evaluate((label) => { const bs = GAME.mapButtons(), i = bs.findIndex((b) => b.label.startsWith(label)); if (i < 0) return null; const a = GAME.mapButtonAt(i, bs.length); return { x: a.x + (a.w || MAP_BTN.w) / 2, y: a.y + MAP_BTN.h / 2, enabled: bs[i].enabled, label: bs[i].label }; }, label);
 
+const PROD = [8, 13, 20];   // WAR.castleProduction (Phase 14)
 async function desktop(browser) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
@@ -100,8 +101,9 @@ async function desktop(browser) {
     const m = troopTotal(g) - g.ram; r.mix = ['sword', 'spear', 'archer', 'shield'].map((k) => +(g[k] / m).toFixed(2));
     return r;
   });
-  check('DONE: the castle recruits 6 troops/min (L1), paying each one\'s cost; with no gold it waits',
-    prod.noGold === 10 && prod.perMin === 6 && prod.spent === prod.cost, JSON.stringify(prod));
+  // Phase 14 retuned production to WAR.castleProduction (PLAN 5.2's 6 / 10 / 16 -> 8 / 13 / 20)
+  check('DONE: the castle recruits WAR.castleProduction[0] troops/min (L1), paying each one\'s cost; with no gold it waits',
+    prod.noGold === 10 && prod.perMin === PROD[0] && prod.spent === prod.cost, JSON.stringify(prod));
   check('a ram after 30 troops; the garrison stops at its cap (40); the default mix is 40/20/25/15',
     prod.ram === 1 && prod.full === prod.cap && prod.cap === 40 && Math.abs(prod.mix[0] - 0.4) < 0.06 && Math.abs(prod.mix[3] - 0.15) < 0.06, JSON.stringify(prod));
 
@@ -140,8 +142,8 @@ async function desktop(browser) {
     w.upgrade(n, p); r.level = n.level; r.wb3 = GAME.warbandCap(); r.gold = p.gold; r.max = w.upgradeCost(n);
     return r;
   });
-  check('castle upgrades: L2 cap 80 / 10 per min; L3 adds +3 warband cap; 300 + 800 gold; no L4',
-    cast.cap1 === 40 && cast.cap2 === 80 && cast.prod2 === 10 && cast.level === 3 && cast.wb1 === 12 && cast.wb3 === 15 && cast.gold === 900 && cast.max === 0, JSON.stringify(cast));
+  check('castle upgrades: L2 cap 80 / WAR.castleProduction[1] per min; L3 adds +3 warband cap; 300 + 800 gold; no L4',
+    cast.cap1 === 40 && cast.cap2 === 80 && cast.prod2 === PROD[1] && cast.level === 3 && cast.wb1 === 12 && cast.wb3 === 15 && cast.gold === 900 && cast.max === 0, JSON.stringify(cast));
 
   // ---- the warband: fights from the war state, comes home as survivors, lost on a defeat, refills from the garrison
   const wbFight = await page.evaluate(() => {
