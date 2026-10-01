@@ -23,13 +23,139 @@ No dependencies, no bundler, nothing to install.
 | `src/items.ts` | materials, weapon/armour tiers, recipes |
 | `src/talents.ts` | Blade / Arcana / Survival talents, bought with skill points |
 | `src/army.ts` | the minion sim: typed-array slots, uniform grid, minion AI, arrows, `MinionRef`, reserves, orders, rout |
-| `src/war.ts` | the war on the map: village income and stores, convoys (yours and theirs), castle garrisons and recruiting, node upgrades, the warband, ambush specs, saves |
+| `src/war.ts` | the war on the map: village income and stores, convoys (yours and theirs), castle garrisons and recruiting, node upgrades, the warband, armies, the off-screen sim (fights), join / intercept / ambush specs, saves |
 | `src/campaign.ts` | the continent: territories, nodes, roads (data), borders, road paths, ownership, the frontier rule, garrisons and each node's battle spec |
 | `src/battle.ts` | battles: spec, seeded layouts for all eight types, `Structure` (houses, walls, gates, throne, wagons, rings, cell), zones and doors for walled layouts, objectives, scenery palettes, the stub's battle list |
 | `src/music.ts` | AF's adaptive score |
 | `src/entities.ts` | `Player`, `Enemy` (with boss AI), `Projectile`, `Pickup` |
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
+
+# Phase 8: armies, the off-screen sim, join and intercept
+
+**What changed**
+
+- **Armies** (`MapArmy` in `war.ts`, PLAN 7.2):
+  - **Send army:** a castle panel's Send army opens a troop picker: −/+
+    per type (5 at a time), then Half or All. Then Choose target and tap
+    the map:
+    - an enemy node means **attack**;
+    - one of your castles means **reinforce**.
+  - The troops leave the garrison and march along the roads at 22 map
+    units/s, drawn as banners with their count.
+  - An army stops at the first hostile node on its way and fights there.
+  - When it's done, it goes into a castle's garrison, or heads for your
+    nearest castle.
+  - **Generals** (Phase 10) don't exist yet, so every army fights at −20%.
+- **The off-screen sim** (`Fight`, PLAN 7.3):
+  - Strength = Σ count × unit power × the tier's HP scale, × the side's
+    multipliers:
+    - no general ×0.8;
+    - your troops ×0.9 per unit (PLAN 11.2);
+    - fortification: castle 1.3 + 0.1/level, keep 1.5 / 1.7 / 2.0,
+      villages and outposts 1.
+  - Each second, each side loses `WAR.simRate` (0.02) × the other's
+    strength, taken from its cheapest units first, rams last. A side
+    breaks at 20% of its starting strength.
+  - A fight starts when an army reaches a hostile node, or two hostile
+    armies meet on a road (within 30 map units).
+  - A node fight also wears the node's walls and gates, faster the more
+    the attackers outweigh the defenders.
+  - The winner takes or keeps the ground. A captured node flips a level
+    down. The loser's army is gone.
+  - Fights show crossed swords with a two-colour strength bar. Their
+    panel shows both sides' strength now / at the start and the walls'
+    HP.
+  - News of off-screen results pops up on the map ("… TAKEN", "… LOST").
+  - Dominion garrisons now persist between fights (worn down, not reset).
+- **Join (PLAN 7.3):**
+  - Join on your fight starts its battle from where the sim stands:
+    - the defenders' current counts;
+    - the node's battle reinforcements, scaled down by how far the
+      garrison is worn;
+    - your army beside the warband;
+    - the structures at the sim's remaining HP share, outer gate first.
+  - Afterwards:
+    - your army is who's left of it;
+    - the Dominion side keeps the share of each troop type that survived
+      the battle;
+    - the walls keep their damage.
+  - Win or lose decides the fight. Withdrawing hands it back to the sim.
+- **Intercept (PLAN 7.1):** an enemy army in or next to your land can be
+  intercepted. That starts a field battle against exactly its troops. A win
+  breaks it; withdrawing leaves it its survivors.
+- Off-screen, the Dominion can take your nodes: an undefended village
+  falls, and a castle's garrison fights behind its walls.
+- **Debug:** tuning panel → "Dominion army (map)" sends one at your nearest
+  node. Their campaign AI is Phase 9.
+- Saves carry armies, fights and Dominion garrisons. They're validated
+  (roads must be real), and an army whose fight didn't load marches on.
+- New `WAR` keys: `armySpeed`, `armyMeet`, `simRate`, `simBreak`,
+  `simStructRate`, `noGeneralMult`, `fortCastle`, `fortCastlePerLevel`,
+  `keepFort`, `debugArmy`.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13. Phase 8
+suite 17/17.
+
+- **DONE, send an army:**
+  - Castle panel → Send army opened at half the garrison. All took 150;
+    −5 twice left 140.
+  - In target mode, your own village was refused. The enemy node was
+    taken: 140 troops left the 150-troop garrison and the army was
+    selected.
+- **DONE, it walks the road:** its position changed every 3 s along its
+  path. It stopped to fight at the first enemy node (Millbrook Keep:
+  strength 192 vs 113).
+- **DONE, the sim resolves:**
+  - The keep fell to the army.
+  - 113 survivors marched back to The Last Camp and joined its garrison
+    (10 → 123).
+- **PLAN 15 sim checks:**
+  - Equal strength against a castle (×1.4): the defender won.
+  - 2:1: the attacker won.
+  - Two armies meeting on a road fought. The loser broke with 5 of 20 left
+    (not wiped out), and the winner marched on.
+- **DONE, joining carries current counts and structure HP** (a siege of
+  Millbrook Castle 10 s into the sim):
+  - The battle fielded exactly the fight's 32 defenders (the full garrison
+    is 50) plus the 58 of your army beside the 12 of the warband.
+  - It started the walls at the sim's 0.939, with the outer gate damaged.
+- **Withdraw and rejoin:**
+  - Withdrawing handed it back: the sim went on with fewer defenders and
+    the walls at 0.469, the share the battle left them.
+  - Rejoining and winning took the castle and its territory, and the
+    army garrisoned it.
+- **DONE, intercept:**
+  - A Dominion army marching from Hollin Castle on the Last Camp became
+    interceptable near your land. Clicking it → Intercept started a field
+    battle against exactly its 40 troops.
+  - Withdrawing after killing 15 left it 25. A win broke it.
+- **The Dominion off-screen:** a 30-strong army broke against your
+  40-troop castle (garrison 40 → 33). Ten took your undefended village.
+- Armies on the road came back after a reload.
+- **Phone:** tap the castle → Send army → All → Choose target → tap an
+  enemy node → 30 troops march.
+
+**Regressions:** Phase 0–7 suites green (0 30/30, 1 17/17, 2 23/23, 3
+24/24, 4 24/24, 5 46/46 functional with timing 7/8 in band, 6 31/31, 7
+24/24).
+
+**Bugs found and fixed:**
+- The Dominion's garrison mix lacked ram and hound counts, so strength
+  came out as NaN.
+- After a joined battle, the garrison only lost units beyond the battle's
+  extra reinforcements. Now it takes the same per-type share of losses as
+  the whole force.
+
+**Assumed / not checked:**
+- **Sim speed:** `simRate` gives about 40 s for an even fight. Not tuned
+  against play.
+- **Joined node battles:** they keep their battle reinforcements, scaled by
+  the garrison's wear. Intercepts have none (just the army).
+- **Defending your own nodes live:** a join on their attack arrives with
+  the Dominion's offensives (Phase 9). A castle you defend will use the
+  defense layout (village roles reversed) until then.
+- **Your convoys** can't be intercepted yet (Phase 9).
 
 # Phase 7: war state and economy
 

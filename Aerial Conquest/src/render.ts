@@ -495,11 +495,157 @@ class Renderer {
     }
     c.restore();
 
-    // convoys on the roads
+    // convoys and armies on the roads, fights where they stand
     for (const cv of g.war.convoys) this.drawMapConvoy(c, g, cv);
+    for (const a of g.war.armies) this.drawMapArmy(c, g, a);
     // nodes
     for (const n of camp.nodes) this.drawMapNode(c, g, n);
+    for (const f of g.war.fights) this.drawMapFight(c, g, f);
     this.drawMapHud(c, g);
+  }
+
+  /** An army on the road: a banner in its side's colour with its troop count. */
+  private drawMapArmy(c: CanvasRenderingContext2D, g: Game, a: MapArmy) {
+    if (a.fight >= 0) return;   // the fight marker stands for it
+    const q = g.war.armyPos(a), p = g.mapToScreen(q.x, q.y);
+    if (p.x < -30 || p.x > VIEW_W + 30 || p.y < -30 || p.y > VIEW_H + 30) return;
+    const k = lerp(0.85, 1.2, g.mapZoom), mine = a.team === 'player';
+    c.save(); c.translate(p.x, p.y); c.scale(k, k);
+    if (g.war.canIntercept(a)) {
+      c.strokeStyle = `rgba(255,213,74,${0.5 + Math.sin(g.time * 5 + a.id) * 0.3})`; c.lineWidth = 2;
+      c.beginPath(); c.arc(0, -8, 15, 0, Math.PI * 2); c.stroke();
+    }
+    if (g.mapArmy === a.id) { c.strokeStyle = '#ffffff'; c.lineWidth = 2.5; c.beginPath(); c.arc(0, -8, 18, 0, Math.PI * 2); c.stroke(); }
+    c.fillStyle = 'rgba(0,0,0,0.35)'; c.beginPath(); c.ellipse(0, 4, 9, 3, 0, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = '#2a1e10'; c.lineWidth = 2; c.beginPath(); c.moveTo(-7, 4); c.lineTo(-7, -22); c.stroke();
+    c.fillStyle = mine ? '#4f8fe0' : '#b83a44';
+    c.beginPath(); c.moveTo(-7, -22); c.lineTo(10, -22); c.lineTo(10, -8); c.lineTo(1.5, -4); c.lineTo(-7, -8); c.closePath(); c.fill();
+    c.strokeStyle = mine ? '#1d3b66' : '#4a1418'; c.lineWidth = 1.2; c.stroke();
+    c.fillStyle = '#ffffff'; c.font = '800 8px ui-monospace, Menlo, Consolas, monospace'; c.textAlign = 'center';
+    c.fillText(String(troopTotal(a.units)), 1.5, -12);
+    c.restore();
+  }
+
+  /** A fight in progress: crossed swords over a two-colour strength bar (PLAN 7.3). */
+  private drawMapFight(c: CanvasRenderingContext2D, g: Game, f: Fight) {
+    const p = g.mapToScreen(f.x, f.y);
+    if (p.x < -40 || p.x > VIEW_W + 40 || p.y < -40 || p.y > VIEW_H + 40) return;
+    const k = lerp(0.9, 1.2, g.mapZoom), y = -22;
+    const sa = g.war.attStrength(f), sd = g.war.defStrength(f), share = sa + sd > 0 ? sa / (sa + sd) : 0.5;
+    const attMine = f.attackTeam === 'player';
+    c.save(); c.translate(p.x, p.y + y * k); c.scale(k, k);
+    if (g.mapFight === f.id) { c.strokeStyle = '#ffffff'; c.lineWidth = 2.5; c.beginPath(); c.arc(0, 0, 17, 0, Math.PI * 2); c.stroke(); }
+    const wob = Math.sin(g.time * 10) * 0.12;
+    for (const s of [-1, 1]) {
+      c.save(); c.rotate(s * (0.75 + wob));
+      c.fillStyle = '#e8ecf7'; c.fillRect(-1.5, -12, 3, 18);
+      c.fillStyle = '#c99a3a'; c.fillRect(-5, 4, 10, 2.5); c.fillRect(-1.5, 6, 3, 5);
+      c.restore();
+    }
+    // strength bar: attackers on the left in their colour
+    c.fillStyle = 'rgba(0,0,0,0.7)'; c.fillRect(-19, 14, 38, 6);
+    c.fillStyle = attMine ? '#4f8fe0' : '#c0434a'; c.fillRect(-18, 15, 36 * share, 4);
+    c.fillStyle = attMine ? '#c0434a' : '#4f8fe0'; c.fillRect(-18 + 36 * share, 15, 36 * (1 - share), 4);
+    c.restore();
+  }
+
+  /** Shared panel frame; returns the content's x and first baseline. */
+  private panelFrame(c: CanvasRenderingContext2D, title: string, mine: boolean): { x: number; y: number } {
+    const P = MAP_PANEL;
+    c.fillStyle = 'rgba(12,16,30,0.92)'; this.roundRect(c, P.x, P.y, P.w, P.h, 10); c.fill();
+    c.strokeStyle = mine ? '#5f9bff' : '#d0505a'; c.lineWidth = 2; this.roundRect(c, P.x, P.y, P.w, P.h, 10); c.stroke();
+    c.textAlign = 'left'; c.font = '900 18px Georgia, serif'; c.fillStyle = '#ffffff';
+    c.fillText(title, P.x + P.pad, P.y + P.pad + 18);
+    return { x: P.x + P.pad, y: P.y + P.pad + 40 };
+  }
+
+  /** The panel's buttons from Game.mapButtons (drawing and hit-testing share the geometry). */
+  private panelButtons(c: CanvasRenderingContext2D, g: Game, main: string[]) {
+    const btns = g.mapButtons();
+    btns.forEach((b, i) => {
+      const at = g.mapButtonAt(i, btns.length), hot = main.some((m) => b.label.startsWith(m));
+      c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : hot ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
+      this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8); c.fill();
+      c.textAlign = 'center'; c.font = `900 ${hot ? 15 : 14}px ui-monospace, Menlo, Consolas, monospace`;
+      c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
+      c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+    });
+  }
+
+  private panelRow(c: CanvasRenderingContext2D, at: { x: number; y: number }, k: string, v: string, col = PAL.text) {
+    const P = MAP_PANEL;
+    c.textAlign = 'left'; c.fillStyle = PAL.dim; c.font = '600 12px ui-monospace, Menlo, Consolas, monospace'; c.fillText(k, at.x, at.y);
+    c.textAlign = 'right'; c.fillStyle = col; c.font = '700 12px ui-monospace, Menlo, Consolas, monospace'; c.fillText(v, P.x + P.w - P.pad, at.y);
+    at.y += 19;
+  }
+
+  private unitLine(u: Reserve): string { return `${u.sword} sword · ${u.spear} spear · ${u.archer} archer · ${u.shield} shield${u.ram ? ` · ${u.ram} ram` : ""}`; }
+
+  /** A selected army: what it has, where it's going; Intercept for theirs. */
+  private drawArmyPanel(c: CanvasRenderingContext2D, g: Game, a: MapArmy) {
+    const mine = a.team === 'player', camp = g.camp;
+    c.save();
+    const at = this.panelFrame(c, mine ? 'Your army' : 'Dominion army', mine);
+    this.panelRow(c, at, 'Troops', String(troopTotal(a.units)));
+    c.fillStyle = PAL.dim; c.font = '600 10px ui-monospace, Menlo, Consolas, monospace'; c.textAlign = 'left';
+    c.fillText(this.unitLine(a.units), at.x, at.y); at.y += 18;
+    this.panelRow(c, at, a.order === 'attack' ? 'Attacking' : 'Marching to', camp.nodes[a.target].name);
+    this.panelRow(c, at, 'General', a.general || 'none (-20%)', a.general ? PAL.text : '#ffb070');
+    const n = camp.nodes[a.target], N = camp.nodes.length;
+    const here = a.leg < a.path.length - 1 ? a.path[a.leg + 1] : a.path[a.leg];
+    const eta = (camp.dist[here * N + n.id] + (a.leg < a.path.length - 1 ? (1 - a.t) * dist(camp.nodes[a.path[a.leg]].x, camp.nodes[a.path[a.leg]].y, camp.nodes[here].x, camp.nodes[here].y) : 0)) / WAR.armySpeed;
+    this.panelRow(c, at, 'Arrives in', `${Math.ceil(eta)} s`);
+    if (!mine) {
+      c.font = '600 11px ui-monospace, Menlo, Consolas, monospace'; c.textAlign = 'left';
+      c.fillStyle = g.war.canIntercept(a) ? '#c7b8ff' : '#ff9a8a';
+      c.fillText(g.war.canIntercept(a) ? 'Intercept: a field battle against it' : 'out of reach until it nears your land', at.x, at.y + 6);
+    }
+    this.panelButtons(c, g, ['Intercept']);
+    c.restore();
+  }
+
+  /** A selected fight: both sides' strength, the structures; Join if it's yours. */
+  private drawFightPanel(c: CanvasRenderingContext2D, g: Game, f: Fight) {
+    const camp = g.camp, w = g.war, attMine = f.attackTeam === 'player';
+    const where = f.node >= 0 ? camp.nodes[f.node].name : 'Battle on the road';
+    c.save();
+    const at = this.panelFrame(c, where, attMine);
+    const sa = w.attStrength(f), sd = w.defStrength(f);
+    this.panelRow(c, at, attMine ? 'Your attack' : 'Their attack', `${Math.round(sa)} / ${Math.round(f.startAtt)}`, attMine ? '#9fc8ff' : '#ff9a8a');
+    this.panelRow(c, at, attMine ? 'Their defense' : 'Your defense', `${Math.round(sd)} / ${Math.round(f.startDef)}`, attMine ? '#ff9a8a' : '#9fc8ff');
+    if (f.node >= 0) this.panelRow(c, at, 'Walls and gates', `${Math.round(f.structure * 100)}%`);
+    this.panelRow(c, at, 'Breaks at', `${Math.round(WAR.simBreak * 100)}% of its start`);
+    const P = MAP_PANEL, bw = P.w - P.pad * 2, share = sa + sd > 0 ? sa / (sa + sd) : 0.5;
+    c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(at.x, at.y, bw, 10);
+    c.fillStyle = attMine ? '#4f8fe0' : '#c0434a'; c.fillRect(at.x, at.y, bw * share, 10);
+    c.fillStyle = attMine ? '#c0434a' : '#4f8fe0'; c.fillRect(at.x + bw * share, at.y, bw * (1 - share), 10);
+    at.y += 30;
+    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace'; c.textAlign = 'left'; c.fillStyle = '#c7b8ff';
+    if (w.joinSpec(f)) c.fillText('Join: fight it yourself, from where it stands', at.x, at.y);
+    this.panelButtons(c, g, ['Join']);
+    c.restore();
+  }
+
+  /** Send army: troops per type with -/+, Half / All, then a target (PLAN 7.2). */
+  private drawSendPanel(c: CanvasRenderingContext2D, g: Game) {
+    const n = g.camp.nodes[g.sendFrom], gar = g.war.garrison[n.id] || emptyReserve(), P = MAP_PANEL, S = MAP_SEND;
+    c.save();
+    this.panelFrame(c, `Send from ${n.name}`, true);
+    const names: Record<string, string> = { sword: 'Swordsmen', spear: 'Spearmen', archer: 'Archers', shield: 'Shieldbearers', ram: 'Siege rams' };
+    SEND_TYPES.forEach((k, i) => {
+      const y = P.y + S.y0 + i * S.rowH;
+      c.textAlign = 'left'; c.font = '700 12px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = PAL.text;
+      c.fillText(names[k], P.x + P.pad, y + 19);
+      c.fillStyle = g.sendUnits[k] ? '#ffd54a' : PAL.dim;
+      c.fillText(`${g.sendUnits[k]} / ${gar[k]}`, P.x + P.pad + 118, y + 19);
+    });
+    for (const h of g.sendHits()) {
+      c.fillStyle = 'rgba(40,50,80,0.95)'; this.roundRect(c, h.x, h.y, h.w, h.h, 6); c.fill();
+      c.fillStyle = '#ffffff'; c.textAlign = 'center'; c.font = `900 ${h.label.length > 1 ? 13 : 18}px ui-monospace, Menlo, Consolas, monospace`;
+      c.fillText(h.label === '-' ? '−' : h.label, h.x + h.w / 2, h.y + h.h / 2 + 5);
+    }
+    this.panelButtons(c, g, ['Choose']);
+    c.restore();
   }
 
   /** A convoy: a small covered wagon in its side's colour, gold aboard; ambushable ones pulse. */
@@ -659,8 +805,18 @@ class Renderer {
     c.fillStyle = 'rgba(10,14,28,0.6)'; c.fillRect(0, VIEW_H - 24, VIEW_W, 24);
     c.fillStyle = 'rgba(232,236,247,0.75)'; c.fillText(help, VIEW_W / 2, VIEW_H - 8);
     c.restore();
-    const cv = g.selectedConvoy();
-    if (cv) this.drawConvoyPanel(c, g, cv);
+    const cv = g.selectedConvoy(), ar = g.selectedArmy(), fi = g.selectedFight();
+    if (g.mapMode === 'send') this.drawSendPanel(c, g);
+    else if (g.mapMode === 'target') {
+      c.save();
+      c.fillStyle = 'rgba(10,14,28,0.85)'; this.roundRect(c, VIEW_W / 2 - 290, MAP_BAR.h + 8, 580, 30, 8); c.fill();
+      c.textAlign = 'center'; c.font = '800 13px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = '#ffd54a';
+      c.fillText(`${troopTotal(g.sendUnits)} TROOPS: TAP AN ENEMY NODE TO ATTACK, OR YOUR CASTLE  ·  ESC BACK`, VIEW_W / 2, MAP_BAR.h + 28);
+      c.restore();
+    }
+    else if (cv) this.drawConvoyPanel(c, g, cv);
+    else if (ar) this.drawArmyPanel(c, g, ar);
+    else if (fi) this.drawFightPanel(c, g, fi);
     else if (g.mapSel >= 0) this.drawNodePanel(c, g, camp.nodes[g.mapSel]);
     this.drawNotices(c, g);
   }

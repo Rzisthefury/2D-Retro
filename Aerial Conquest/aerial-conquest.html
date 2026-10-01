@@ -530,6 +530,16 @@ const WAR = {
     enemyConvoyMax: 3, // ...at most this many on the roads
     enemyConvoyCargo: 60, // ...each carrying this x territory tier
     autosaveEvery: 60, // seconds on the map between autosaves (PLAN 13)
+    // armies and the off-screen sim (Phase 8, PLAN 7.2 / 7.3)
+    armySpeed: 22, // map units / s
+    armyMeet: 30, // two hostile armies this close on the map fight
+    simRate: 0.02, // per sim second, a side loses this x the other's strength (~40 s for an even fight)
+    simBreak: 0.2, // a side breaks at this share of its starting strength
+    simStructRate: 0.012, // a node's structures wear this much per second, x the attackers' share of the strength
+    noGeneralMult: 0.8, // armies without a general fight at -20%
+    fortCastle: 1.3, fortCastlePerLevel: 0.1, // castle fortification 1.3 + 0.1 / level
+    keepFort: [1.5, 1.7, 2.0], // keep defense multiplier by level (PLAN 5.2)
+    debugArmy: 40, // the debug panel's Dominion army
     // the Phase 0 test battlefield
     testField: { w: 1920, h: 1200 },
     testFieldTier: 1,
@@ -577,7 +587,10 @@ const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 /** The campaign map's node panel and its buttons (render and hit-testing share these). */
 const MAP_PANEL = { x: 640, y: 62, w: 306, h: 412, pad: 14 };
 const MAP_BTN = { w: 278, h: 46, gap: 8 };
-const MAP_BAR = { h: 44 }; // the top bar: treasury, warband, skill points, territories
+const MAP_BAR = { h: 44 };
+/** The Send army panel: a row per troop type with -/+ (step), then Half / All. */
+const MAP_SEND = { y0: 74, rowH: 36, btnW: 44, btnH: 30, step: 5, quickH: 34 };
+const SEND_TYPES = ['sword', 'spear', 'archer', 'shield', 'ram']; // the top bar: treasury, warband, skill points, territories
 const CAMP_ROW = { x: 70, y0: 170, w: 400, h: 50, gap: 8, colGap: 20, perCol: 5 }; // the campaign stub's battle list: two columns
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
 // How the hero and the sword are drawn. Colours still come from the
@@ -2330,6 +2343,36 @@ class Battle {
                 this.layConvoy(rng);
                 break;
         }
+        if (spec.structure !== undefined && spec.structure < 1)
+            this.applyWear(spec.structure);
+    }
+    /** The structures that wear down in an off-screen siege, in the order they fall: gates, houses, the throne. */
+    wearable() {
+        const rank = (s) => s.kind === 'gate' ? 0 : s.kind === 'building' ? 1 : 2;
+        return this.structures.filter((s) => s.kind === 'gate' || s.kind === 'building' || s.kind === 'throne').sort((a, b) => rank(a) - rank(b));
+    }
+    /** Start with the structures at `share` of their total HP (a joined fight, PLAN 7.3), the outer ones worn first. */
+    applyWear(share) {
+        const ws = this.wearable();
+        let cut = ws.reduce((s, x) => s + x.maxHp, 0) * (1 - clamp(share, 0, 1));
+        for (const s of ws) {
+            const d = Math.min(cut, s.hp);
+            s.hp -= d;
+            cut -= d;
+            if (s.hp <= 0) {
+                s.hp = 0;
+                s.burnT = 99;
+                if (s.kind === 'gate')
+                    this.navCache.clear();
+            }
+            if (cut <= 0)
+                break;
+        }
+    }
+    /** The structures' remaining share of their total HP (handed back to the sim when you leave). */
+    wear() {
+        const ws = this.wearable(), max = ws.reduce((s, x) => s + x.maxHp, 0);
+        return max ? ws.reduce((s, x) => s + x.hp, 0) / max : 1;
     }
     of(kind) { return this.structures.filter((s) => s.kind === kind); }
     get houses() { return this.of('building'); }
@@ -3138,6 +3181,28 @@ class Campaign {
  * Armies on the road, the off-screen sim (Phase 8) and the Dominion's
  * campaign AI (Phase 9) build on this.
  * ========================================================================= */
+/** An off-screen fight (PLAN 7.3): an army at a hostile node, or two armies on a road. */
+class Fight {
+    constructor(id, node, x, y, attackers, defenders) {
+        this.id = id;
+        this.node = node;
+        this.x = x;
+        this.y = y;
+        this.attackers = attackers;
+        this.defenders = defenders;
+        this.attackTeam = 'player';
+        this.tier = 1;
+        this.startAtt = 0;
+        this.startDef = 0; // strengths when it began (a side breaks at 20%)
+        this.lossA = 0;
+        this.lossD = 0; // raw power lost but not yet a whole unit
+        this.structure = 1; // node fights: the structures' remaining HP share
+        this.over = false;
+        this.winner = null;
+        this.joined = false; // the knight is fighting it live
+    }
+    static str(w, a, f) { return War.strength(a.units, f.tier, w.mult(a.team, a.general)); }
+}
 /** Recruit mixes a castle can be set to (PLAN 6: default auto-balance 40/20/25/15). */
 const RECRUIT_MIXES = [
     { name: 'Balanced', mix: { sword: 0.4, spear: 0.2, archer: 0.25, shield: 0.15 } },
@@ -3155,6 +3220,12 @@ class War {
         this.enemyConvoyT = 0;
         this.warband = emptyReserve(); // the knight's own troops (PLAN 7.2)
         this.delivered = 0; // gold delivered by your convoys (for the HUD and checks)
+        this.armies = [];
+        this.fights = [];
+        this.nextArmyId = 1;
+        this.nextFightId = 1;
+        this.captured = []; // nodes that changed hands off-screen since the map last looked
+        this.results = []; // fights decided since the map last looked
         this.camp = camp;
         const N = camp.nodes.length;
         this.stock = new Array(N).fill(0);
@@ -3163,6 +3234,7 @@ class War {
         this.prod = new Array(N).fill(0);
         this.sinceRam = new Array(N).fill(0);
         this.mix = new Array(N).fill(0);
+        this.nodeForce = new Array(N).fill(null);
         this.reset();
     }
     /** A fresh war: the Last Camp's garrison and a full warband. */
@@ -3175,6 +3247,11 @@ class War {
         this.mix.fill(0);
         this.garrison.fill(null);
         this.convoys = [];
+        this.armies = [];
+        this.fights = [];
+        this.captured = [];
+        this.results = [];
+        this.nodeForce.fill(null);
         this.enemyConvoyT = WAR.enemyConvoyEvery * 0.5;
         this.delivered = 0;
         for (const n of this.camp.nodes)
@@ -3319,6 +3396,7 @@ class War {
             }
         }
         this.convoys = this.convoys.filter((c) => c.leg < c.path.length - 1);
+        this.tickArmies(dt);
         this.refillWarband();
     }
     /** PLAN 6: castles recruit continuously while there's gold, up to their cap; a ram every 30. */
@@ -3437,6 +3515,369 @@ class War {
             this.convoyT[n.id] = WAR.convoyEvery;
         }
     }
+    /* ------------------------------------------------- armies (Phase 8, PLAN 7.2) */
+    /** Strength (PLAN 7.3): sum of count x power x tier scale, x the side's multipliers. */
+    static strength(u, tier, mult) {
+        let s = 0;
+        for (const k of UNIT_ORDER)
+            s += u[k] * UNITS[k].power;
+        return s * TIER_SCALING.hpMultiplier(tier) * mult;
+    }
+    /** Fortification of a node's defenders (PLAN 7.3). */
+    fortification(n) {
+        if (n.type === 'castle')
+            return WAR.fortCastle + WAR.fortCastlePerLevel * n.level;
+        if (n.type === 'keep')
+            return WAR.keepFort[n.level - 1];
+        return 1;
+    }
+    /** A side's multiplier besides fortification: no general -20% (generals arrive in Phase 10); your troops' per-unit edge. */
+    sideMult(team, general) {
+        return (general ? 1 : WAR.noGeneralMult) * (team === 'player' ? WAR.playerTroopMult : 1);
+    }
+    /** Where an army is on the map. */
+    armyPos(a) {
+        if (a.leg >= a.path.length - 1) {
+            const n = this.camp.nodes[a.path[a.path.length - 1]];
+            return { x: n.x, y: n.y };
+        }
+        return this.camp.roadPoint(a.path[a.leg], a.path[a.leg + 1], a.t);
+    }
+    /** The node an army stands at (fighting or arrived), or -1 while on a road. */
+    armyNode(a) { return a.t === 0 ? a.path[a.leg] : -1; }
+    /** Send troops from one of your castles: to an enemy node (attack) or one of your castles (reinforce). */
+    sendArmy(from, units, target) {
+        const g = this.garrison[from.id];
+        if (!g || from.owner !== 'player' || from.id === target.id)
+            return null;
+        if (troopTotal(units) <= 0 || UNIT_ORDER.some((k) => units[k] > g[k]))
+            return null;
+        if (target.owner === 'player' && target.type !== 'castle')
+            return null;
+        const path = this.path(from.id, target.id);
+        if (path.length < 2)
+            return null;
+        for (const k of UNIT_ORDER)
+            g[k] -= units[k];
+        const a = { id: this.nextArmyId++, team: 'player', general: null, units: { ...units }, path, leg: 0, t: 0, target: target.id, order: target.owner === 'player' ? 'reinforce' : 'attack', fight: -1 };
+        this.armies.push(a);
+        return a;
+    }
+    /** A Dominion army marching from a node (Phase 9's AI decides when; the debug panel can send one). */
+    spawnEnemyArmy(from, target, units) {
+        const path = this.path(from, target);
+        if (path.length < 2)
+            return null;
+        const a = { id: this.nextArmyId++, team: 'enemy', general: null, units: { ...units }, path, leg: 0, t: 0, target, order: 'attack', fight: -1 };
+        this.armies.push(a);
+        return a;
+    }
+    /** The units holding a node: your castles' garrisons, the Dominion's (reduced by fighting) garrisons. */
+    defendersOf(n) {
+        if (n.owner === 'player')
+            return n.type === 'castle' ? (this.garrison[n.id] || (this.garrison[n.id] = emptyReserve())) : (this.nodeForce[n.id] || (this.nodeForce[n.id] = emptyReserve()));
+        return this.nodeForce[n.id] || (this.nodeForce[n.id] = { ...emptyReserve(), ...foeMix(this.camp.garrison(n)) });
+    }
+    fightAt(node) { return this.fights.find((f) => f.node === node); }
+    /** Armies march; arrivals and meetings start fights; fights run (PLAN 7.3). */
+    tickArmies(dt) {
+        const camp = this.camp;
+        for (const a of this.armies) {
+            if (a.fight >= 0)
+                continue;
+            let move = WAR.armySpeed * dt;
+            while (move > 0 && a.leg < a.path.length - 1) {
+                const p = camp.nodes[a.path[a.leg]], q = camp.nodes[a.path[a.leg + 1]];
+                const len = Math.max(1, dist(p.x, p.y, q.x, q.y)), left = (1 - a.t) * len;
+                if (move < left) {
+                    a.t += move / len;
+                    move = 0;
+                    break;
+                }
+                move -= left;
+                a.leg++;
+                a.t = 0;
+                if (this.arrive(a, camp.nodes[a.path[a.leg]]))
+                    break;
+            }
+        }
+        this.armies = this.armies.filter((a) => !a.gone);
+        // two hostile armies on the same road meet
+        for (const a of this.armies)
+            for (const b of this.armies) {
+                if (a.team !== 'player' || b.team !== 'enemy' || a.fight >= 0 || b.fight >= 0)
+                    continue;
+                const pa = this.armyPos(a), pb = this.armyPos(b);
+                if (dist(pa.x, pa.y, pb.x, pb.y) < WAR.armyMeet)
+                    this.startFight({ node: -1, x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2, attackers: [a.id], defenders: [b.id] });
+            }
+        for (const f of this.fights)
+            this.simFight(f, dt);
+        this.fights = this.fights.filter((f) => !f.over);
+        this.armies = this.armies.filter((a) => !a.gone);
+    }
+    /** An army reaches a node on its path. Returns true if it stops there. */
+    arrive(a, n) {
+        if (n.owner !== a.team) {
+            // hostile: fight here (with any of its side already attacking it)
+            const f = this.fightAt(n.id);
+            if (f && f.attackTeam === a.team) {
+                const lead = this.armies.find((x) => x.id === f.attackers[0]);
+                for (const k of UNIT_ORDER)
+                    lead.units[k] += a.units[k];
+                f.startAtt += Fight.str(this, a, f); // the newcomer counts toward the attackers' starting strength
+                a.gone = true;
+            }
+            else if (!f) {
+                this.startFight({ node: n.id, x: n.x, y: n.y, attackers: [a.id], defenders: [] });
+            }
+            else
+                a.gone = true; // a fight of the other side's (can't happen yet) — the army waits it out off the map
+            return true;
+        }
+        if (n.id === a.target || a.leg >= a.path.length - 1) {
+            this.settleAt(a, n);
+            return true;
+        }
+        return false;
+    }
+    /** An army done at one of its own nodes: castles take it into the garrison; elsewhere it heads for the nearest castle. */
+    settleAt(a, n) {
+        if (n.type === 'castle') {
+            if (a.team === 'player') {
+                const g = this.garrison[n.id] || (this.garrison[n.id] = emptyReserve());
+                for (const k of UNIT_ORDER)
+                    g[k] += a.units[k];
+            }
+            else {
+                const g = this.defendersOf(n);
+                for (const k of UNIT_ORDER)
+                    g[k] += a.units[k];
+            }
+            a.gone = true;
+            return;
+        }
+        const to = this.nearestCastle(n.id, a.team);
+        const path = to >= 0 ? this.path(n.id, to) : [];
+        if (path.length < 2) {
+            a.gone = true;
+            return;
+        }
+        a.path = path;
+        a.leg = 0;
+        a.t = 0;
+        a.target = to;
+        a.order = 'reinforce';
+    }
+    startFight(o) {
+        const f = new Fight(this.nextFightId++, o.node, o.x, o.y, o.attackers, o.defenders);
+        for (const id of [...o.attackers, ...o.defenders]) {
+            const a = this.armies.find((x) => x.id === id);
+            if (a)
+                a.fight = f.id;
+        }
+        const att = this.armies.find((x) => x.id === o.attackers[0]);
+        f.attackTeam = att.team;
+        f.tier = o.node >= 0 ? this.camp.battleTier(this.camp.nodes[o.node]) : this.camp.territories[this.camp.nodes[att.path[att.leg]].territory].tier;
+        f.startAtt = Fight.str(this, att, f);
+        f.startDef = this.defStrength(f);
+        this.fights.push(f);
+    }
+    /** The defending side's strength: the node's holders (fortified) or the other army. */
+    defStrength(f) {
+        if (f.node >= 0) {
+            const n = this.camp.nodes[f.node];
+            return War.strength(this.defendersOf(n), f.tier, this.fortification(n) * this.sideMult(n.owner, null));
+        }
+        const d = this.armies.find((x) => x.id === f.defenders[0]);
+        return d ? Fight.str(this, d, f) : 0;
+    }
+    attStrength(f) {
+        const a = this.armies.find((x) => x.id === f.attackers[0]);
+        return a ? Fight.str(this, a, f) : 0;
+    }
+    mult(team, general) { return this.sideMult(team, general); }
+    /**
+     * One stretch of an off-screen fight (PLAN 7.3): each side loses simRate x the
+     * other's strength, taken from its cheapest units first (rams last); a side
+     * under 20% of its starting strength breaks. Structures wear down as it goes.
+     */
+    simFight(f, dt) {
+        if (f.joined || f.over)
+            return;
+        const camp = this.camp;
+        const att = this.armies.find((x) => x.id === f.attackers[0]);
+        if (!att) {
+            f.over = true;
+            return;
+        }
+        const n = f.node >= 0 ? camp.nodes[f.node] : null;
+        const defArmy = n ? null : this.armies.find((x) => x.id === f.defenders[0]) || null;
+        const defUnits = n ? this.defendersOf(n) : defArmy ? defArmy.units : emptyReserve();
+        const aMult = this.sideMult(att.team, att.general), dMult = n ? this.fortification(n) * this.sideMult(n.owner, null) : this.sideMult(defArmy.team, defArmy.general);
+        const sA = War.strength(att.units, f.tier, aMult), sD = War.strength(defUnits, f.tier, dMult);
+        const scale = TIER_SCALING.hpMultiplier(f.tier);
+        f.lossA += WAR.simRate * sD * dt / (aMult * scale);
+        f.lossD += WAR.simRate * sA * dt / (dMult * scale);
+        f.lossA = War.takeLosses(att.units, f.lossA);
+        f.lossD = War.takeLosses(defUnits, f.lossD);
+        if (n)
+            f.structure = Math.max(0, f.structure - WAR.simStructRate * dt * sA / Math.max(1, sA + sD));
+        const nowA = War.strength(att.units, f.tier, aMult), nowD = War.strength(defUnits, f.tier, dMult);
+        if (nowD <= f.startDef * WAR.simBreak)
+            this.endFight(f, att.team);
+        else if (nowA <= f.startAtt * WAR.simBreak)
+            this.endFight(f, n ? n.owner : defArmy.team);
+    }
+    /** Remove `points` of raw power from a force, cheapest units first, rams last. Returns the carry. */
+    static takeLosses(u, points) {
+        const order = ['sword', 'spear', 'archer', 'shield', 'hound', 'ram'];
+        for (const k of order) {
+            while (u[k] > 0 && points >= UNITS[k].power) {
+                u[k]--;
+                points -= UNITS[k].power;
+            }
+            if (u[k] > 0)
+                return points;
+        }
+        return 0;
+    }
+    /** A fight is decided: the winner keeps or takes the ground; the loser breaks (its army is gone). */
+    endFight(f, winner) {
+        f.over = true;
+        f.winner = winner;
+        const camp = this.camp;
+        const att = this.armies.find((x) => x.id === f.attackers[0]);
+        if (f.node >= 0) {
+            const n = camp.nodes[f.node];
+            if (att && winner === att.team) {
+                // the node changes hands, a level down (PLAN 5.3); the attackers move in
+                n.owner = att.team;
+                n.level = Math.max(1, n.level - 1);
+                this.onCapture(n);
+                this.nodeForce[n.id] = null; // a fresh holder: your castles keep their garrison in `garrison`; a node they retake starts full again (their refill is Phase 9)
+                att.fight = -1;
+                this.settleAt(att, n);
+                this.captured.push(n.id);
+            }
+            else if (att)
+                att.gone = true;
+        }
+        else {
+            const def = this.armies.find((x) => x.id === f.defenders[0]);
+            for (const a of [att, def])
+                if (a) {
+                    if (a.team === winner)
+                        a.fight = -1;
+                    else
+                        a.gone = true;
+                }
+        }
+        this.results.push({ fight: f.id, node: f.node, winner, x: f.x, y: f.y });
+    }
+    /** Field battles: an enemy army inside or bordering your land can be intercepted (PLAN 7.1). */
+    canIntercept(a) {
+        if (a.team !== 'enemy' || a.fight >= 0)
+            return false;
+        const ids = a.leg < a.path.length - 1 ? [a.path[a.leg], a.path[a.leg + 1]] : [a.path[a.leg]];
+        return ids.some((id) => {
+            const t = this.camp.territories[this.camp.nodes[id].territory];
+            return t.nodes.some((m) => m.owner === 'player') || t.neighbors.some((k) => this.camp.holds(k, 'player'));
+        });
+    }
+    /** A field battle against an army on the road (intercept) or with your army (a field fight you join). */
+    fieldSpecFor(enemy, mine, tier) {
+        const n = this.camp.nodes[enemy.path[enemy.leg]], t = this.camp.territories[n.territory];
+        const foes = { ...enemy.units }, allies = mine ? { ...mine.units } : {};
+        return {
+            kind: 'field', name: `Dominion army near ${n.name}`, tier, scenery: t.scenery, seed: 7000 + enemy.id * 13,
+            foes, foeElites: ['shade'], commander: 'bruiser', allies, armyId: enemy.id,
+        };
+    }
+    /** Join a fight in progress (PLAN 7.3): the battle starts with its current counts and structure HP. */
+    joinSpec(f) {
+        const att = this.armies.find((x) => x.id === f.attackers[0]);
+        if (!att)
+            return null;
+        if (f.node < 0) {
+            const def = this.armies.find((x) => x.id === f.defenders[0]);
+            if (!def)
+                return null;
+            const mine = att.team === 'player' ? att : def, theirs = att.team === 'player' ? def : att;
+            const s = this.fieldSpecFor(theirs, mine, f.tier);
+            s.fightId = f.id;
+            return s;
+        }
+        const n = this.camp.nodes[f.node];
+        if (att.team !== 'player')
+            return null; // defending your nodes arrives with the Dominion's offensives (Phase 9)
+        const s = this.camp.battleSpec(n);
+        const d = this.defendersOf(n), full = this.camp.garrison(n);
+        s.foes = { ...d };
+        // the battle's reinforcements shrink with the garrison the sim has already worn down
+        const k = full > 0 ? troopTotal(d) / full : 1;
+        s.reinforce = foeMix(Math.round(WAR.battleReinforce[s.kind] * clamp(k, 0, 1)));
+        s.allies = { ...att.units };
+        s.structure = f.structure;
+        s.fightId = f.id;
+        return s;
+    }
+    /**
+     * A joined fight's battle is over (PLAN 7.3). Survivors carry over: your
+     * army is who's left of it; their side keeps the share of each type that
+     * survived the battle (`share`, 0..1),
+     * the structures keep their damage; a win or loss decides it, leaving hands
+     * it back to the sim. Returns the node captured, or -1.
+     */
+    resolveJoin(fightId, result, ally, share, structure) {
+        const f = this.fights.find((x) => x.id === fightId);
+        if (!f)
+            return -1;
+        const att = this.armies.find((x) => x.id === f.attackers[0]);
+        const def = f.node < 0 ? this.armies.find((x) => x.id === f.defenders[0]) : undefined;
+        const mine = att && att.team === 'player' ? att : def, theirs = mine === att ? def : att;
+        if (mine)
+            mine.units = { ...ally };
+        const cap = (u) => { for (const k of UNIT_ORDER)
+            u[k] = Math.round(u[k] * share[k]); };
+        if (f.node >= 0)
+            cap(this.defendersOf(this.camp.nodes[f.node]));
+        else if (theirs)
+            cap(theirs.units);
+        f.structure = clamp(structure, 0, 1);
+        f.joined = false;
+        let took = -1;
+        if (result === 'win') {
+            this.endFight(f, 'player');
+            if (f.node >= 0 && this.camp.nodes[f.node].owner === 'player')
+                took = f.node;
+        }
+        else if (result === 'lose')
+            this.endFight(f, 'enemy');
+        else {
+            f.lossA = f.lossD = 0;
+        }
+        this.fights = this.fights.filter((x) => !x.over);
+        this.armies = this.armies.filter((x) => !x.gone);
+        this.results = this.results.filter((r) => r.fight !== f.id); // the knight was there: no news banner
+        this.captured = [];
+        return took;
+    }
+    /** An intercept's battle is over: a win breaks the army, otherwise it marches on with what it has left. */
+    resolveIntercept(armyId, result, share) {
+        const a = this.armies.find((x) => x.id === armyId);
+        if (!a)
+            return;
+        if (result === 'win') {
+            a.gone = true;
+            this.armies = this.armies.filter((x) => !x.gone);
+            return;
+        }
+        for (const k of UNIT_ORDER)
+            a.units[k] = Math.round(a.units[k] * share[k]);
+        if (troopTotal(a.units) === 0)
+            this.armies = this.armies.filter((x) => x !== a);
+    }
     /* --------------------------------------------------------------- saves */
     save() {
         const r = (x) => x ? UNIT_ORDER.map((k) => x[k]) : null;
@@ -3445,6 +3886,10 @@ class War {
             garrison: this.garrison.map(r), prod: this.prod.map((s) => +s.toFixed(2)), sinceRam: this.sinceRam, mix: this.mix,
             warband: r(this.warband), enemyConvoyT: Math.round(this.enemyConvoyT), delivered: this.delivered,
             convoys: this.convoys.map((c) => [c.team === 'player' ? 1 : 0, c.path, c.leg, +c.t.toFixed(3), c.cargo]),
+            armies: this.armies.map((a) => [a.id, a.team === 'player' ? 1 : 0, UNIT_ORDER.map((k) => a.units[k]), a.path, a.leg, +a.t.toFixed(3), a.target, a.order === 'attack' ? 1 : 0, a.fight]),
+            fights: this.fights.map((f) => [f.id, f.node, Math.round(f.x), Math.round(f.y), f.attackers, f.defenders, f.attackTeam === 'player' ? 1 : 0, f.tier, +f.startAtt.toFixed(2), +f.startDef.toFixed(2), +f.lossA.toFixed(3), +f.lossD.toFixed(3), +f.structure.toFixed(3)]),
+            nodeForce: this.nodeForce.map(r),
+            nextArmyId: this.nextArmyId, nextFightId: this.nextFightId,
         };
     }
     /** Restore, keeping only what fits this continent (PLAN 13: validate on load). */
@@ -3475,6 +3920,42 @@ class War {
             this.warband = wb;
         this.enemyConvoyT = clamp(+s.enemyConvoyT || 0, 0, WAR.enemyConvoyEvery);
         this.delivered = Math.max(0, +s.delivered || 0);
+        if (Array.isArray(s.nodeForce) && s.nodeForce.length === N)
+            this.nodeForce = s.nodeForce.map((x) => res(x));
+        const okPath = (path) => Array.isArray(path) && path.length >= 2 && path.every((id, i) => id >= 0 && id < N && (i === 0 || this.camp.links[path[i - 1]].includes(id)));
+        if (Array.isArray(s.armies)) {
+            for (const a of s.armies) {
+                if (!Array.isArray(a) || !okPath(a[3]))
+                    continue;
+                const u = res(a[2]);
+                if (!u)
+                    continue;
+                const path = a[3];
+                this.armies.push({ id: a[0] | 0, team: a[1] === 1 ? 'player' : 'enemy', general: null, units: u, path, leg: clamp(a[4] | 0, 0, path.length - 1), t: clamp(+a[5] || 0, 0, 1), target: clamp(a[6] | 0, 0, N - 1), order: a[7] === 1 ? 'attack' : 'reinforce', fight: a[8] | 0 });
+            }
+        }
+        if (Array.isArray(s.fights)) {
+            for (const x of s.fights) {
+                if (!Array.isArray(x) || !Array.isArray(x[4]) || !Array.isArray(x[5]))
+                    continue;
+                const f = new Fight(x[0] | 0, clamp(x[1] | 0, -1, N - 1), +x[2] || 0, +x[3] || 0, x[4].map((v) => v | 0), x[5].map((v) => v | 0));
+                f.attackTeam = x[6] === 1 ? 'player' : 'enemy';
+                f.tier = clamp(x[7] | 0, 1, 5);
+                f.startAtt = +x[8] || 0;
+                f.startDef = +x[9] || 0;
+                f.lossA = +x[10] || 0;
+                f.lossD = +x[11] || 0;
+                f.structure = clamp(+x[12] || 0, 0, 1);
+                if (f.attackers.every((id) => this.armies.some((a) => a.id === id)))
+                    this.fights.push(f);
+            }
+        }
+        // an army that says it's fighting a fight that didn't load marches on
+        for (const a of this.armies)
+            if (a.fight >= 0 && !this.fights.some((f) => f.id === a.fight))
+                a.fight = -1;
+        this.nextArmyId = Math.max(1, +s.nextArmyId || 1, ...this.armies.map((a) => a.id + 1));
+        this.nextFightId = Math.max(1, +s.nextFightId || 1, ...this.fights.map((f) => f.id + 1));
         if (Array.isArray(s.convoys)) {
             for (const c of s.convoys) {
                 if (!Array.isArray(c) || !Array.isArray(c[1]) || c[1].length < 2 || c[1].some((id) => !(id >= 0 && id < N)))
@@ -6432,13 +6913,232 @@ class Renderer {
             c.fillText(`tier ${t.tier}`, p.x, p.y + size);
         }
         c.restore();
-        // convoys on the roads
+        // convoys and armies on the roads, fights where they stand
         for (const cv of g.war.convoys)
             this.drawMapConvoy(c, g, cv);
+        for (const a of g.war.armies)
+            this.drawMapArmy(c, g, a);
         // nodes
         for (const n of camp.nodes)
             this.drawMapNode(c, g, n);
+        for (const f of g.war.fights)
+            this.drawMapFight(c, g, f);
         this.drawMapHud(c, g);
+    }
+    /** An army on the road: a banner in its side's colour with its troop count. */
+    drawMapArmy(c, g, a) {
+        if (a.fight >= 0)
+            return; // the fight marker stands for it
+        const q = g.war.armyPos(a), p = g.mapToScreen(q.x, q.y);
+        if (p.x < -30 || p.x > VIEW_W + 30 || p.y < -30 || p.y > VIEW_H + 30)
+            return;
+        const k = lerp(0.85, 1.2, g.mapZoom), mine = a.team === 'player';
+        c.save();
+        c.translate(p.x, p.y);
+        c.scale(k, k);
+        if (g.war.canIntercept(a)) {
+            c.strokeStyle = `rgba(255,213,74,${0.5 + Math.sin(g.time * 5 + a.id) * 0.3})`;
+            c.lineWidth = 2;
+            c.beginPath();
+            c.arc(0, -8, 15, 0, Math.PI * 2);
+            c.stroke();
+        }
+        if (g.mapArmy === a.id) {
+            c.strokeStyle = '#ffffff';
+            c.lineWidth = 2.5;
+            c.beginPath();
+            c.arc(0, -8, 18, 0, Math.PI * 2);
+            c.stroke();
+        }
+        c.fillStyle = 'rgba(0,0,0,0.35)';
+        c.beginPath();
+        c.ellipse(0, 4, 9, 3, 0, 0, Math.PI * 2);
+        c.fill();
+        c.strokeStyle = '#2a1e10';
+        c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(-7, 4);
+        c.lineTo(-7, -22);
+        c.stroke();
+        c.fillStyle = mine ? '#4f8fe0' : '#b83a44';
+        c.beginPath();
+        c.moveTo(-7, -22);
+        c.lineTo(10, -22);
+        c.lineTo(10, -8);
+        c.lineTo(1.5, -4);
+        c.lineTo(-7, -8);
+        c.closePath();
+        c.fill();
+        c.strokeStyle = mine ? '#1d3b66' : '#4a1418';
+        c.lineWidth = 1.2;
+        c.stroke();
+        c.fillStyle = '#ffffff';
+        c.font = '800 8px ui-monospace, Menlo, Consolas, monospace';
+        c.textAlign = 'center';
+        c.fillText(String(troopTotal(a.units)), 1.5, -12);
+        c.restore();
+    }
+    /** A fight in progress: crossed swords over a two-colour strength bar (PLAN 7.3). */
+    drawMapFight(c, g, f) {
+        const p = g.mapToScreen(f.x, f.y);
+        if (p.x < -40 || p.x > VIEW_W + 40 || p.y < -40 || p.y > VIEW_H + 40)
+            return;
+        const k = lerp(0.9, 1.2, g.mapZoom), y = -22;
+        const sa = g.war.attStrength(f), sd = g.war.defStrength(f), share = sa + sd > 0 ? sa / (sa + sd) : 0.5;
+        const attMine = f.attackTeam === 'player';
+        c.save();
+        c.translate(p.x, p.y + y * k);
+        c.scale(k, k);
+        if (g.mapFight === f.id) {
+            c.strokeStyle = '#ffffff';
+            c.lineWidth = 2.5;
+            c.beginPath();
+            c.arc(0, 0, 17, 0, Math.PI * 2);
+            c.stroke();
+        }
+        const wob = Math.sin(g.time * 10) * 0.12;
+        for (const s of [-1, 1]) {
+            c.save();
+            c.rotate(s * (0.75 + wob));
+            c.fillStyle = '#e8ecf7';
+            c.fillRect(-1.5, -12, 3, 18);
+            c.fillStyle = '#c99a3a';
+            c.fillRect(-5, 4, 10, 2.5);
+            c.fillRect(-1.5, 6, 3, 5);
+            c.restore();
+        }
+        // strength bar: attackers on the left in their colour
+        c.fillStyle = 'rgba(0,0,0,0.7)';
+        c.fillRect(-19, 14, 38, 6);
+        c.fillStyle = attMine ? '#4f8fe0' : '#c0434a';
+        c.fillRect(-18, 15, 36 * share, 4);
+        c.fillStyle = attMine ? '#c0434a' : '#4f8fe0';
+        c.fillRect(-18 + 36 * share, 15, 36 * (1 - share), 4);
+        c.restore();
+    }
+    /** Shared panel frame; returns the content's x and first baseline. */
+    panelFrame(c, title, mine) {
+        const P = MAP_PANEL;
+        c.fillStyle = 'rgba(12,16,30,0.92)';
+        this.roundRect(c, P.x, P.y, P.w, P.h, 10);
+        c.fill();
+        c.strokeStyle = mine ? '#5f9bff' : '#d0505a';
+        c.lineWidth = 2;
+        this.roundRect(c, P.x, P.y, P.w, P.h, 10);
+        c.stroke();
+        c.textAlign = 'left';
+        c.font = '900 18px Georgia, serif';
+        c.fillStyle = '#ffffff';
+        c.fillText(title, P.x + P.pad, P.y + P.pad + 18);
+        return { x: P.x + P.pad, y: P.y + P.pad + 40 };
+    }
+    /** The panel's buttons from Game.mapButtons (drawing and hit-testing share the geometry). */
+    panelButtons(c, g, main) {
+        const btns = g.mapButtons();
+        btns.forEach((b, i) => {
+            const at = g.mapButtonAt(i, btns.length), hot = main.some((m) => b.label.startsWith(m));
+            c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : hot ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
+            this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8);
+            c.fill();
+            c.textAlign = 'center';
+            c.font = `900 ${hot ? 15 : 14}px ui-monospace, Menlo, Consolas, monospace`;
+            c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
+            c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+        });
+    }
+    panelRow(c, at, k, v, col = PAL.text) {
+        const P = MAP_PANEL;
+        c.textAlign = 'left';
+        c.fillStyle = PAL.dim;
+        c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+        c.fillText(k, at.x, at.y);
+        c.textAlign = 'right';
+        c.fillStyle = col;
+        c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+        c.fillText(v, P.x + P.w - P.pad, at.y);
+        at.y += 19;
+    }
+    unitLine(u) { return `${u.sword} sword · ${u.spear} spear · ${u.archer} archer · ${u.shield} shield${u.ram ? ` · ${u.ram} ram` : ""}`; }
+    /** A selected army: what it has, where it's going; Intercept for theirs. */
+    drawArmyPanel(c, g, a) {
+        const mine = a.team === 'player', camp = g.camp;
+        c.save();
+        const at = this.panelFrame(c, mine ? 'Your army' : 'Dominion army', mine);
+        this.panelRow(c, at, 'Troops', String(troopTotal(a.units)));
+        c.fillStyle = PAL.dim;
+        c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+        c.textAlign = 'left';
+        c.fillText(this.unitLine(a.units), at.x, at.y);
+        at.y += 18;
+        this.panelRow(c, at, a.order === 'attack' ? 'Attacking' : 'Marching to', camp.nodes[a.target].name);
+        this.panelRow(c, at, 'General', a.general || 'none (-20%)', a.general ? PAL.text : '#ffb070');
+        const n = camp.nodes[a.target], N = camp.nodes.length;
+        const here = a.leg < a.path.length - 1 ? a.path[a.leg + 1] : a.path[a.leg];
+        const eta = (camp.dist[here * N + n.id] + (a.leg < a.path.length - 1 ? (1 - a.t) * dist(camp.nodes[a.path[a.leg]].x, camp.nodes[a.path[a.leg]].y, camp.nodes[here].x, camp.nodes[here].y) : 0)) / WAR.armySpeed;
+        this.panelRow(c, at, 'Arrives in', `${Math.ceil(eta)} s`);
+        if (!mine) {
+            c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+            c.textAlign = 'left';
+            c.fillStyle = g.war.canIntercept(a) ? '#c7b8ff' : '#ff9a8a';
+            c.fillText(g.war.canIntercept(a) ? 'Intercept: a field battle against it' : 'out of reach until it nears your land', at.x, at.y + 6);
+        }
+        this.panelButtons(c, g, ['Intercept']);
+        c.restore();
+    }
+    /** A selected fight: both sides' strength, the structures; Join if it's yours. */
+    drawFightPanel(c, g, f) {
+        const camp = g.camp, w = g.war, attMine = f.attackTeam === 'player';
+        const where = f.node >= 0 ? camp.nodes[f.node].name : 'Battle on the road';
+        c.save();
+        const at = this.panelFrame(c, where, attMine);
+        const sa = w.attStrength(f), sd = w.defStrength(f);
+        this.panelRow(c, at, attMine ? 'Your attack' : 'Their attack', `${Math.round(sa)} / ${Math.round(f.startAtt)}`, attMine ? '#9fc8ff' : '#ff9a8a');
+        this.panelRow(c, at, attMine ? 'Their defense' : 'Your defense', `${Math.round(sd)} / ${Math.round(f.startDef)}`, attMine ? '#ff9a8a' : '#9fc8ff');
+        if (f.node >= 0)
+            this.panelRow(c, at, 'Walls and gates', `${Math.round(f.structure * 100)}%`);
+        this.panelRow(c, at, 'Breaks at', `${Math.round(WAR.simBreak * 100)}% of its start`);
+        const P = MAP_PANEL, bw = P.w - P.pad * 2, share = sa + sd > 0 ? sa / (sa + sd) : 0.5;
+        c.fillStyle = 'rgba(0,0,0,0.6)';
+        c.fillRect(at.x, at.y, bw, 10);
+        c.fillStyle = attMine ? '#4f8fe0' : '#c0434a';
+        c.fillRect(at.x, at.y, bw * share, 10);
+        c.fillStyle = attMine ? '#c0434a' : '#4f8fe0';
+        c.fillRect(at.x + bw * share, at.y, bw * (1 - share), 10);
+        at.y += 30;
+        c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+        c.textAlign = 'left';
+        c.fillStyle = '#c7b8ff';
+        if (w.joinSpec(f))
+            c.fillText('Join: fight it yourself, from where it stands', at.x, at.y);
+        this.panelButtons(c, g, ['Join']);
+        c.restore();
+    }
+    /** Send army: troops per type with -/+, Half / All, then a target (PLAN 7.2). */
+    drawSendPanel(c, g) {
+        const n = g.camp.nodes[g.sendFrom], gar = g.war.garrison[n.id] || emptyReserve(), P = MAP_PANEL, S = MAP_SEND;
+        c.save();
+        this.panelFrame(c, `Send from ${n.name}`, true);
+        const names = { sword: 'Swordsmen', spear: 'Spearmen', archer: 'Archers', shield: 'Shieldbearers', ram: 'Siege rams' };
+        SEND_TYPES.forEach((k, i) => {
+            const y = P.y + S.y0 + i * S.rowH;
+            c.textAlign = 'left';
+            c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = PAL.text;
+            c.fillText(names[k], P.x + P.pad, y + 19);
+            c.fillStyle = g.sendUnits[k] ? '#ffd54a' : PAL.dim;
+            c.fillText(`${g.sendUnits[k]} / ${gar[k]}`, P.x + P.pad + 118, y + 19);
+        });
+        for (const h of g.sendHits()) {
+            c.fillStyle = 'rgba(40,50,80,0.95)';
+            this.roundRect(c, h.x, h.y, h.w, h.h, 6);
+            c.fill();
+            c.fillStyle = '#ffffff';
+            c.textAlign = 'center';
+            c.font = `900 ${h.label.length > 1 ? 13 : 18}px ui-monospace, Menlo, Consolas, monospace`;
+            c.fillText(h.label === '-' ? '−' : h.label, h.x + h.w / 2, h.y + h.h / 2 + 5);
+        }
+        this.panelButtons(c, g, ['Choose']);
+        c.restore();
     }
     /** A convoy: a small covered wagon in its side's colour, gold aboard; ambushable ones pulse. */
     drawMapConvoy(c, g, cv) {
@@ -6690,9 +7390,26 @@ class Renderer {
         c.fillStyle = 'rgba(232,236,247,0.75)';
         c.fillText(help, VIEW_W / 2, VIEW_H - 8);
         c.restore();
-        const cv = g.selectedConvoy();
-        if (cv)
+        const cv = g.selectedConvoy(), ar = g.selectedArmy(), fi = g.selectedFight();
+        if (g.mapMode === 'send')
+            this.drawSendPanel(c, g);
+        else if (g.mapMode === 'target') {
+            c.save();
+            c.fillStyle = 'rgba(10,14,28,0.85)';
+            this.roundRect(c, VIEW_W / 2 - 290, MAP_BAR.h + 8, 580, 30, 8);
+            c.fill();
+            c.textAlign = 'center';
+            c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = '#ffd54a';
+            c.fillText(`${troopTotal(g.sendUnits)} TROOPS: TAP AN ENEMY NODE TO ATTACK, OR YOUR CASTLE  ·  ESC BACK`, VIEW_W / 2, MAP_BAR.h + 28);
+            c.restore();
+        }
+        else if (cv)
             this.drawConvoyPanel(c, g, cv);
+        else if (ar)
+            this.drawArmyPanel(c, g, ar);
+        else if (fi)
+            this.drawFightPanel(c, g, fi);
         else if (g.mapSel >= 0)
             this.drawNodePanel(c, g, camp.nodes[g.mapSel]);
         this.drawNotices(c, g);
@@ -10158,6 +10875,7 @@ class Game {
         this.war = new War(this.camp);
         this.mapConvoy = -1; // selected convoy id, or -1
         this.autosaveT = 0;
+        this.battleWarband = emptyReserve(); // the warband as it went into the current battle
         /** Where the map is looking (map units, the view's centre) and how close (0 whole continent .. 1 close-up). */
         this.mapX = CONTINENT.w / 2;
         this.mapY = CONTINENT.h / 2;
@@ -10166,6 +10884,13 @@ class Game {
         this.mapSel = -1; // selected node, or -1
         /** Where the last battle was started from: the map, or the debug battle list. */
         this.battleFrom = 'map';
+        /** Selection on the map: one node, convoy, army or fight at a time (-1 = none). */
+        this.mapArmy = -1;
+        this.mapFight = -1;
+        /** 'send': picking troops from a castle; 'target': choosing where they march. */
+        this.mapMode = 'browse';
+        this.sendFrom = -1;
+        this.sendUnits = emptyReserve();
         /* ------------------------------------------------------------ autopilot */
         /**
          * Debug autopilot: plays the knight through a battle with plain intent (walk
@@ -10390,14 +11115,37 @@ class Game {
         }
         return best;
     }
-    /** The node panel's buttons for the selection (shared by drawing and hit-testing). */
+    clearPick() { this.mapSel = -1; this.mapConvoy = -1; this.mapArmy = -1; this.mapFight = -1; }
+    /** The panel's buttons for the selection (shared by drawing and hit-testing). */
     mapButtons() {
         const out = [];
-        const close = { label: 'Close', enabled: true, act: () => { this.mapSel = -1; this.mapConvoy = -1; } };
+        const close = { label: 'Close', enabled: true, act: () => { this.clearPick(); this.mapMode = 'browse'; } };
+        if (this.mapMode === 'send') {
+            const n = troopTotal(this.sendUnits);
+            out.push({ label: n ? `Choose target  ·  ${n} troops` : 'Choose target', enabled: n > 0, act: () => { this.mapMode = 'target'; this.mapSel = -1; this.toast('CHOOSE A TARGET'); }, why: 'PICK SOME TROOPS FIRST' });
+            out.push({ label: 'Cancel', enabled: true, act: () => { this.mapMode = 'browse'; this.mapSel = this.sendFrom; } });
+            return out;
+        }
+        if (this.mapMode === 'target')
+            return [];
         const cv = this.selectedConvoy();
         if (cv) {
             if (cv.team === 'enemy')
                 out.push({ label: 'Ambush', enabled: this.war.canAmbush(cv), act: () => this.ambush(cv), why: 'OUT OF REACH: IT MUST BE ON A ROAD AT YOUR FRONTIER' });
+            out.push(close);
+            return out;
+        }
+        const ar = this.selectedArmy();
+        if (ar) {
+            if (ar.team === 'enemy')
+                out.push({ label: 'Intercept', enabled: this.war.canIntercept(ar), act: () => this.intercept(ar), why: 'OUT OF REACH: IT MUST BE IN OR NEXT TO YOUR LAND' });
+            out.push(close);
+            return out;
+        }
+        const f = this.selectedFight();
+        if (f) {
+            const spec = this.war.joinSpec(f);
+            out.push({ label: 'Join', enabled: !!spec, act: () => this.joinFight(f), why: 'NOT YOUR FIGHT' });
             out.push(close);
             return out;
         }
@@ -10408,6 +11156,8 @@ class Game {
             out.push({ label: 'Attack', enabled: this.camp.canAttack(n), act: () => this.attackNode(n), why: 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST' });
         else {
             if (n.type === 'castle') {
+                const g = this.war.garrison[n.id];
+                out.push({ label: 'Send army', enabled: !!g && troopTotal(g) > 0, act: () => this.beginSend(n), why: 'NO TROOPS IN THE GARRISON' });
                 out.push({ label: `Mix: ${RECRUIT_MIXES[this.war.mix[n.id]].name}`, enabled: true, act: () => { this.war.mix[n.id] = (this.war.mix[n.id] + 1) % RECRUIT_MIXES.length; this.sfx.guard(); } });
             }
             const cost = this.war.upgradeCost(n);
@@ -10426,7 +11176,85 @@ class Game {
         out.push(close);
         return out;
     }
+    /** The send panel's own controls: -/+ per troop type, and Half / All (PLAN 7.2). Rects shared with drawing. */
+    sendHits() {
+        if (this.mapMode !== 'send' || this.sendFrom < 0)
+            return [];
+        const g = this.war.garrison[this.sendFrom] || emptyReserve(), P = MAP_PANEL, S = MAP_SEND, out = [];
+        const set = (k, v) => { this.sendUnits[k] = clamp(v, 0, g[k]); this.sfx.guard(); };
+        for (let i = 0; i < SEND_TYPES.length; i++) {
+            const k = SEND_TYPES[i], y = P.y + S.y0 + i * S.rowH;
+            out.push({ x: P.x + P.w - P.pad - S.btnW * 2 - 6, y, w: S.btnW, h: S.btnH, label: '-', act: () => set(k, this.sendUnits[k] - S.step) });
+            out.push({ x: P.x + P.w - P.pad - S.btnW, y, w: S.btnW, h: S.btnH, label: '+', act: () => set(k, this.sendUnits[k] + S.step) });
+        }
+        const qy = P.y + S.y0 + SEND_TYPES.length * S.rowH + 6, qw = (P.w - P.pad * 2 - 8) / 2;
+        out.push({ x: P.x + P.pad, y: qy, w: qw, h: S.quickH, label: 'Half', act: () => { for (const k of SEND_TYPES)
+                this.sendUnits[k] = Math.floor(g[k] / 2); this.sfx.guard(); } });
+        out.push({ x: P.x + P.pad + qw + 8, y: qy, w: qw, h: S.quickH, label: 'All', act: () => { for (const k of SEND_TYPES)
+                this.sendUnits[k] = g[k]; this.sfx.guard(); } });
+        return out;
+    }
+    beginSend(n) {
+        this.mapMode = 'send';
+        this.sendFrom = n.id;
+        this.sendUnits = emptyReserve();
+        const g = this.war.garrison[n.id];
+        for (const k of SEND_TYPES)
+            this.sendUnits[k] = Math.floor(g[k] / 2);
+        this.sfx.guard();
+    }
+    /** Target mode: an enemy node attacks it, one of your castles reinforces it. */
+    pickTarget(id) {
+        if (id < 0)
+            return;
+        const from = this.camp.nodes[this.sendFrom], to = this.camp.nodes[id];
+        if (to.owner === 'player' && to.type !== 'castle') {
+            this.sfx.guard();
+            this.toast('REINFORCE ONE OF YOUR CASTLES, OR PICK AN ENEMY NODE');
+            return;
+        }
+        const a = this.war.sendArmy(from, this.sendUnits, to);
+        if (!a) {
+            this.sfx.guard();
+            this.toast(to.id === from.id ? 'PICK ANOTHER NODE' : 'NO ROAD THERE');
+            return;
+        }
+        this.sfx.cast(520);
+        this.toast(a.order === 'attack' ? `${troopTotal(a.units)} TROOPS MARCH ON ${to.name.toUpperCase()}` : `${troopTotal(a.units)} TROOPS TO ${to.name.toUpperCase()}`);
+        this.mapMode = 'browse';
+        this.clearPick();
+        this.mapArmy = a.id;
+        this.save();
+    }
     selectedConvoy() { return this.mapConvoy >= 0 ? this.war.convoys.find((c) => c.id === this.mapConvoy) || null : null; }
+    selectedArmy() { return this.mapArmy >= 0 ? this.war.armies.find((a) => a.id === this.mapArmy) || null : null; }
+    selectedFight() { return this.mapFight >= 0 ? this.war.fights.find((f) => f.id === this.mapFight) || null : null; }
+    /** What's under a screen point: the nearest of fights, armies, convoys and nodes within the tap radius. */
+    pickAt(x, y) {
+        let best = null, bd = WAR.mapNodeTap * WAR.mapNodeTap;
+        const consider = (kind, id, mx, my, bias) => {
+            const p = this.mapToScreen(mx, my), d = ((p.x - x) ** 2 + (p.y - y) ** 2) * bias;
+            if (d < bd) {
+                bd = d;
+                best = { kind, id };
+            }
+        };
+        // things on the roads only win when clearly nearer than a node (nodes are the usual target)
+        for (const f of this.war.fights)
+            consider('fight', f.id, f.x, f.y - 14 / this.mapScale(), 0.8);
+        for (const a of this.war.armies)
+            if (a.fight < 0) {
+                const q = this.war.armyPos(a);
+                consider('army', a.id, q.x, q.y, 1.6);
+            }
+        for (const c of this.war.convoys) {
+            const q = this.war.convoyPos(c);
+            consider('convoy', c.id, q.x, q.y, 2);
+        }
+        for (const n of this.camp.nodes)
+            consider('node', n.id, n.x, n.y, 1);
+        return best;
+    }
     /** The convoy under a screen point (within the tap radius), or -1. */
     convoyAt(x, y) {
         let best = -1, bd = WAR.mapNodeTap * WAR.mapNodeTap;
@@ -10447,6 +11275,25 @@ class Game {
         this.battleFrom = 'map';
         this.startBattle(this.war.ambushSpec(c));
     }
+    /** Intercept a Dominion army near your land: a field battle against what it has (PLAN 7.1). */
+    intercept(a) {
+        if (!this.war.canIntercept(a))
+            return;
+        this.sfx.cast(560);
+        this.battleFrom = 'map';
+        const t = this.camp.territories[this.camp.nodes[a.path[a.leg]].territory].tier;
+        this.startBattle(this.war.fieldSpecFor(a, null, t));
+    }
+    /** Join a fight in progress (PLAN 7.3): the battle starts where the sim has got to. */
+    joinFight(f) {
+        const spec = this.war.joinSpec(f);
+        if (!spec)
+            return;
+        this.sfx.cast(560);
+        this.battleFrom = 'map';
+        f.joined = true;
+        this.startBattle(spec);
+    }
     /** Top-left of panel button i of n. */
     mapButtonAt(i, n) {
         return { x: MAP_PANEL.x + MAP_PANEL.pad, y: MAP_PANEL.y + MAP_PANEL.h - MAP_PANEL.pad - (n - i) * (MAP_BTN.h + MAP_BTN.gap) + MAP_BTN.gap };
@@ -10459,15 +11306,10 @@ class Game {
         this.battleFrom = 'map';
         this.startBattle(this.camp.battleSpec(n));
     }
-    convoyCloser(cv, nd, at) {
-        const c = this.war.convoys.find((x) => x.id === cv), q = this.war.convoyPos(c), cp = this.mapToScreen(q.x, q.y);
-        const n = this.camp.nodes[nd], np = this.mapToScreen(n.x, n.y);
-        return (cp.x - at.x) ** 2 + (cp.y - at.y) ** 2 < ((np.x - at.x) ** 2 + (np.y - at.y) ** 2) * 0.5;
-    }
     /** Select a node (or none) and bring it into view. */
     selectNode(id) {
+        this.clearPick();
         this.mapSel = id;
-        this.mapConvoy = -1;
         if (id < 0)
             return;
         this.sfx.guard();
@@ -10520,10 +11362,30 @@ class Game {
     }
     handleMap(dt) {
         const inp = this.input;
-        // map time: income, convoys, production (PLAN 7: real time; battles pause it)
+        // map time: income, convoys, production, armies and their fights (PLAN 7: real time; battles pause it)
         this.war.tick(dt, this.player);
         if (this.mapConvoy >= 0 && !this.selectedConvoy())
             this.mapConvoy = -1; // it arrived
+        if (this.mapArmy >= 0 && !this.selectedArmy())
+            this.mapArmy = -1;
+        if (this.mapFight >= 0 && !this.selectedFight())
+            this.mapFight = -1;
+        if (this.mapMode !== 'browse' && (this.sendFrom < 0 || this.camp.nodes[this.sendFrom].owner !== 'player'))
+            this.mapMode = 'browse';
+        // news from the off-screen fights
+        for (const r of this.war.results) {
+            const where = r.node >= 0 ? this.camp.nodes[r.node].name : 'the road';
+            if (r.node >= 0 && r.winner === 'player')
+                this.banner(`${where.toUpperCase()} TAKEN`, 'your army carried it', '#4fe08a');
+            else if (r.node >= 0 && r.winner === 'enemy' && this.camp.nodes[r.node].owner === 'enemy' && this.war.captured.includes(r.node))
+                this.banner(`${where.toUpperCase()} LOST`, 'the Dominion took it', '#ff6b6b');
+            else
+                this.toast(r.winner === 'player' ? `VICTORY AT ${where.toUpperCase()}` : `DEFEAT AT ${where.toUpperCase()}`);
+        }
+        if (this.war.results.length)
+            this.save();
+        this.war.results = [];
+        this.war.captured = [];
         this.autosaveT += dt;
         if (this.autosaveT >= WAR.autosaveEvery) {
             this.autosaveT = 0;
@@ -10554,13 +11416,19 @@ class Game {
         this.mapX += mv.x * WAR.mapPanSpeed * dt * (WAR.mapZoomNear / s) * 0.6;
         this.mapY += mv.y * WAR.mapPanSpeed * dt * (WAR.mapZoomNear / s) * 0.6;
         this.clampMap();
-        // clicks: panel buttons, then nodes, then empty ground (closes the panel)
+        // clicks: the panel's controls, then whatever is nearest on the map, then empty ground (closes the panel)
         const click = inp.takeClick();
         inp.takeTap();
         if (click) {
-            const btns = this.mapButtons();
             let used = false;
-            for (let i = 0; i < btns.length; i++) {
+            for (const h of this.sendHits()) {
+                if (click.x >= h.x && click.x <= h.x + h.w && click.y >= h.y && click.y <= h.y + h.h) {
+                    h.act();
+                    used = true;
+                }
+            }
+            const btns = this.mapButtons();
+            for (let i = 0; i < btns.length && !used; i++) {
                 const b = this.mapButtonAt(i, btns.length);
                 if (click.x >= b.x && click.x <= b.x + MAP_BTN.w && click.y >= b.y && click.y <= b.y + MAP_BTN.h) {
                     used = true;
@@ -10572,20 +11440,29 @@ class Game {
                     }
                 }
             }
-            const inPanel = (this.mapSel >= 0 || this.mapConvoy >= 0) && click.x >= MAP_PANEL.x && click.y >= MAP_PANEL.y && click.y <= MAP_PANEL.y + MAP_PANEL.h;
-            if (!used && !inPanel) {
-                const cv = this.convoyAt(click.x, click.y), nd = this.nodeAt(click.x, click.y);
-                // a convoy wins only when it's clearly nearer than any node
-                if (cv >= 0 && (nd < 0 || this.convoyCloser(cv, nd, click))) {
-                    this.mapSel = -1;
-                    this.mapConvoy = cv;
-                    this.sfx.guard();
-                }
-                else
-                    this.selectNode(nd);
-            }
             if (this.screen !== 'campaign')
                 return;
+            const panelUp = this.mapMode === 'send' || this.mapSel >= 0 || this.mapConvoy >= 0 || this.mapArmy >= 0 || this.mapFight >= 0;
+            const inPanel = panelUp && click.x >= MAP_PANEL.x && click.y >= MAP_PANEL.y && click.y <= MAP_PANEL.y + MAP_PANEL.h;
+            if (!used && !inPanel) {
+                if (this.mapMode === 'target')
+                    this.pickTarget(this.nodeAt(click.x, click.y));
+                else if (this.mapMode === 'browse') {
+                    const hit = this.pickAt(click.x, click.y);
+                    if (!hit || hit.kind === 'node')
+                        this.selectNode(hit ? hit.id : -1);
+                    else {
+                        this.clearPick();
+                        this.sfx.guard();
+                        if (hit.kind === 'convoy')
+                            this.mapConvoy = hit.id;
+                        else if (hit.kind === 'army')
+                            this.mapArmy = hit.id;
+                        else
+                            this.mapFight = hit.id;
+                    }
+                }
+            }
         }
         if (inp.wasPressed('up'))
             this.stepSelection(0, -1);
@@ -10595,7 +11472,12 @@ class Game {
             this.stepSelection(-1, 0);
         if (inp.wasPressed('right'))
             this.stepSelection(1, 0);
-        if ((inp.wasPressed('confirm') || inp.wasPressed('attack') || inp.wasPressed('jump')) && this.mapConvoy >= 0) {
+        const go = inp.wasPressed('confirm') || inp.wasPressed('attack') || inp.wasPressed('jump');
+        if (go && this.mapMode === 'target' && this.mapSel >= 0) {
+            this.pickTarget(this.mapSel);
+            return;
+        }
+        if (go && (this.mapConvoy >= 0 || this.mapArmy >= 0 || this.mapFight >= 0 || this.mapMode === 'send')) {
             const b0 = this.mapButtons()[0];
             if (b0.enabled)
                 b0.act();
@@ -10605,7 +11487,7 @@ class Game {
             }
             return;
         }
-        if ((inp.wasPressed('confirm') || inp.wasPressed('attack') || inp.wasPressed('jump')) && this.mapSel >= 0) {
+        if (go && this.mapSel >= 0) {
             const n = this.camp.nodes[this.mapSel];
             if (n.owner === 'enemy' && this.camp.canAttack(n))
                 this.attackNode(n);
@@ -10616,16 +11498,36 @@ class Game {
             return;
         }
         if (inp.wasPressed('cancel')) {
-            if (this.mapSel >= 0 || this.mapConvoy >= 0) {
+            if (this.mapMode === 'target') {
+                this.mapMode = 'send';
                 this.mapSel = -1;
-                this.mapConvoy = -1;
             }
+            else if (this.mapMode === 'send') {
+                this.mapMode = 'browse';
+                this.mapSel = this.sendFrom;
+            }
+            else if (this.mapSel >= 0 || this.mapConvoy >= 0 || this.mapArmy >= 0 || this.mapFight >= 0)
+                this.clearPick();
             else {
                 this.save();
                 this.screen = 'title';
                 this.titleIndex = 0;
             }
         }
+    }
+    /** Debug: a Dominion army marches from their castle nearest your land on your nearest node (their AI is Phase 9). */
+    debugEnemyArmy() {
+        const c = this.camp, N = c.nodes.length, home = c.castleOf(WAR.startTerritory).id;
+        const from = c.nodes.filter((n) => n.type === 'castle' && n.owner === 'enemy').sort((a, b) => c.dist[a.id * N + home] - c.dist[b.id * N + home])[0];
+        if (!from)
+            return null;
+        const to = c.nodes.filter((n) => n.owner === 'player').sort((a, b) => c.dist[from.id * N + a.id] - c.dist[from.id * N + b.id])[0];
+        if (!to)
+            return null;
+        const a = this.war.spawnEnemyArmy(from.id, to.id, { ...emptyReserve(), ...foeMix(WAR.debugArmy) });
+        if (a)
+            this.toast(`A DOMINION ARMY MARCHES ON ${to.name.toUpperCase()}`);
+        return a;
     }
     /* ------------------------------------------- debug battle list (Phase 4-5) */
     /** The battles on offer until the map exists: one of each type. */
@@ -10742,6 +11644,7 @@ class Game {
         const fwd = (d) => top ? { x: b.start.x, y: b.start.y + d } : { x: b.start.x + d, y: b.start.y };
         let at = spec.kind === 'defense' ? { x: b.start.x - 60, y: b.start.y } : fwd(80);
         // the warband: your own troops from the map (the debug battle list just gets a full one)
+        this.battleWarband = { ...this.war.warband };
         const wb = this.battleFrom === 'map' ? UNIT_ORDER.flatMap((k) => new Array(this.war.warband[k]).fill(k)) : this.mixOf(this.warbandCap());
         this.spawnBlock(wb, 'player', at.x, at.y, spec.tier);
         const allies = unitList(spec.allies);
@@ -11047,17 +11950,42 @@ class Game {
         this.input.suppressMove = false;
         this.input.bot = null;
         if (this.battleFrom === 'map') {
-            // the warband comes home: whoever is still standing (a loss loses it, PLAN 10.1)
-            let survivors = null;
-            if (result !== 'lose') {
-                const a = this.army;
-                survivors = { ...a.reserve[TEAM_PLAYER] };
-                for (let i = 0; i < a.cap; i++)
-                    if (a.alive[i] && a.team[i] === TEAM_PLAYER)
-                        survivors[UNIT_ORDER[a.type[i]]]++;
-            }
-            this.war.warbandBack(survivors);
+            // who's still standing on each side (a loss loses your side, PLAN 10.1)
+            const a = this.army;
+            const mine = { ...a.reserve[TEAM_PLAYER] }, theirs = { ...a.reserve[TEAM_ENEMY] };
+            for (let i = 0; i < a.cap; i++)
+                if (a.alive[i])
+                    (a.team[i] === TEAM_PLAYER ? mine : theirs)[UNIT_ORDER[a.type[i]]]++;
+            // the warband takes its own back first; the rest were the army you joined
+            const wb = emptyReserve(), ally = emptyReserve();
+            if (result !== 'lose')
+                for (const k of UNIT_ORDER) {
+                    wb[k] = Math.min(mine[k], this.battleWarband[k]);
+                    ally[k] = mine[k] - wb[k];
+                }
+            this.war.warbandBack(result === 'lose' ? null : wb);
             b.notes.push(result === 'lose' ? 'the warband is lost' : `warband home: ${troopTotal(this.war.warband)} of ${this.warbandCap()}`);
+            // their losses as a share of what they fielded, per type: the garrison or army takes the same share
+            // (the battle's extra reinforcements are indistinguishable on the field, so they share it too)
+            const fielded = emptyReserve(), share = emptyReserve();
+            for (const src of [b.spec.foes, b.spec.reinforce || {}])
+                for (const k of UNIT_ORDER)
+                    fielded[k] += src[k] || 0;
+            for (const k of UNIT_ORDER)
+                share[k] = fielded[k] ? clamp(theirs[k] / fielded[k], 0, 1) : 1;
+            if (b.spec.fightId !== undefined) {
+                // a joined fight: its armies and the node carry on from here (PLAN 7.3)
+                const node = this.war.resolveJoin(b.spec.fightId, result, ally, share, b.wear());
+                if (result === 'win' && node >= 0)
+                    b.notes.push(`${this.camp.nodes[node].name} is yours`);
+                else if (result === 'retreat')
+                    b.notes.push('the fight goes on without you');
+            }
+            else if (b.spec.armyId !== undefined) {
+                this.war.resolveIntercept(b.spec.armyId, result, share);
+                if (result === 'win')
+                    b.notes.push('the Dominion army is broken');
+            }
         }
         if (!b.outcome)
             b.outcome = result === 'win' ? 'Victory' : result === 'lose' ? 'You fell. Back to camp — the warband is lost, the node unchanged.' : 'You left the field. The attack is abandoned.';
@@ -11073,7 +12001,7 @@ class Game {
             }
             if (b.spec.kind === 'rescue')
                 b.notes.push(`${b.spec.generalName || 'The general'} rescued (loyalty +25 with Phase 10)`);
-            if (b.spec.nodeId !== undefined && this.battleFrom === 'map') {
+            if (b.spec.nodeId !== undefined && b.spec.fightId === undefined && this.battleFrom === 'map') {
                 // PLAN 5.3: the node is yours, a level down from the fighting
                 const n = this.camp.nodes[b.spec.nodeId];
                 this.camp.capture(n);
@@ -12810,6 +13738,7 @@ function buildDebugPanel(g) {
         + '<button data-act="kill">Clear enemies</button>'
         + '<button data-act="mass">100 v 100 minions</button>'
         + '<button data-act="sandbox">Battle list (one of each)</button>'
+        + '<button data-act="enemyArmy">Dominion army (map)</button>'
         + '<button data-act="mats">+50 all materials</button>'
         + '<button data-act="sp">+10 SP</button>'
         + '<button data-act="god">God mode: off</button>'
@@ -12864,6 +13793,12 @@ function buildDebugPanel(g) {
                     break;
                 case 'sandbox':
                     g.enterSandbox();
+                    break;
+                case 'enemyArmy':
+                    if (g.screen === 'campaign')
+                        g.debugEnemyArmy();
+                    else
+                        g.toast('OPEN THE MAP FIRST');
                     break;
                 case 'mass':
                     if (g.screen === 'battle')

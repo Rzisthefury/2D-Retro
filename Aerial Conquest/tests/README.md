@@ -10,7 +10,7 @@ the game itself has no dependencies). From `Aerial Conquest/`:
     mkdir -p shots
     node tests/phase6.js aerial-conquest.html shots     # NODE_PATH may need to point at the global node_modules
 
-- `phase0v2.js` … `phase7.js`: the phase suites. Run all of them after any change (regressions).
+- `phase0v2.js` … `phase8.js`: the phase suites. Run all of them after any change (regressions).
 - `phase5.js`: `RUNS=3` sets the autopilot timing runs per battle type (time bands).
 - `probe5.js aerial-conquest.html outpost,keep 2`: autopilot one or more battle types and print
   outcome, time and kills (`GOD=1`, `UPG=1,4` for god mode / upgrade ranks at tiers 1 and 2+).

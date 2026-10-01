@@ -16,6 +16,31 @@ interface Convoy {
   cargo: number;
 }
 
+/** An army on the map (PLAN 7.2). Generals (Phase 10) are null for now. */
+interface MapArmy {
+  id: number; team: Team;
+  general: string | null;
+  units: Reserve;
+  path: number[]; leg: number; t: number;   // along the roads, like a convoy
+  target: number;                           // node id
+  order: 'attack' | 'reinforce';
+  fight: number;                            // the fight it's in, or -1
+  gone?: boolean;
+}
+
+/** An off-screen fight (PLAN 7.3): an army at a hostile node, or two armies on a road. */
+class Fight {
+  attackTeam: Team = 'player';
+  tier = 1;
+  startAtt = 0; startDef = 0;               // strengths when it began (a side breaks at 20%)
+  lossA = 0; lossD = 0;                     // raw power lost but not yet a whole unit
+  structure = 1;                            // node fights: the structures' remaining HP share
+  over = false; winner: Team | null = null;
+  joined = false;                           // the knight is fighting it live
+  constructor(readonly id: number, readonly node: number, readonly x: number, readonly y: number, readonly attackers: number[], readonly defenders: number[]) {}
+  static str(w: War, a: MapArmy, f: Fight): number { return War.strength(a.units, f.tier, w.mult(a.team, a.general)); }
+}
+
 /** Recruit mixes a castle can be set to (PLAN 6: default auto-balance 40/20/25/15). */
 const RECRUIT_MIXES: { name: string; mix: { sword: number; spear: number; archer: number; shield: number } }[] = [
   { name: 'Balanced', mix: { sword: 0.4, spear: 0.2, archer: 0.25, shield: 0.15 } },
@@ -40,6 +65,12 @@ class War {
   enemyConvoyT = 0;
   warband: Reserve = emptyReserve();          // the knight's own troops (PLAN 7.2)
   delivered = 0;                              // gold delivered by your convoys (for the HUD and checks)
+  armies: MapArmy[] = [];
+  fights: Fight[] = [];
+  nextArmyId = 1; nextFightId = 1;
+  nodeForce: (Reserve | null)[];              // defenders a node has now (null: its full garrison; worn down by fights)
+  captured: number[] = [];                    // nodes that changed hands off-screen since the map last looked
+  results: { fight: number; node: number; winner: Team; x: number; y: number }[] = [];   // fights decided since the map last looked
 
   constructor(camp: Campaign) {
     this.camp = camp;
@@ -50,6 +81,7 @@ class War {
     this.prod = new Array(N).fill(0);
     this.sinceRam = new Array(N).fill(0);
     this.mix = new Array(N).fill(0);
+    this.nodeForce = new Array(N).fill(null);
     this.reset();
   }
 
@@ -59,6 +91,8 @@ class War {
     this.stock.fill(0); this.convoyT.fill(WAR.convoyEvery); this.prod.fill(0); this.sinceRam.fill(0); this.mix.fill(0);
     this.garrison.fill(null);
     this.convoys = [];
+    this.armies = []; this.fights = []; this.captured = []; this.results = [];
+    this.nodeForce.fill(null);
     this.enemyConvoyT = WAR.enemyConvoyEvery * 0.5;
     this.delivered = 0;
     for (const n of this.camp.nodes) if (n.owner === 'player' && n.type === 'castle') this.garrison[n.id] = this.recruitList(WAR.startGarrison, 0);
@@ -185,6 +219,7 @@ class War {
       if (c.team === 'player') { p.gold += c.cargo; this.delivered += c.cargo; }
     }
     this.convoys = this.convoys.filter((c) => c.leg < c.path.length - 1);
+    this.tickArmies(dt);
     this.refillWarband();
   }
 
@@ -283,6 +318,298 @@ class War {
     if (n.type === 'village') { this.stock[n.id] = 0; this.convoyT[n.id] = WAR.convoyEvery; }
   }
 
+  /* ------------------------------------------------- armies (Phase 8, PLAN 7.2) */
+
+  /** Strength (PLAN 7.3): sum of count x power x tier scale, x the side's multipliers. */
+  static strength(u: Reserve, tier: number, mult: number): number {
+    let s = 0;
+    for (const k of UNIT_ORDER) s += u[k] * UNITS[k].power;
+    return s * TIER_SCALING.hpMultiplier(tier) * mult;
+  }
+
+  /** Fortification of a node's defenders (PLAN 7.3). */
+  fortification(n: MapNode): number {
+    if (n.type === 'castle') return WAR.fortCastle + WAR.fortCastlePerLevel * n.level;
+    if (n.type === 'keep') return WAR.keepFort[n.level - 1];
+    return 1;
+  }
+
+  /** A side's multiplier besides fortification: no general -20% (generals arrive in Phase 10); your troops' per-unit edge. */
+  private sideMult(team: Team, general: string | null): number {
+    return (general ? 1 : WAR.noGeneralMult) * (team === 'player' ? WAR.playerTroopMult : 1);
+  }
+
+  /** Where an army is on the map. */
+  armyPos(a: MapArmy): { x: number; y: number } {
+    if (a.leg >= a.path.length - 1) { const n = this.camp.nodes[a.path[a.path.length - 1]]; return { x: n.x, y: n.y }; }
+    return this.camp.roadPoint(a.path[a.leg], a.path[a.leg + 1], a.t);
+  }
+
+  /** The node an army stands at (fighting or arrived), or -1 while on a road. */
+  private armyNode(a: MapArmy): number { return a.t === 0 ? a.path[a.leg] : -1; }
+
+  /** Send troops from one of your castles: to an enemy node (attack) or one of your castles (reinforce). */
+  sendArmy(from: MapNode, units: Reserve, target: MapNode): MapArmy | null {
+    const g = this.garrison[from.id];
+    if (!g || from.owner !== 'player' || from.id === target.id) return null;
+    if (troopTotal(units) <= 0 || UNIT_ORDER.some((k) => units[k] > g[k])) return null;
+    if (target.owner === 'player' && target.type !== 'castle') return null;
+    const path = this.path(from.id, target.id);
+    if (path.length < 2) return null;
+    for (const k of UNIT_ORDER) g[k] -= units[k];
+    const a: MapArmy = { id: this.nextArmyId++, team: 'player', general: null, units: { ...units }, path, leg: 0, t: 0, target: target.id, order: target.owner === 'player' ? 'reinforce' : 'attack', fight: -1 };
+    this.armies.push(a);
+    return a;
+  }
+
+  /** A Dominion army marching from a node (Phase 9's AI decides when; the debug panel can send one). */
+  spawnEnemyArmy(from: number, target: number, units: Reserve): MapArmy | null {
+    const path = this.path(from, target);
+    if (path.length < 2) return null;
+    const a: MapArmy = { id: this.nextArmyId++, team: 'enemy', general: null, units: { ...units }, path, leg: 0, t: 0, target, order: 'attack', fight: -1 };
+    this.armies.push(a);
+    return a;
+  }
+
+  /** The units holding a node: your castles' garrisons, the Dominion's (reduced by fighting) garrisons. */
+  defendersOf(n: MapNode): Reserve {
+    if (n.owner === 'player') return n.type === 'castle' ? (this.garrison[n.id] || (this.garrison[n.id] = emptyReserve())) : (this.nodeForce[n.id] || (this.nodeForce[n.id] = emptyReserve()));
+    return this.nodeForce[n.id] || (this.nodeForce[n.id] = { ...emptyReserve(), ...foeMix(this.camp.garrison(n)) });
+  }
+
+  private fightAt(node: number): Fight | undefined { return this.fights.find((f) => f.node === node); }
+
+  /** Armies march; arrivals and meetings start fights; fights run (PLAN 7.3). */
+  private tickArmies(dt: number) {
+    const camp = this.camp;
+    for (const a of this.armies) {
+      if (a.fight >= 0) continue;
+      let move = WAR.armySpeed * dt;
+      while (move > 0 && a.leg < a.path.length - 1) {
+        const p = camp.nodes[a.path[a.leg]], q = camp.nodes[a.path[a.leg + 1]];
+        const len = Math.max(1, dist(p.x, p.y, q.x, q.y)), left = (1 - a.t) * len;
+        if (move < left) { a.t += move / len; move = 0; break; }
+        move -= left; a.leg++; a.t = 0;
+        if (this.arrive(a, camp.nodes[a.path[a.leg]])) break;
+      }
+    }
+    this.armies = this.armies.filter((a) => !a.gone);
+    // two hostile armies on the same road meet
+    for (const a of this.armies) for (const b of this.armies) {
+      if (a.team !== 'player' || b.team !== 'enemy' || a.fight >= 0 || b.fight >= 0) continue;
+      const pa = this.armyPos(a), pb = this.armyPos(b);
+      if (dist(pa.x, pa.y, pb.x, pb.y) < WAR.armyMeet) this.startFight({ node: -1, x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2, attackers: [a.id], defenders: [b.id] });
+    }
+    for (const f of this.fights) this.simFight(f, dt);
+    this.fights = this.fights.filter((f) => !f.over);
+    this.armies = this.armies.filter((a) => !a.gone);
+  }
+
+  /** An army reaches a node on its path. Returns true if it stops there. */
+  private arrive(a: MapArmy, n: MapNode): boolean {
+    if (n.owner !== a.team) {
+      // hostile: fight here (with any of its side already attacking it)
+      const f = this.fightAt(n.id);
+      if (f && f.attackTeam === a.team) {
+        const lead = this.armies.find((x) => x.id === f.attackers[0])!;
+        for (const k of UNIT_ORDER) lead.units[k] += a.units[k];
+        f.startAtt += Fight.str(this, a, f);   // the newcomer counts toward the attackers' starting strength
+        a.gone = true;
+      } else if (!f) {
+        this.startFight({ node: n.id, x: n.x, y: n.y, attackers: [a.id], defenders: [] });
+      } else a.gone = true;   // a fight of the other side's (can't happen yet) — the army waits it out off the map
+      return true;
+    }
+    if (n.id === a.target || a.leg >= a.path.length - 1) {
+      this.settleAt(a, n);
+      return true;
+    }
+    return false;
+  }
+
+  /** An army done at one of its own nodes: castles take it into the garrison; elsewhere it heads for the nearest castle. */
+  private settleAt(a: MapArmy, n: MapNode) {
+    if (n.type === 'castle') {
+      if (a.team === 'player') { const g = this.garrison[n.id] || (this.garrison[n.id] = emptyReserve()); for (const k of UNIT_ORDER) g[k] += a.units[k]; }
+      else { const g = this.defendersOf(n); for (const k of UNIT_ORDER) g[k] += a.units[k]; }
+      a.gone = true; return;
+    }
+    const to = this.nearestCastle(n.id, a.team);
+    const path = to >= 0 ? this.path(n.id, to) : [];
+    if (path.length < 2) { a.gone = true; return; }
+    a.path = path; a.leg = 0; a.t = 0; a.target = to; a.order = 'reinforce';
+  }
+
+  private startFight(o: { node: number; x: number; y: number; attackers: number[]; defenders: number[] }) {
+    const f = new Fight(this.nextFightId++, o.node, o.x, o.y, o.attackers, o.defenders);
+    for (const id of [...o.attackers, ...o.defenders]) { const a = this.armies.find((x) => x.id === id); if (a) a.fight = f.id; }
+    const att = this.armies.find((x) => x.id === o.attackers[0])!;
+    f.attackTeam = att.team;
+    f.tier = o.node >= 0 ? this.camp.battleTier(this.camp.nodes[o.node]) : this.camp.territories[this.camp.nodes[att.path[att.leg]].territory].tier;
+    f.startAtt = Fight.str(this, att, f);
+    f.startDef = this.defStrength(f);
+    this.fights.push(f);
+  }
+
+  /** The defending side's strength: the node's holders (fortified) or the other army. */
+  defStrength(f: Fight): number {
+    if (f.node >= 0) {
+      const n = this.camp.nodes[f.node];
+      return War.strength(this.defendersOf(n), f.tier, this.fortification(n) * this.sideMult(n.owner, null));
+    }
+    const d = this.armies.find((x) => x.id === f.defenders[0]);
+    return d ? Fight.str(this, d, f) : 0;
+  }
+  attStrength(f: Fight): number {
+    const a = this.armies.find((x) => x.id === f.attackers[0]);
+    return a ? Fight.str(this, a, f) : 0;
+  }
+  mult(team: Team, general: string | null): number { return this.sideMult(team, general); }
+
+  /**
+   * One stretch of an off-screen fight (PLAN 7.3): each side loses simRate x the
+   * other's strength, taken from its cheapest units first (rams last); a side
+   * under 20% of its starting strength breaks. Structures wear down as it goes.
+   */
+  private simFight(f: Fight, dt: number) {
+    if (f.joined || f.over) return;
+    const camp = this.camp;
+    const att = this.armies.find((x) => x.id === f.attackers[0]);
+    if (!att) { f.over = true; return; }
+    const n = f.node >= 0 ? camp.nodes[f.node] : null;
+    const defArmy = n ? null : this.armies.find((x) => x.id === f.defenders[0]) || null;
+    const defUnits = n ? this.defendersOf(n) : defArmy ? defArmy.units : emptyReserve();
+    const aMult = this.sideMult(att.team, att.general), dMult = n ? this.fortification(n) * this.sideMult(n.owner, null) : this.sideMult(defArmy!.team, defArmy!.general);
+    const sA = War.strength(att.units, f.tier, aMult), sD = War.strength(defUnits, f.tier, dMult);
+    const scale = TIER_SCALING.hpMultiplier(f.tier);
+    f.lossA += WAR.simRate * sD * dt / (aMult * scale);
+    f.lossD += WAR.simRate * sA * dt / (dMult * scale);
+    f.lossA = War.takeLosses(att.units, f.lossA);
+    f.lossD = War.takeLosses(defUnits, f.lossD);
+    if (n) f.structure = Math.max(0, f.structure - WAR.simStructRate * dt * sA / Math.max(1, sA + sD));
+    const nowA = War.strength(att.units, f.tier, aMult), nowD = War.strength(defUnits, f.tier, dMult);
+    if (nowD <= f.startDef * WAR.simBreak) this.endFight(f, att.team);
+    else if (nowA <= f.startAtt * WAR.simBreak) this.endFight(f, n ? n.owner : defArmy!.team);
+  }
+
+  /** Remove `points` of raw power from a force, cheapest units first, rams last. Returns the carry. */
+  static takeLosses(u: Reserve, points: number): number {
+    const order: UnitType[] = ['sword', 'spear', 'archer', 'shield', 'hound', 'ram'];
+    for (const k of order) {
+      while (u[k] > 0 && points >= UNITS[k].power) { u[k]--; points -= UNITS[k].power; }
+      if (u[k] > 0) return points;
+    }
+    return 0;
+  }
+
+  /** A fight is decided: the winner keeps or takes the ground; the loser breaks (its army is gone). */
+  endFight(f: Fight, winner: Team) {
+    f.over = true; f.winner = winner;
+    const camp = this.camp;
+    const att = this.armies.find((x) => x.id === f.attackers[0]);
+    if (f.node >= 0) {
+      const n = camp.nodes[f.node];
+      if (att && winner === att.team) {
+        // the node changes hands, a level down (PLAN 5.3); the attackers move in
+        n.owner = att.team; n.level = Math.max(1, n.level - 1);
+        this.onCapture(n);
+        this.nodeForce[n.id] = null;   // a fresh holder: your castles keep their garrison in `garrison`; a node they retake starts full again (their refill is Phase 9)
+        att.fight = -1;
+        this.settleAt(att, n);
+        this.captured.push(n.id);
+      } else if (att) att.gone = true;
+    } else {
+      const def = this.armies.find((x) => x.id === f.defenders[0]);
+      for (const a of [att, def]) if (a) { if (a.team === winner) a.fight = -1; else a.gone = true; }
+    }
+    this.results.push({ fight: f.id, node: f.node, winner, x: f.x, y: f.y });
+  }
+
+  /** Field battles: an enemy army inside or bordering your land can be intercepted (PLAN 7.1). */
+  canIntercept(a: MapArmy): boolean {
+    if (a.team !== 'enemy' || a.fight >= 0) return false;
+    const ids = a.leg < a.path.length - 1 ? [a.path[a.leg], a.path[a.leg + 1]] : [a.path[a.leg]];
+    return ids.some((id) => {
+      const t = this.camp.territories[this.camp.nodes[id].territory];
+      return t.nodes.some((m) => m.owner === 'player') || t.neighbors.some((k) => this.camp.holds(k, 'player'));
+    });
+  }
+
+  /** A field battle against an army on the road (intercept) or with your army (a field fight you join). */
+  fieldSpecFor(enemy: MapArmy, mine: MapArmy | null, tier: number): BattleSpec {
+    const n = this.camp.nodes[enemy.path[enemy.leg]], t = this.camp.territories[n.territory];
+    const foes = { ...enemy.units }, allies = mine ? { ...mine.units } : {};
+    return {
+      kind: 'field', name: `Dominion army near ${n.name}`, tier, scenery: t.scenery, seed: 7000 + enemy.id * 13,
+      foes, foeElites: ['shade'], commander: 'bruiser', allies, armyId: enemy.id,
+    };
+  }
+
+  /** Join a fight in progress (PLAN 7.3): the battle starts with its current counts and structure HP. */
+  joinSpec(f: Fight): BattleSpec | null {
+    const att = this.armies.find((x) => x.id === f.attackers[0]);
+    if (!att) return null;
+    if (f.node < 0) {
+      const def = this.armies.find((x) => x.id === f.defenders[0]);
+      if (!def) return null;
+      const mine = att.team === 'player' ? att : def, theirs = att.team === 'player' ? def : att;
+      const s = this.fieldSpecFor(theirs, mine, f.tier);
+      s.fightId = f.id;
+      return s;
+    }
+    const n = this.camp.nodes[f.node];
+    if (att.team !== 'player') return null;              // defending your nodes arrives with the Dominion's offensives (Phase 9)
+    const s = this.camp.battleSpec(n);
+    const d = this.defendersOf(n), full = this.camp.garrison(n);
+    s.foes = { ...d };
+    // the battle's reinforcements shrink with the garrison the sim has already worn down
+    const k = full > 0 ? troopTotal(d) / full : 1;
+    s.reinforce = foeMix(Math.round(WAR.battleReinforce[s.kind] * clamp(k, 0, 1)));
+    s.allies = { ...att.units };
+    s.structure = f.structure;
+    s.fightId = f.id;
+    return s;
+  }
+
+  /**
+   * A joined fight's battle is over (PLAN 7.3). Survivors carry over: your
+   * army is who's left of it; their side keeps the share of each type that
+   * survived the battle (`share`, 0..1),
+   * the structures keep their damage; a win or loss decides it, leaving hands
+   * it back to the sim. Returns the node captured, or -1.
+   */
+  resolveJoin(fightId: number, result: BattleResult, ally: Reserve, share: Reserve, structure: number): number {
+    const f = this.fights.find((x) => x.id === fightId);
+    if (!f) return -1;
+    const att = this.armies.find((x) => x.id === f.attackers[0]);
+    const def = f.node < 0 ? this.armies.find((x) => x.id === f.defenders[0]) : undefined;
+    const mine = att && att.team === 'player' ? att : def, theirs = mine === att ? def : att;
+    if (mine) mine.units = { ...ally };
+    const cap = (u: Reserve) => { for (const k of UNIT_ORDER) u[k] = Math.round(u[k] * share[k]); };
+    if (f.node >= 0) cap(this.defendersOf(this.camp.nodes[f.node]));
+    else if (theirs) cap(theirs.units);
+    f.structure = clamp(structure, 0, 1);
+    f.joined = false;
+    let took = -1;
+    if (result === 'win') { this.endFight(f, 'player'); if (f.node >= 0 && this.camp.nodes[f.node].owner === 'player') took = f.node; }
+    else if (result === 'lose') this.endFight(f, 'enemy');
+    else { f.lossA = f.lossD = 0; }
+    this.fights = this.fights.filter((x) => !x.over);
+    this.armies = this.armies.filter((x) => !x.gone);
+    this.results = this.results.filter((r) => r.fight !== f.id);   // the knight was there: no news banner
+    this.captured = [];
+    return took;
+  }
+
+  /** An intercept's battle is over: a win breaks the army, otherwise it marches on with what it has left. */
+  resolveIntercept(armyId: number, result: BattleResult, share: Reserve) {
+    const a = this.armies.find((x) => x.id === armyId);
+    if (!a) return;
+    if (result === 'win') { a.gone = true; this.armies = this.armies.filter((x) => !x.gone); return; }
+    for (const k of UNIT_ORDER) a.units[k] = Math.round(a.units[k] * share[k]);
+    if (troopTotal(a.units) === 0) this.armies = this.armies.filter((x) => x !== a);
+  }
+
   /* --------------------------------------------------------------- saves */
 
   save(): object {
@@ -292,6 +619,10 @@ class War {
       garrison: this.garrison.map(r), prod: this.prod.map((s) => +s.toFixed(2)), sinceRam: this.sinceRam, mix: this.mix,
       warband: r(this.warband), enemyConvoyT: Math.round(this.enemyConvoyT), delivered: this.delivered,
       convoys: this.convoys.map((c) => [c.team === 'player' ? 1 : 0, c.path, c.leg, +c.t.toFixed(3), c.cargo]),
+      armies: this.armies.map((a) => [a.id, a.team === 'player' ? 1 : 0, UNIT_ORDER.map((k) => a.units[k]), a.path, a.leg, +a.t.toFixed(3), a.target, a.order === 'attack' ? 1 : 0, a.fight]),
+      fights: this.fights.map((f) => [f.id, f.node, Math.round(f.x), Math.round(f.y), f.attackers, f.defenders, f.attackTeam === 'player' ? 1 : 0, f.tier, +f.startAtt.toFixed(2), +f.startDef.toFixed(2), +f.lossA.toFixed(3), +f.lossD.toFixed(3), +f.structure.toFixed(3)]),
+      nodeForce: this.nodeForce.map(r),
+      nextArmyId: this.nextArmyId, nextFightId: this.nextFightId,
     };
   }
 
@@ -317,6 +648,29 @@ class War {
     const wb = res(s.warband); if (wb) this.warband = wb;
     this.enemyConvoyT = clamp(+s.enemyConvoyT || 0, 0, WAR.enemyConvoyEvery);
     this.delivered = Math.max(0, +s.delivered || 0);
+    if (Array.isArray(s.nodeForce) && s.nodeForce.length === N) this.nodeForce = s.nodeForce.map((x: unknown) => res(x));
+    const okPath = (path: unknown): path is number[] => Array.isArray(path) && path.length >= 2 && path.every((id: number, i: number) => id >= 0 && id < N && (i === 0 || this.camp.links[path[i - 1]].includes(id)));
+    if (Array.isArray(s.armies)) {
+      for (const a of s.armies) {
+        if (!Array.isArray(a) || !okPath(a[3])) continue;
+        const u = res(a[2]); if (!u) continue;
+        const path = a[3] as number[];
+        this.armies.push({ id: a[0] | 0, team: a[1] === 1 ? 'player' : 'enemy', general: null, units: u, path, leg: clamp(a[4] | 0, 0, path.length - 1), t: clamp(+a[5] || 0, 0, 1), target: clamp(a[6] | 0, 0, N - 1), order: a[7] === 1 ? 'attack' : 'reinforce', fight: a[8] | 0 });
+      }
+    }
+    if (Array.isArray(s.fights)) {
+      for (const x of s.fights) {
+        if (!Array.isArray(x) || !Array.isArray(x[4]) || !Array.isArray(x[5])) continue;
+        const f = new Fight(x[0] | 0, clamp(x[1] | 0, -1, N - 1), +x[2] || 0, +x[3] || 0, x[4].map((v: number) => v | 0), x[5].map((v: number) => v | 0));
+        f.attackTeam = x[6] === 1 ? 'player' : 'enemy'; f.tier = clamp(x[7] | 0, 1, 5);
+        f.startAtt = +x[8] || 0; f.startDef = +x[9] || 0; f.lossA = +x[10] || 0; f.lossD = +x[11] || 0; f.structure = clamp(+x[12] || 0, 0, 1);
+        if (f.attackers.every((id) => this.armies.some((a) => a.id === id))) this.fights.push(f);
+      }
+    }
+    // an army that says it's fighting a fight that didn't load marches on
+    for (const a of this.armies) if (a.fight >= 0 && !this.fights.some((f) => f.id === a.fight)) a.fight = -1;
+    this.nextArmyId = Math.max(1, +s.nextArmyId || 1, ...this.armies.map((a) => a.id + 1));
+    this.nextFightId = Math.max(1, +s.nextFightId || 1, ...this.fights.map((f) => f.id + 1));
     if (Array.isArray(s.convoys)) {
       for (const c of s.convoys) {
         if (!Array.isArray(c) || !Array.isArray(c[1]) || c[1].length < 2 || c[1].some((id: number) => !(id >= 0 && id < N))) continue;

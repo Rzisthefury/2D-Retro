@@ -488,6 +488,17 @@ const WAR = {
   enemyConvoyCargo: 60,                 // ...each carrying this x territory tier
   autosaveEvery: 60,                    // seconds on the map between autosaves (PLAN 13)
 
+  // armies and the off-screen sim (Phase 8, PLAN 7.2 / 7.3)
+  armySpeed: 22,                        // map units / s
+  armyMeet: 30,                         // two hostile armies this close on the map fight
+  simRate: 0.02,                        // per sim second, a side loses this x the other's strength (~40 s for an even fight)
+  simBreak: 0.2,                        // a side breaks at this share of its starting strength
+  simStructRate: 0.012,                 // a node's structures wear this much per second, x the attackers' share of the strength
+  noGeneralMult: 0.8,                   // armies without a general fight at -20%
+  fortCastle: 1.3, fortCastlePerLevel: 0.1,   // castle fortification 1.3 + 0.1 / level
+  keepFort: [1.5, 1.7, 2.0],            // keep defense multiplier by level (PLAN 5.2)
+  debugArmy: 40,                        // the debug panel's Dominion army
+
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
   testFieldTier: 1,
@@ -548,7 +559,10 @@ const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 /** The campaign map's node panel and its buttons (render and hit-testing share these). */
 const MAP_PANEL = { x: 640, y: 62, w: 306, h: 412, pad: 14 };
 const MAP_BTN = { w: 278, h: 46, gap: 8 };
-const MAP_BAR = { h: 44 };             // the top bar: treasury, warband, skill points, territories
+const MAP_BAR = { h: 44 };
+/** The Send army panel: a row per troop type with -/+ (step), then Half / All. */
+const MAP_SEND = { y0: 74, rowH: 36, btnW: 44, btnH: 30, step: 5, quickH: 34 };
+const SEND_TYPES: UnitType[] = ['sword', 'spear', 'archer', 'shield', 'ram'];             // the top bar: treasury, warband, skill points, territories
 
 const CAMP_ROW = { x: 70, y0: 170, w: 400, h: 50, gap: 8, colGap: 20, perCol: 5 };   // the campaign stub's battle list: two columns
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };

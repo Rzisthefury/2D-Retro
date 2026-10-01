@@ -34,6 +34,9 @@ interface BattleSpec {
   nodeId?: number;                            // the map node this battle is for (none: the debug battle list)
   convoyId?: number;                          // convoy ambush: the map convoy this is
   cargo?: number;                             // convoy ambush: the gold aboard
+  fightId?: number;                           // joining an off-screen fight (PLAN 7.3)
+  armyId?: number;                            // intercepting a Dominion army
+  structure?: number;                         // joined fights: the structures' remaining HP share
 }
 
 /** Ground colours per territory scenery (PLAN 10.1: the look comes from the territory). */
@@ -206,6 +209,31 @@ class Battle {
       case 'rescue': this.layCastle(rng, true); break;
       case 'convoy': this.layConvoy(rng); break;
     }
+    if (spec.structure !== undefined && spec.structure < 1) this.applyWear(spec.structure);
+  }
+
+  /** The structures that wear down in an off-screen siege, in the order they fall: gates, houses, the throne. */
+  private wearable(): Structure[] {
+    const rank = (s: Structure) => s.kind === 'gate' ? 0 : s.kind === 'building' ? 1 : 2;
+    return this.structures.filter((s) => s.kind === 'gate' || s.kind === 'building' || s.kind === 'throne').sort((a, b) => rank(a) - rank(b));
+  }
+
+  /** Start with the structures at `share` of their total HP (a joined fight, PLAN 7.3), the outer ones worn first. */
+  applyWear(share: number) {
+    const ws = this.wearable();
+    let cut = ws.reduce((s, x) => s + x.maxHp, 0) * (1 - clamp(share, 0, 1));
+    for (const s of ws) {
+      const d = Math.min(cut, s.hp);
+      s.hp -= d; cut -= d;
+      if (s.hp <= 0) { s.hp = 0; s.burnT = 99; if (s.kind === 'gate') this.navCache.clear(); }
+      if (cut <= 0) break;
+    }
+  }
+
+  /** The structures' remaining share of their total HP (handed back to the sim when you leave). */
+  wear(): number {
+    const ws = this.wearable(), max = ws.reduce((s, x) => s + x.maxHp, 0);
+    return max ? ws.reduce((s, x) => s + x.hp, 0) / max : 1;
   }
 
   private of(kind: StructureKind): Structure[] { return this.structures.filter((s) => s.kind === kind); }
