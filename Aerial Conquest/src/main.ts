@@ -613,6 +613,18 @@ class Game {
     if (this.mapArmy >= 0 && !this.selectedArmy()) this.mapArmy = -1;
     if (this.mapFight >= 0 && !this.selectedFight()) this.mapFight = -1;
     if (this.mapMode !== 'browse' && (this.sendFrom < 0 || this.camp.nodes[this.sendFrom].owner !== 'player')) this.mapMode = 'browse';
+    // the Dominion's moves (PLAN 8)
+    for (const e of this.war.events) {
+      const nm = (id: number) => this.camp.nodes[id].name;
+      if (e.kind === 'muster') this.banner(`THE DOMINION MUSTERS AT ${nm(e.node).toUpperCase()}`, `they march on ${nm(e.target)} in ${WAR.telegraph} s`, '#ff9a8a');
+      else if (e.kind === 'depart') this.toast(`THE DOMINION MARCHES ON ${nm(e.target).toUpperCase()}`);
+      else if (e.kind === 'attacked') { this.banner(`${nm(e.node).toUpperCase()} UNDER ATTACK`, 'select the fight to join the defense', '#ff6b6b'); }
+      else if (e.kind === 'reinforce') this.toast(`${nm(e.node).toUpperCase()} SENDS HELP TO ${nm(e.target).toUpperCase()}`);
+      else if (e.kind === 'convoyLost') this.toast(`A CONVOY FROM ${nm(e.node).toUpperCase()} WAS TAKEN (${e.target} GOLD)`);
+      else if (e.kind === 'won') this.banner('THE BLACK SEAT HAS FALLEN', 'the Dominion\'s offensives stop  ·  the victory screen arrives in Phase 12', '#ffd54a');
+    }
+    if (this.war.events.length) this.save();
+    this.war.events = [];
     // news from the off-screen fights
     for (const r of this.war.results) {
       const where = r.node >= 0 ? this.camp.nodes[r.node].name : 'the road';

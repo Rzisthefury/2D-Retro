@@ -24,6 +24,7 @@ async function desktop(browser) {
   page.on('console', (m) => { if (m.type() === 'error' && !ignorable(m.text())) errors.push(m.text()); });
   await page.goto(URL); await page.evaluate(() => localStorage.clear()); await page.reload(); await wait(700);
   await page.keyboard.press('Enter'); await wait(400);
+  await page.evaluate(() => { GAME.war.tickAI = () => {}; WAR.reinforceChance = 0; });   // the Dominion's AI (Phase 9) is off in this suite
   await freeze(page);
   const b = await geom(page);
   await page.evaluate(() => { const w = GAME.war; w.garrison[0] = w.recruitList(150, 0); w.convoys = []; w.enemyConvoyT = 1e9; for (const n of GAME.camp.nodes) w.convoyT[n.id] = 1e9; });
@@ -208,7 +209,7 @@ async function desktop(browser) {
     GAME.save();
     return w.armies.map((a) => [a.team, troopTotal(a.units), a.path.join('-'), a.leg]);
   });
-  await page.reload(); await wait(600); await page.keyboard.press('Enter'); await wait(300);
+  await page.reload(); await wait(600); await page.keyboard.press('Enter'); await wait(300); await page.evaluate(() => { GAME.war.tickAI = () => {}; WAR.reinforceChance = 0; });
   const sv2 = await page.evaluate(() => GAME.war.armies.map((a) => [a.team, troopTotal(a.units), a.path.join('-'), a.leg]));
   check('armies on the road come back after a reload', JSON.stringify(sv2) === JSON.stringify(sv), JSON.stringify({ sv, sv2 }));
   check('desktop: no page errors', errors.length === 0, errors.slice(0, 5).join(' | '));
@@ -224,6 +225,7 @@ async function phone(browser) {
   await page.goto(URL); await page.evaluate(() => localStorage.clear()); await page.reload(); await wait(800);
   const b = await geom(page);
   let s = toPage(b, 480, 278); await page.touchscreen.tap(s.x, s.y); await wait(600);
+  await page.evaluate(() => { GAME.war.tickAI = () => {}; WAR.reinforceChance = 0; });
   await freeze(page);
   await page.evaluate(() => { GAME.war.garrison[0] = GAME.war.recruitList(30, 0); });
   let p = await nodeXY(page, 'The Last Camp'); s = toPage(b, p.x, p.y); await page.touchscreen.tap(s.x, s.y); await wait(200);

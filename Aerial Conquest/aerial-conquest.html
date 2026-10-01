@@ -540,6 +540,20 @@ const WAR = {
     fortCastle: 1.3, fortCastlePerLevel: 0.1, // castle fortification 1.3 + 0.1 / level
     keepFort: [1.5, 1.7, 2.0], // keep defense multiplier by level (PLAN 5.2)
     debugArmy: 40, // the debug panel's Dominion army
+    // the Dominion's campaign AI (Phase 9, PLAN 8)
+    warClock: { easy: 240, normal: 160, hard: 110 }, // seconds between offensives...
+    warClockStep: 0.1, warClockFloor: 0.6, // ...10% shorter per 3 territories you hold, never under 60%
+    telegraph: 30, // seconds a muster is announced before the army marches
+    offensiveCap: 3, offensiveCapHard: 4, // concurrent offensives: 1 + territories / 4, capped
+    grace: 90, // seconds a territory is safe after you take its castle
+    borderPreference: 2, // their targets: x this for your nodes on their border (*default*)
+    offensiveSize: [0.7, 1.1], // army strength vs the target's defending strength
+    offensiveMin: 6, // never march fewer
+    offensiveDraw: 0.8, // at most this share of the mustering garrison
+    enemyIncome: { easy: 0.8, normal: 1, hard: 1.25 }, // x their villages' gold (PLAN 13)
+    enemyRefill: 6, // troops / min back into a worn garrison while they have gold (*default*)
+    reinforceChance: 0.5, // a besieged castle of theirs gets one reinforcement (*default*: "may")
+    reinforceDraw: 0.4, // ...this share of the nearest other castle's garrison
     // the Phase 0 test battlefield
     testField: { w: 1920, h: 1200 },
     testFieldTier: 1,
@@ -3181,6 +3195,8 @@ class Campaign {
  * Armies on the road, the off-screen sim (Phase 8) and the Dominion's
  * campaign AI (Phase 9) build on this.
  * ========================================================================= */
+/** n units in the default mix, every type present (rams, hounds 0). */
+function foeMixFull(n) { return { ...emptyReserve(), ...foeMix(n) }; }
 /** An off-screen fight (PLAN 7.3): an army at a hostile node, or two armies on a road. */
 class Fight {
     constructor(id, node, x, y, attackers, defenders) {
@@ -3226,6 +3242,15 @@ class War {
         this.nextFightId = 1;
         this.captured = []; // nodes that changed hands off-screen since the map last looked
         this.results = []; // fights decided since the map last looked
+        // the Dominion's campaign (Phase 9)
+        this.difficulty = 'normal';
+        this.enemyGold = 0;
+        this.clock = 0; // seconds to the next muster
+        this.musters = [];
+        this.grace = []; // per territory: seconds no offensive may target it
+        this.refill = []; // per node: progress to the next recruit back into a worn garrison
+        this.won = false; // their capital has fallen
+        this.events = [];
         this.camp = camp;
         const N = camp.nodes.length;
         this.stock = new Array(N).fill(0);
@@ -3235,6 +3260,8 @@ class War {
         this.sinceRam = new Array(N).fill(0);
         this.mix = new Array(N).fill(0);
         this.nodeForce = new Array(N).fill(null);
+        this.refill = new Array(N).fill(0);
+        this.grace = new Array(camp.territories.length).fill(0);
         this.reset();
     }
     /** A fresh war: the Last Camp's garrison and a full warband. */
@@ -3252,6 +3279,13 @@ class War {
         this.captured = [];
         this.results = [];
         this.nodeForce.fill(null);
+        this.refill.fill(0);
+        this.grace.fill(0);
+        this.enemyGold = 0;
+        this.musters = [];
+        this.won = false;
+        this.events = [];
+        this.clock = WAR.warClock[this.difficulty];
         this.enemyConvoyT = WAR.enemyConvoyEvery * 0.5;
         this.delivered = 0;
         for (const n of this.camp.nodes)
@@ -3397,6 +3431,7 @@ class War {
         }
         this.convoys = this.convoys.filter((c) => c.leg < c.path.length - 1);
         this.tickArmies(dt);
+        this.tickAI(dt);
         this.refillWarband();
     }
     /** PLAN 6: castles recruit continuously while there's gold, up to their cap; a ram every 30. */
@@ -3504,6 +3539,9 @@ class War {
     }
     /** A node changed hands: a captured castle starts with an empty garrison, a village with an empty store. */
     onCapture(n) {
+        // PLAN 8: grace - no offensive targets a territory for 90 s after you take its castle
+        if (n.type === 'castle' && n.owner === 'player')
+            this.grace[n.territory] = WAR.grace;
         if (n.type === 'castle') {
             this.garrison[n.id] = emptyReserve();
             this.prod[n.id] = 0;
@@ -3514,6 +3552,168 @@ class War {
             this.stock[n.id] = 0;
             this.convoyT[n.id] = WAR.convoyEvery;
         }
+    }
+    /* ------------------------------------------ the Dominion's campaign AI (Phase 9, PLAN 8) */
+    /** Seconds between offensives (PLAN 8): by difficulty, 10% shorter per 3 territories you hold, floor 60%. */
+    clockInterval() {
+        const held = this.camp.territoriesHeld('player');
+        return WAR.warClock[this.difficulty] * Math.max(WAR.warClockFloor, 1 - WAR.warClockStep * Math.floor(held / 3));
+    }
+    /** How many offensives may be under way at once: 1 + one per 4 territories you hold, cap 3 (Hard 4). */
+    offensiveCap() {
+        return Math.min(this.difficulty === 'hard' ? WAR.offensiveCapHard : WAR.offensiveCap, 1 + Math.floor(this.camp.territoriesHeld('player') / 4));
+    }
+    /** Offensives under way: mustering, marching or fighting. */
+    activeOffensives() {
+        return this.musters.length + this.armies.filter((a) => a.team === 'enemy' && a.offensive && !a.gone).length;
+    }
+    /** The node's defending strength, as the sim would field it (fortified). */
+    nodeStrength(n) {
+        return War.strength(this.defendersOf(n), this.camp.battleTier(n), this.fortification(n) * this.mult(n.owner, null));
+    }
+    /** The Dominion's next offensive: its best target and the castle that musters for it, or null. */
+    planOffensive() {
+        const camp = this.camp, N = camp.nodes.length;
+        const value = { castle: 5, keep: 3, village: 2, outpost: 1 };
+        let best = null, bs = -Infinity;
+        for (const n of camp.nodes) {
+            if (n.owner !== 'player' || this.grace[n.territory] > 0)
+                continue;
+            if (this.musters.some((m) => m.target === n.id) || this.armies.some((a) => a.team === 'enemy' && a.offensive && a.target === n.id))
+                continue;
+            // the nearest of their castles that can field an army
+            let from = -1, fd = Infinity;
+            for (const c of camp.nodes) {
+                if (c.type !== 'castle' || c.owner !== 'enemy' || this.musters.some((m) => m.from === c.id))
+                    continue;
+                if (troopTotal(this.defendersOf(c)) < WAR.offensiveMin)
+                    continue;
+                const d = camp.dist[c.id * N + n.id];
+                if (d < fd) {
+                    fd = d;
+                    from = c.id;
+                }
+            }
+            if (from < 0 || fd === Infinity)
+                continue;
+            const t = camp.territories[n.territory];
+            const borders = t.nodes.some((m) => m.owner === 'enemy') || t.neighbors.some((k) => camp.territories[k].nodes.some((m) => m.owner === 'enemy'));
+            const str = this.nodeStrength(n);
+            const score = value[n.type] / Math.max(1, fd) / Math.max(1, str) * (borders ? WAR.borderPreference : 1);
+            if (score > bs) {
+                bs = score;
+                best = { from, target: n.id, size: 0 };
+            }
+        }
+        if (!best)
+            return null;
+        // 70-110% of the target's defending strength, clamped by the mustering garrison
+        const target = camp.nodes[best.target], src = this.defendersOf(camp.nodes[best.from]);
+        const want = this.nodeStrength(target) * (WAR.offensiveSize[0] + Math.random() * (WAR.offensiveSize[1] - WAR.offensiveSize[0]));
+        const perUnit = War.strength(foeMixFull(1), camp.battleTier(target), this.mult('enemy', null));
+        best.size = clamp(Math.ceil(want / Math.max(0.01, perUnit)), WAR.offensiveMin, Math.floor(troopTotal(src) * WAR.offensiveDraw));
+        return best;
+    }
+    /** Map time for the Dominion: income, refilling garrisons, the war clock, musters marching out. */
+    tickAI(dt) {
+        const camp = this.camp;
+        for (let k = 0; k < this.grace.length; k++)
+            if (this.grace[k] > 0)
+                this.grace[k] = Math.max(0, this.grace[k] - dt);
+        if (this.won)
+            return;
+        if (camp.castleOf(WAR.capitalTerritory).owner === 'player') {
+            // PLAN 8: the capital falls, the war is won, offensives stop
+            this.won = true;
+            this.musters = [];
+            this.events.push({ kind: 'won', node: camp.castleOf(WAR.capitalTerritory).id, target: -1 });
+            return;
+        }
+        // income: their villages, x difficulty; garrison refill comes first (PLAN 6)
+        for (const n of camp.nodes)
+            if (n.owner === 'enemy' && n.type === 'village')
+                this.enemyGold += this.income(n) / 60 * dt * WAR.enemyIncome[this.difficulty];
+        for (const n of camp.nodes) {
+            if (n.owner !== 'enemy')
+                continue;
+            const g = this.nodeForce[n.id];
+            if (!g)
+                continue; // still full
+            const full = camp.garrison(n);
+            this.refill[n.id] = Math.min(1, this.refill[n.id] + WAR.enemyRefill / 60 * dt);
+            while (this.refill[n.id] >= 1 && troopTotal(g) < full) {
+                const k = this.nextType(g, 0), cost = WAR.troopCost[k];
+                if (this.enemyGold < cost)
+                    break;
+                this.enemyGold -= cost;
+                g[k]++;
+                this.refill[n.id] -= 1;
+            }
+            if (troopTotal(g) >= full)
+                this.refill[n.id] = 0;
+        }
+        // musters march out 30 s after they're announced
+        for (const m of this.musters) {
+            m.t -= dt;
+            if (m.t > 0)
+                continue;
+            const from = camp.nodes[m.from], to = camp.nodes[m.target];
+            if (from.owner === 'enemy' && to.owner === 'player') {
+                const g = this.defendersOf(from), units = emptyReserve();
+                for (let k = 0; k < m.size && troopTotal(g) > 0; k++) {
+                    const type = ['sword', 'spear', 'archer', 'shield'].sort((a, b) => g[b] - g[a])[0];
+                    g[type]--;
+                    units[type]++;
+                }
+                const a = troopTotal(units) ? this.spawnEnemyArmy(from.id, to.id, units) : null;
+                if (a) {
+                    a.offensive = true;
+                    this.events.push({ kind: 'depart', node: from.id, target: to.id });
+                }
+            }
+            m.done = true;
+        }
+        this.musters = this.musters.filter((m) => !m.done);
+        // the war clock
+        this.clock -= dt;
+        if (this.clock <= 0) {
+            this.clock = this.clockInterval();
+            if (this.activeOffensives() < this.offensiveCap()) {
+                const o = this.planOffensive();
+                if (o) {
+                    this.musters.push({ from: o.from, target: o.target, size: o.size, t: WAR.telegraph });
+                    this.events.push({ kind: 'muster', node: o.from, target: o.target });
+                }
+            }
+        }
+    }
+    /** PLAN 8: when you besiege one of their castles, the nearest other castle may send one reinforcement. */
+    maybeReinforce(n) {
+        if (n.type !== 'castle' || n.owner !== 'enemy' || Math.random() >= WAR.reinforceChance)
+            return;
+        const camp = this.camp, N = camp.nodes.length;
+        let from = -1, fd = Infinity;
+        for (const c of camp.nodes) {
+            if (c.type !== 'castle' || c.owner !== 'enemy' || c.id === n.id || troopTotal(this.defendersOf(c)) < WAR.offensiveMin * 2)
+                continue;
+            const d = camp.dist[c.id * N + n.id];
+            if (d < fd) {
+                fd = d;
+                from = c.id;
+            }
+        }
+        if (from < 0)
+            return;
+        const g = this.defendersOf(camp.nodes[from]), units = emptyReserve();
+        for (const k of UNIT_ORDER) {
+            units[k] = Math.floor(g[k] * WAR.reinforceDraw);
+            g[k] -= units[k];
+        }
+        const path = this.path(from, n.id);
+        if (path.length < 2 || !troopTotal(units))
+            return;
+        this.armies.push({ id: this.nextArmyId++, team: 'enemy', general: null, units, path, leg: 0, t: 0, target: n.id, order: 'reinforce', fight: -1 });
+        this.events.push({ kind: 'reinforce', node: from, target: n.id });
     }
     /* ------------------------------------------------- armies (Phase 8, PLAN 7.2) */
     /** Strength (PLAN 7.3): sum of count x power x tier scale, x the side's multipliers. */
@@ -3611,6 +3811,17 @@ class War {
                 if (dist(pa.x, pa.y, pb.x, pb.y) < WAR.armyMeet)
                     this.startFight({ node: -1, x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2, attackers: [a.id], defenders: [b.id] });
             }
+        // their armies catch your convoys on the road (the cargo is lost)
+        for (const c of this.convoys) {
+            if (c.team !== 'player')
+                continue;
+            const cp = this.convoyPos(c);
+            if (this.armies.some((a) => a.team === 'enemy' && !a.gone && a.fight < 0 && (() => { const q = this.armyPos(a); return dist(q.x, q.y, cp.x, cp.y) < WAR.armyMeet; })())) {
+                c.leg = c.path.length; // gone
+                this.events.push({ kind: 'convoyLost', node: c.path[0], target: c.cargo });
+            }
+        }
+        this.convoys = this.convoys.filter((c) => c.leg < c.path.length);
         for (const f of this.fights)
             this.simFight(f, dt);
         this.fights = this.fights.filter((f) => !f.over);
@@ -3682,6 +3893,13 @@ class War {
         f.startAtt = Fight.str(this, att, f);
         f.startDef = this.defStrength(f);
         this.fights.push(f);
+        if (o.node >= 0) {
+            const n = this.camp.nodes[o.node];
+            if (att.team === 'player')
+                this.maybeReinforce(n);
+            else if (n.owner === 'player')
+                this.events.push({ kind: 'attacked', node: n.id, target: f.id });
+        }
     }
     /** The defending side's strength: the node's holders (fortified) or the other army. */
     defStrength(f) {
@@ -3757,6 +3975,7 @@ class War {
                 this.onCapture(n);
                 this.nodeForce[n.id] = null; // a fresh holder: your castles keep their garrison in `garrison`; a node they retake starts full again (their refill is Phase 9)
                 att.fight = -1;
+                att.offensive = false; // its offensive is done
                 this.settleAt(att, n);
                 this.captured.push(n.id);
             }
@@ -3809,8 +4028,24 @@ class War {
             return s;
         }
         const n = this.camp.nodes[f.node];
-        if (att.team !== 'player')
-            return null; // defending your nodes arrives with the Dominion's offensives (Phase 9)
+        if (att.team !== 'player') {
+            // defending your node (PLAN 10.2: Defense) against the army at its gates; your garrison fights beside you
+            if (n.owner !== 'player')
+                return null;
+            const t = this.camp.territories[n.territory], d = defenseSpec();
+            d.name = `${n.name} (defense)`;
+            d.tier = f.tier;
+            d.scenery = t.scenery;
+            d.seed = 9000 + n.id * 17;
+            d.foes = { ...att.units };
+            d.reinforce = {};
+            d.allies = { ...this.defendersOf(n) };
+            d.commander = null;
+            d.houses = n.type === 'village' ? 2 + n.level : 3;
+            d.nodeId = n.id;
+            d.fightId = f.id;
+            return d;
+        }
         const s = this.camp.battleSpec(n);
         const d = this.defendersOf(n), full = this.camp.garrison(n);
         s.foes = { ...d };
@@ -3840,8 +4075,16 @@ class War {
             mine.units = { ...ally };
         const cap = (u) => { for (const k of UNIT_ORDER)
             u[k] = Math.round(u[k] * share[k]); };
-        if (f.node >= 0)
+        if (f.node >= 0 && att && att.team === 'player')
             cap(this.defendersOf(this.camp.nodes[f.node]));
+        else if (f.node >= 0) {
+            // you defended: your garrison is who's left of it; their army keeps its surviving share
+            const g = this.defendersOf(this.camp.nodes[f.node]);
+            for (const k of UNIT_ORDER)
+                g[k] = ally[k];
+            if (att)
+                cap(att.units);
+        }
         else if (theirs)
             cap(theirs.units);
         f.structure = clamp(structure, 0, 1);
@@ -3849,7 +4092,7 @@ class War {
         let took = -1;
         if (result === 'win') {
             this.endFight(f, 'player');
-            if (f.node >= 0 && this.camp.nodes[f.node].owner === 'player')
+            if (f.node >= 0 && f.attackTeam === 'player' && this.camp.nodes[f.node].owner === 'player')
                 took = f.node;
         }
         else if (result === 'lose')
@@ -3890,6 +4133,9 @@ class War {
             fights: this.fights.map((f) => [f.id, f.node, Math.round(f.x), Math.round(f.y), f.attackers, f.defenders, f.attackTeam === 'player' ? 1 : 0, f.tier, +f.startAtt.toFixed(2), +f.startDef.toFixed(2), +f.lossA.toFixed(3), +f.lossD.toFixed(3), +f.structure.toFixed(3)]),
             nodeForce: this.nodeForce.map(r),
             nextArmyId: this.nextArmyId, nextFightId: this.nextFightId,
+            ai: { difficulty: this.difficulty, gold: Math.round(this.enemyGold), clock: +this.clock.toFixed(1), won: this.won,
+                musters: this.musters.map((m) => [m.from, m.target, m.size, +m.t.toFixed(1)]), grace: this.grace.map((g) => Math.round(g)), refill: this.refill.map((r) => +r.toFixed(2)),
+                offensive: this.armies.filter((a) => a.offensive).map((a) => a.id) },
         };
     }
     /** Restore, keeping only what fits this continent (PLAN 13: validate on load). */
@@ -3954,6 +4200,26 @@ class War {
         for (const a of this.armies)
             if (a.fight >= 0 && !this.fights.some((f) => f.id === a.fight))
                 a.fight = -1;
+        if (s.ai && typeof s.ai === 'object') {
+            const ai = s.ai;
+            if (ai.difficulty === 'easy' || ai.difficulty === 'normal' || ai.difficulty === 'hard')
+                this.difficulty = ai.difficulty;
+            this.enemyGold = Math.max(0, +ai.gold || 0);
+            this.clock = clamp(+ai.clock || 0, 0, WAR.warClock.easy);
+            this.won = !!ai.won;
+            if (Array.isArray(ai.musters))
+                for (const m of ai.musters)
+                    if (Array.isArray(m) && m[0] >= 0 && m[0] < N && m[1] >= 0 && m[1] < N)
+                        this.musters.push({ from: m[0] | 0, target: m[1] | 0, size: Math.max(0, m[2] | 0), t: clamp(+m[3] || 0, 0, WAR.telegraph) });
+            if (Array.isArray(ai.grace) && ai.grace.length === this.grace.length)
+                this.grace = ai.grace.map((g) => clamp(+g || 0, 0, WAR.grace));
+            if (Array.isArray(ai.refill) && ai.refill.length === N)
+                this.refill = ai.refill.map((r) => clamp(+r || 0, 0, 1));
+            if (Array.isArray(ai.offensive))
+                for (const a of this.armies)
+                    if (ai.offensive.includes(a.id))
+                        a.offensive = true;
+        }
         this.nextArmyId = Math.max(1, +s.nextArmyId || 1, ...this.armies.map((a) => a.id + 1));
         this.nextFightId = Math.max(1, +s.nextFightId || 1, ...this.fights.map((f) => f.id + 1));
         if (Array.isArray(s.convoys)) {
@@ -6923,7 +7189,42 @@ class Renderer {
             this.drawMapNode(c, g, n);
         for (const f of g.war.fights)
             this.drawMapFight(c, g, f);
+        for (const m of g.war.musters)
+            this.drawMuster(c, g, m);
         this.drawMapHud(c, g);
+    }
+    /** A muster (PLAN 8's telegraph): a war banner over their castle, the countdown, and a dashed line to the target. */
+    drawMuster(c, g, m) {
+        const a = g.camp.nodes[m.from], b = g.camp.nodes[m.target];
+        const p = g.mapToScreen(a.x, a.y), q = g.mapToScreen(b.x, b.y);
+        c.save();
+        c.setLineDash([8, 6]);
+        c.lineDashOffset = -g.time * 30;
+        c.strokeStyle = 'rgba(255,90,90,0.75)';
+        c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(p.x, p.y);
+        c.lineTo(q.x, q.y);
+        c.stroke();
+        c.setLineDash([]);
+        const pulse = 0.6 + Math.sin(g.time * 6) * 0.4;
+        c.strokeStyle = `rgba(255,70,70,${pulse})`;
+        c.lineWidth = 3;
+        c.beginPath();
+        c.arc(p.x, p.y, 22, 0, Math.PI * 2);
+        c.stroke();
+        c.beginPath();
+        c.arc(q.x, q.y, 20, 0, Math.PI * 2);
+        c.stroke();
+        c.textAlign = 'center';
+        c.font = '900 12px ui-monospace, Menlo, Consolas, monospace';
+        c.lineWidth = 3;
+        c.strokeStyle = 'rgba(0,0,0,0.85)';
+        const s = `MUSTER ${Math.ceil(m.t)}s`;
+        c.strokeText(s, p.x, p.y - 30);
+        c.fillStyle = '#ff8a7a';
+        c.fillText(s, p.x, p.y - 30);
+        c.restore();
     }
     /** An army on the road: a banner in its side's colour with its troop count. */
     drawMapArmy(c, g, a) {
@@ -7344,7 +7645,13 @@ class Renderer {
             const t = clamp(g.bannerT / 1.6, 0, 1);
             c.globalAlpha = Math.min(1, t * 2);
             c.textAlign = 'center';
-            c.font = '900 46px ui-monospace, Menlo, Consolas, monospace';
+            // as big as fits (measured, PLAN 16)
+            let size = 46;
+            c.font = `900 ${size}px ui-monospace, Menlo, Consolas, monospace`;
+            while (size > 18 && c.measureText(g.bannerMsg).width > VIEW_W - 60) {
+                size -= 2;
+                c.font = `900 ${size}px ui-monospace, Menlo, Consolas, monospace`;
+            }
             c.strokeStyle = 'rgba(0,0,0,0.8)';
             c.lineWidth = 7;
             c.strokeText(g.bannerMsg, VIEW_W / 2, VIEW_H / 2 - 40);
@@ -7381,6 +7688,12 @@ class Renderer {
             c.fillText(v, x, 27);
             x += c.measureText(v).width + 22;
         }
+        // the Dominion's tempo (PLAN 7.1 HUD): offensives under way and the next muster
+        const w = g.war;
+        c.textAlign = 'right';
+        c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = w.won ? '#ffd54a' : w.activeOffensives() ? '#ff8a7a' : PAL.dim;
+        c.fillText(w.won ? 'the Dominion is broken' : `offensives ${w.activeOffensives()}/${w.offensiveCap()}  ·  muster ${fmtTime(w.clock)}`, VIEW_W - 14, 27);
         c.textAlign = 'center';
         c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = 'rgba(232,236,247,0.75)';
@@ -11372,6 +11685,26 @@ class Game {
             this.mapFight = -1;
         if (this.mapMode !== 'browse' && (this.sendFrom < 0 || this.camp.nodes[this.sendFrom].owner !== 'player'))
             this.mapMode = 'browse';
+        // the Dominion's moves (PLAN 8)
+        for (const e of this.war.events) {
+            const nm = (id) => this.camp.nodes[id].name;
+            if (e.kind === 'muster')
+                this.banner(`THE DOMINION MUSTERS AT ${nm(e.node).toUpperCase()}`, `they march on ${nm(e.target)} in ${WAR.telegraph} s`, '#ff9a8a');
+            else if (e.kind === 'depart')
+                this.toast(`THE DOMINION MARCHES ON ${nm(e.target).toUpperCase()}`);
+            else if (e.kind === 'attacked') {
+                this.banner(`${nm(e.node).toUpperCase()} UNDER ATTACK`, 'select the fight to join the defense', '#ff6b6b');
+            }
+            else if (e.kind === 'reinforce')
+                this.toast(`${nm(e.node).toUpperCase()} SENDS HELP TO ${nm(e.target).toUpperCase()}`);
+            else if (e.kind === 'convoyLost')
+                this.toast(`A CONVOY FROM ${nm(e.node).toUpperCase()} WAS TAKEN (${e.target} GOLD)`);
+            else if (e.kind === 'won')
+                this.banner('THE BLACK SEAT HAS FALLEN', 'the Dominion\'s offensives stop  ·  the victory screen arrives in Phase 12', '#ffd54a');
+        }
+        if (this.war.events.length)
+            this.save();
+        this.war.events = [];
         // news from the off-screen fights
         for (const r of this.war.results) {
             const where = r.node >= 0 ? this.camp.nodes[r.node].name : 'the road';

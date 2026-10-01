@@ -23,13 +23,125 @@ No dependencies, no bundler, nothing to install.
 | `src/items.ts` | materials, weapon/armour tiers, recipes |
 | `src/talents.ts` | Blade / Arcana / Survival talents, bought with skill points |
 | `src/army.ts` | the minion sim: typed-array slots, uniform grid, minion AI, arrows, `MinionRef`, reserves, orders, rout |
-| `src/war.ts` | the war on the map: village income and stores, convoys (yours and theirs), castle garrisons and recruiting, node upgrades, the warband, armies, the off-screen sim (fights), join / intercept / ambush specs, saves |
+| `src/war.ts` | the war on the map: village income and stores, convoys (yours and theirs), castle garrisons and recruiting, node upgrades, the warband, armies, the off-screen sim (fights), join / intercept / ambush / defense specs, the Dominion's campaign AI (war clock, musters, grace, targeting, economy), saves |
 | `src/campaign.ts` | the continent: territories, nodes, roads (data), borders, road paths, ownership, the frontier rule, garrisons and each node's battle spec |
 | `src/battle.ts` | battles: spec, seeded layouts for all eight types, `Structure` (houses, walls, gates, throne, wagons, rings, cell), zones and doors for walled layouts, objectives, scenery palettes, the stub's battle list |
 | `src/music.ts` | AF's adaptive score |
 | `src/entities.ts` | `Player`, `Enemy` (with boss AI), `Projectile`, `Pickup` |
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
+
+# Phase 9: the Dominion's campaign AI
+
+**What changed** (`war.ts`, PLAN 8):
+
+- **War clock:**
+  - An offensive musters every 240 / 160 / 110 s on Easy / Normal / Hard.
+  - The interval is 10% shorter per 3 territories you hold, never below
+    60%.
+  - The top bar shows offensives under way / the cap, and the time to the
+    next muster.
+- **Telegraph:**
+  - A muster is announced ("THE DOMINION MUSTERS AT <castle>, they march
+    on <node> in 30 s").
+  - The map marks it: a pulsing ring over their castle with a countdown,
+    and a dashed line to the target.
+  - The army departs exactly 30 s later, drawn from that castle's
+    garrison.
+- **Concurrent cap:** 1 + one per 4 territories you hold, max 3 (Hard 4).
+  Mustering, marching and fighting offensives all count; a victorious
+  army stops counting.
+- **Grace:** for 90 s after you take a castle, by any means, no offensive
+  targets its territory.
+- **Targets:**
+  - score = value ÷ road distance ÷ the target's defending strength
+    (value: castle 5, keep 3, village 2, outpost 1);
+  - × 2 for your nodes on their border (*default* weight);
+  - mustered from their nearest castle with troops to spare.
+- **Army size:** 70–110% of the target's defending strength, at most 80%
+  of the mustering garrison, never fewer than 6.
+- **Their economy:**
+  - Their villages' gold per minute × 0.8 / 1 / 1.25 by difficulty.
+  - It refills worn garrisons first, at 6 troops/min per node (*default*),
+    at your troop prices.
+  - Offensives draw troops from the garrisons.
+- **Reinforcements:** when you besiege one of their castles, the nearest
+  other castle sends one army half the time (*default* reading of "may")
+  with 40% of its garrison. It joins the defense on arrival.
+- **Convoys:** their armies on the road catch your convoys; the gold is
+  lost.
+- **The capital falls:** the war is won, any muster is called off, and
+  offensives stop. (The victory screen is Phase 12.)
+- **Defending live:**
+  - A Dominion army at one of your nodes raises "<node> UNDER ATTACK".
+  - Joining that fight starts a Defense battle (the node's layout, roles
+    reversed). Their army is the attackers; you, the warband and the
+    node's garrison defend.
+  - Win, and their army breaks. Lose, and the node falls. Withdraw, and
+    the sim carries on.
+- **Difficulty** lives in the save (default Normal). The New Game picker is
+  Phase 12.
+- Saves carry the clock, musters, grace, their gold and refill progress,
+  and which armies are offensives.
+- Banners now shrink to fit the screen (measured, PLAN 16): "THE DOMINION
+  MUSTERS AT MILLBROOK CASTLE" overflowed.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13. Phase 9
+suite 20/20.
+
+- **War clock and cap, all three difficulties** (PLAN 15 checklist), at
+  1 / 3 / 4 / 6 / 8 / 11 territories held. Every value matched the
+  formulas:
+  - Normal: 160 → 144 → 128 → 112 s.
+  - Easy at 3 held: 216 s.
+  - Hard at 11 held: 77 s, cap 3.
+  - All 12 held: cap 4 on Hard; the clock at its 66 s floor.
+- **DONE, telegraph 30 s before departure:**
+  - The first muster came at exactly 160 s and was announced.
+  - At 29.9 s after: still mustering, nobody on the road.
+  - At 30.1 s: the army was out, marked an offensive, with the mustered
+    size.
+- **DONE, concurrent cap respected:** with the clock forced to fire every
+  second for 25 minutes, offensives under way hit the cap and never
+  passed it: Normal with 1 territory (cap 1) and 4 (cap 2), Hard with 8
+  (cap 3).
+- **DONE, grace respected:** after Greywatch Castle was taken it was the
+  obviously best target, but for 89 s every plan went elsewhere. After
+  90 s it was chosen.
+- **Army size:** over 40 plans against the Last Camp, 0.74–1.11 of its
+  defending strength. It was clamped to 80% of a thin mustering
+  garrison.
+- **Targeting:** an undefended village beat the garrisoned castle.
+- **DONE, offensives stop after the capital falls:** the muster in
+  progress was cancelled and the "won" news raised. 20 more minutes: no
+  muster, no offensive.
+- **Their income:** exactly their villages' 880 gold/min × 0.8 / 1 / 1.25.
+  A worn garrison refilled 10 → 16 in a minute, paid from their gold.
+- **Reinforcement:** your siege of Greywatch Castle drew one from Thornwall
+  Castle, and it merged into the defenders on arrival (count exact).
+- **Defending:** a 60-strong army at the Last Camp raised "THE LAST CAMP
+  UNDER ATTACK".
+  - Join started a Defense battle: their 60 vs you, the warband and the
+    30-troop garrison, with the houses yours.
+  - Winning broke their army, and the castle stayed yours.
+- **Convoys:** a Dominion army caught your convoy on the road, and its
+  99 gold was lost.
+- **Saves:** Hard difficulty, a muster in progress, the clock, a
+  territory's grace and their gold all survived a reload.
+- **Phone:** the clock ran out on the live map and the muster was
+  announced.
+
+**Regressions:** Phase 0–8 suites green (5: 46/46 functional, timing 5/8
+in band on this single run). The Phase 7 and 8 suites now switch the
+Dominion's AI off: they test the economy and the sim, and offensives
+retaking nodes mid-test broke their setups.
+
+**Assumed / not checked:**
+- Real-play pacing: how often offensives land against how fast you grow.
+- Whether their refill rate starves or floods them.
+- Difficulty's enemy damage multiplier (Phase 12 with the New Game
+  picker).
+- A castle you defend uses the Defense (village) layout.
 
 # Phase 8: armies, the off-screen sim, join and intercept
 

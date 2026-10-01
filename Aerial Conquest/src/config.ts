@@ -499,6 +499,21 @@ const WAR = {
   keepFort: [1.5, 1.7, 2.0],            // keep defense multiplier by level (PLAN 5.2)
   debugArmy: 40,                        // the debug panel's Dominion army
 
+  // the Dominion's campaign AI (Phase 9, PLAN 8)
+  warClock: { easy: 240, normal: 160, hard: 110 } as Record<string, number>,   // seconds between offensives...
+  warClockStep: 0.1, warClockFloor: 0.6,    // ...10% shorter per 3 territories you hold, never under 60%
+  telegraph: 30,                        // seconds a muster is announced before the army marches
+  offensiveCap: 3, offensiveCapHard: 4, // concurrent offensives: 1 + territories / 4, capped
+  grace: 90,                            // seconds a territory is safe after you take its castle
+  borderPreference: 2,                  // their targets: x this for your nodes on their border (*default*)
+  offensiveSize: [0.7, 1.1],            // army strength vs the target's defending strength
+  offensiveMin: 6,                      // never march fewer
+  offensiveDraw: 0.8,                   // at most this share of the mustering garrison
+  enemyIncome: { easy: 0.8, normal: 1, hard: 1.25 } as Record<string, number>,   // x their villages' gold (PLAN 13)
+  enemyRefill: 6,                       // troops / min back into a worn garrison while they have gold (*default*)
+  reinforceChance: 0.5,                 // a besieged castle of theirs gets one reinforcement (*default*: "may")
+  reinforceDraw: 0.4,                   // ...this share of the nearest other castle's garrison
+
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
   testFieldTier: 1,

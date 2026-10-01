@@ -27,6 +27,7 @@ async function desktop(browser) {
   page.on('console', (m) => { if (m.type() === 'error' && !ignorable(m.text())) errors.push(m.text()); });
   await page.goto(URL); await page.evaluate(() => localStorage.clear()); await page.reload(); await wait(700);
   await page.keyboard.press('Enter'); await wait(400);
+  await page.evaluate(() => { GAME.war.tickAI = () => {}; WAR.reinforceChance = 0; });   // the Dominion's AI (Phase 9) is off in this suite
   const b = await geom(page);
 
   const s0 = await page.evaluate(() => ({ gold: GAME.player.gold, gar: troopTotal(GAME.war.garrison[0]), wb: troopTotal(GAME.war.warband), cap: GAME.warbandCap() }));
@@ -202,7 +203,8 @@ async function desktop(browser) {
     GAME.save();
     return { stock: w.stock.map((x) => Math.round(x)).join(','), gar: troopTotal(w.garrison[0]), wb: troopTotal(w.warband), convoys: w.convoys.length, gold: GAME.player.gold, lvl: GAME.camp.nodes[0].level };
   });
-  await page.reload(); await wait(600); await page.keyboard.press('Enter'); await wait(400);
+  await page.reload(); await wait(600); await page.keyboard.press('Enter'); await wait(400); await page.evaluate(() => { GAME.war.tickAI = () => {}; WAR.reinforceChance = 0; });
+  await page.evaluate(() => { GAME.war.tickAI = () => {}; WAR.reinforceChance = 0; });   // the Dominion's AI (Phase 9) is off in this suite
   const after2 = await page.evaluate(() => { const w = GAME.war; return { stock: w.stock.map((x) => Math.round(x)).join(','), gar: troopTotal(w.garrison[0]), wb: troopTotal(w.warband), convoys: w.convoys.length, gold: GAME.player.gold, lvl: GAME.camp.nodes[0].level, c950: !!w.convoys.find((c) => c.cargo === 77) }; });
   const near = (a, b) => a.split(',').every((x, i) => Math.abs(+x - +b.split(',')[i]) <= 1);
   check('save/reload: village stores, garrisons, convoys on the road, warband, node levels and gold all come back',
@@ -222,6 +224,7 @@ async function phone(browser) {
   await page.goto(URL); await page.evaluate(() => localStorage.clear()); await page.reload(); await wait(800);
   const b = await geom(page);
   let s = toPage(b, 480, 278); await page.touchscreen.tap(s.x, s.y); await wait(600);
+  await page.evaluate(() => { GAME.war.tickAI = () => {}; WAR.reinforceChance = 0; });
   await page.evaluate(() => { GAME.player.gold = 400; GAME.mapSel = -1; });
   const cp = await page.evaluate(() => { const n = GAME.camp.nodes[0]; return GAME.mapToScreen(n.x, n.y); });
   s = toPage(b, cp.x, cp.y); await page.touchscreen.tap(s.x, s.y); await wait(250);

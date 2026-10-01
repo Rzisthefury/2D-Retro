@@ -501,7 +501,28 @@ class Renderer {
     // nodes
     for (const n of camp.nodes) this.drawMapNode(c, g, n);
     for (const f of g.war.fights) this.drawMapFight(c, g, f);
+    for (const m of g.war.musters) this.drawMuster(c, g, m);
     this.drawMapHud(c, g);
+  }
+
+  /** A muster (PLAN 8's telegraph): a war banner over their castle, the countdown, and a dashed line to the target. */
+  private drawMuster(c: CanvasRenderingContext2D, g: Game, m: { from: number; target: number; t: number }) {
+    const a = g.camp.nodes[m.from], b = g.camp.nodes[m.target];
+    const p = g.mapToScreen(a.x, a.y), q = g.mapToScreen(b.x, b.y);
+    c.save();
+    c.setLineDash([8, 6]); c.lineDashOffset = -g.time * 30;
+    c.strokeStyle = 'rgba(255,90,90,0.75)'; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(q.x, q.y); c.stroke();
+    c.setLineDash([]);
+    const pulse = 0.6 + Math.sin(g.time * 6) * 0.4;
+    c.strokeStyle = `rgba(255,70,70,${pulse})`; c.lineWidth = 3;
+    c.beginPath(); c.arc(p.x, p.y, 22, 0, Math.PI * 2); c.stroke();
+    c.beginPath(); c.arc(q.x, q.y, 20, 0, Math.PI * 2); c.stroke();
+    c.textAlign = 'center'; c.font = '900 12px ui-monospace, Menlo, Consolas, monospace';
+    c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,0.85)';
+    const s = `MUSTER ${Math.ceil(m.t)}s`;
+    c.strokeText(s, p.x, p.y - 30); c.fillStyle = '#ff8a7a'; c.fillText(s, p.x, p.y - 30);
+    c.restore();
   }
 
   /** An army on the road: a banner in its side's colour with its troop count. */
@@ -769,7 +790,10 @@ class Renderer {
       const t = clamp(g.bannerT / 1.6, 0, 1);
       c.globalAlpha = Math.min(1, t * 2);
       c.textAlign = 'center';
-      c.font = '900 46px ui-monospace, Menlo, Consolas, monospace';
+      // as big as fits (measured, PLAN 16)
+      let size = 46;
+      c.font = `900 ${size}px ui-monospace, Menlo, Consolas, monospace`;
+      while (size > 18 && c.measureText(g.bannerMsg).width > VIEW_W - 60) { size -= 2; c.font = `900 ${size}px ui-monospace, Menlo, Consolas, monospace`; }
       c.strokeStyle = 'rgba(0,0,0,0.8)';
       c.lineWidth = 7;
       c.strokeText(g.bannerMsg, VIEW_W / 2, VIEW_H / 2 - 40);
@@ -800,6 +824,11 @@ class Renderer {
       c.fillStyle = PAL.dim; c.fillText(k, x, 27); x += c.measureText(k).width + 6;
       c.fillStyle = PAL.text; c.fillText(v, x, 27); x += c.measureText(v).width + 22;
     }
+    // the Dominion's tempo (PLAN 7.1 HUD): offensives under way and the next muster
+    const w = g.war;
+    c.textAlign = 'right'; c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = w.won ? '#ffd54a' : w.activeOffensives() ? '#ff8a7a' : PAL.dim;
+    c.fillText(w.won ? 'the Dominion is broken' : `offensives ${w.activeOffensives()}/${w.offensiveCap()}  ·  muster ${fmtTime(w.clock)}`, VIEW_W - 14, 27);
     c.textAlign = 'center'; c.font = '600 11px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = 'rgba(232,236,247,0.75)';
     const help = IS_TOUCH ? 'drag to pan  ·  pinch to zoom  ·  tap a node' : 'drag / WASD pan  ·  wheel / Z zoom  ·  arrows pick a node  ·  ENTER attack  ·  ESC title';
     c.fillStyle = 'rgba(10,14,28,0.6)'; c.fillRect(0, VIEW_H - 24, VIEW_W, 24);
