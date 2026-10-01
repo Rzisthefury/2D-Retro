@@ -495,9 +495,32 @@ class Renderer {
     }
     c.restore();
 
+    // convoys on the roads
+    for (const cv of g.war.convoys) this.drawMapConvoy(c, g, cv);
     // nodes
     for (const n of camp.nodes) this.drawMapNode(c, g, n);
     this.drawMapHud(c, g);
+  }
+
+  /** A convoy: a small covered wagon in its side's colour, gold aboard; ambushable ones pulse. */
+  private drawMapConvoy(c: CanvasRenderingContext2D, g: Game, cv: Convoy) {
+    const q = g.war.convoyPos(cv), p = g.mapToScreen(q.x, q.y);
+    if (p.x < -30 || p.x > VIEW_W + 30 || p.y < -30 || p.y > VIEW_H + 30) return;
+    const k = lerp(0.8, 1.15, g.mapZoom), mine = cv.team === 'player';
+    c.save(); c.translate(p.x, p.y); c.scale(k, k);
+    if (g.war.canAmbush(cv)) {
+      c.strokeStyle = `rgba(255,213,74,${0.5 + Math.sin(g.time * 5 + cv.id) * 0.3})`; c.lineWidth = 2;
+      c.beginPath(); c.arc(0, -3, 13, 0, Math.PI * 2); c.stroke();
+    }
+    if (g.mapConvoy === cv.id) { c.strokeStyle = '#ffffff'; c.lineWidth = 2.5; c.beginPath(); c.arc(0, -3, 16, 0, Math.PI * 2); c.stroke(); }
+    c.fillStyle = 'rgba(0,0,0,0.35)'; c.beginPath(); c.ellipse(0, 5, 10, 3.5, 0, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#6b4a2b'; c.fillRect(-9, -4, 18, 7);
+    c.fillStyle = mine ? '#cfe3ff' : '#f0d8c8';
+    c.beginPath(); c.moveTo(-8, -4); c.quadraticCurveTo(0, -15, 8, -4); c.closePath(); c.fill();
+    c.fillStyle = mine ? PAL.ally : PAL.dominion; c.fillRect(-2, -10, 4, 4);
+    c.fillStyle = '#2a1e10'; c.beginPath(); c.arc(-5, 4, 2.6, 0, Math.PI * 2); c.arc(5, 4, 2.6, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#ffd54a'; c.beginPath(); c.arc(8, -8, 2.4, 0, Math.PI * 2); c.fill();
+    c.restore();
   }
 
   /** One node icon: type by shape, owner by colour, level by pips; attackable ones pulse. */
@@ -549,6 +572,18 @@ class Renderer {
         c.fillStyle = hi; c.fillRect(-7, -23, 14, 4);
         c.fillStyle = dark; c.fillRect(-2, -12, 4, 5);
         break;
+    }
+    // your castles show their garrison, your villages the gold waiting for the next convoy
+    if (mine && n.type === 'castle') {
+      const gn = g.war.garrison[n.id] ? troopTotal(g.war.garrison[n.id]!) : 0;
+      c.fillStyle = 'rgba(10,20,40,0.85)'; c.fillRect(13, -20, 20, 11);
+      c.fillStyle = '#cfe6ff'; c.font = '700 9px ui-monospace, Menlo, Consolas, monospace'; c.textAlign = 'center';
+      c.fillText(String(gn), 23, -11.5);
+    }
+    if (mine && n.type === 'village') {
+      const f = g.war.stock[n.id] / WAR.villageStockCap;
+      c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(-12, 18, 24, 4);
+      c.fillStyle = '#ffd54a'; c.fillRect(-12, 18, 24 * f, 4);
     }
     // level pips
     if (n.type !== 'outpost') {
@@ -612,7 +647,7 @@ class Renderer {
     c.fillText('THE VERDANT REACH', 16, 28);
     c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
     const items: [string, string][] = [
-      ['gold', String(p.gold)], ['warband', `${g.warbandCap()}`], ['SP', String(p.skillPoints)], ['territories', `${camp.territoriesHeld('player')} / ${camp.territories.length}`],
+      ['gold', String(p.gold)], ['warband', `${troopTotal(g.war.warband)} / ${g.warbandCap()}`], ['SP', String(p.skillPoints)], ['territories', `${camp.territoriesHeld('player')} / ${camp.territories.length}`],
     ];
     let x = 260;
     for (const [k, v] of items) {
@@ -624,8 +659,45 @@ class Renderer {
     c.fillStyle = 'rgba(10,14,28,0.6)'; c.fillRect(0, VIEW_H - 24, VIEW_W, 24);
     c.fillStyle = 'rgba(232,236,247,0.75)'; c.fillText(help, VIEW_W / 2, VIEW_H - 8);
     c.restore();
-    if (g.mapSel >= 0) this.drawNodePanel(c, g, camp.nodes[g.mapSel]);
+    const cv = g.selectedConvoy();
+    if (cv) this.drawConvoyPanel(c, g, cv);
+    else if (g.mapSel >= 0) this.drawNodePanel(c, g, camp.nodes[g.mapSel]);
     this.drawNotices(c, g);
+  }
+
+  /** A selected convoy: whose, what it carries, where it's going; Ambush for theirs. */
+  private drawConvoyPanel(c: CanvasRenderingContext2D, g: Game, cv: Convoy) {
+    const P = MAP_PANEL, camp = g.camp, mine = cv.team === 'player';
+    c.save();
+    c.fillStyle = 'rgba(12,16,30,0.92)'; this.roundRect(c, P.x, P.y, P.w, P.h, 10); c.fill();
+    c.strokeStyle = mine ? '#5f9bff' : '#d0505a'; c.lineWidth = 2; this.roundRect(c, P.x, P.y, P.w, P.h, 10); c.stroke();
+    const x = P.x + P.pad; let y = P.y + P.pad + 18;
+    c.textAlign = 'left'; c.font = '900 18px Georgia, serif'; c.fillStyle = '#ffffff';
+    c.fillText(mine ? 'Your convoy' : 'Dominion convoy', x, y); y += 22;
+    const row = (k: string, v: string, col = PAL.text) => {
+      c.fillStyle = PAL.dim; c.font = '600 12px ui-monospace, Menlo, Consolas, monospace'; c.fillText(k, x, y);
+      c.textAlign = 'right'; c.fillStyle = col; c.font = '700 12px ui-monospace, Menlo, Consolas, monospace'; c.fillText(v, P.x + P.w - P.pad, y);
+      c.textAlign = 'left'; y += 19;
+    };
+    row('Cargo', `${cv.cargo} gold`, '#ffd54a');
+    row('From', camp.nodes[cv.path[0]].name);
+    row('To', camp.nodes[cv.path[cv.path.length - 1]].name);
+    if (!mine) {
+      y += 4;
+      c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = g.war.canAmbush(cv) ? '#c7b8ff' : '#ff9a8a';
+      c.fillText(g.war.canAmbush(cv) ? 'Ambush: a convoy battle; win to take the cargo' : 'out of reach until it nears your frontier', x, y);
+    }
+    const btns = g.mapButtons();
+    btns.forEach((b, i) => {
+      const at = g.mapButtonAt(i, btns.length), main = b.label === 'Ambush';
+      c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : main ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
+      this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8); c.fill();
+      c.textAlign = 'center'; c.font = `900 ${main ? 16 : 14}px ui-monospace, Menlo, Consolas, monospace`;
+      c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
+      c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+    });
+    c.restore();
   }
 
   /** The selected node's panel (PLAN 7.1). Buttons come from Game.mapButtons so taps and drawing agree. */
@@ -680,9 +752,25 @@ class Renderer {
       if ((n.type === 'castle' || n.type === 'keep') && op && op.owner !== 'player') note('+1 tier of defenders: their watchtower stands');
       if (!camp.canAttack(n)) note('out of reach: take a bordering territory first', '#ff9a8a');
     } else {
-      row('Held by', 'you');
-      note('garrison, income, upgrades and armies', PAL.dim);
-      note('arrive with the war economy (Phase 7-8)', PAL.dim);
+      const w = g.war;
+      if (n.type === 'castle') {
+        const gr = w.garrison[n.id] || emptyReserve(), tot = troopTotal(gr), cap = w.cap(n);
+        row('Garrison', `${tot} / ${cap}`);
+        note(`sword ${gr.sword} · spear ${gr.spear} · archer ${gr.archer} · shield ${gr.shield} · ram ${gr.ram}`, PAL.dim);
+        const status = tot >= cap ? 'full' : g.player.gold < WAR.troopCost.sword ? 'waiting for gold' : `+${w.production(n)} / min`;
+        row('Recruiting', status, tot >= cap || g.player.gold < WAR.troopCost.sword ? '#ffb070' : '#9fe8b0');
+        row('Warband', `${troopTotal(w.warband)} / ${g.warbandCap()}`);
+        note('Send army and generals arrive in Phases 8 and 10', PAL.dim);
+      } else if (n.type === 'village') {
+        row('Income', `${w.income(n)} gold / min`, '#ffd54a');
+        row('Gold waiting', `${Math.floor(w.stock[n.id])} / ${WAR.villageStockCap}`);
+        row('Next convoy', `${Math.ceil(w.convoyT[n.id])} s`);
+      } else if (n.type === 'keep') {
+        row('Defense (sim)', `x${[1.5, 1.7, 2.0][n.level - 1]}`);
+        row('Defenders', `+${WAR.keepDefenders[n.level - 1]}`);
+      } else {
+        note('outposts don\'t level; while you hold it, this territory\'s castle and keep fight a tier lower', PAL.dim);
+      }
     }
     // buttons
     const btns = g.mapButtons();

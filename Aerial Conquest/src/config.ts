@@ -474,6 +474,20 @@ const WAR = {
   mapZoomTime: 0.25,         // seconds to glide between the two zooms
   mapNodeTap: 26,            // tap radius around a node (screen px)
 
+  // the war economy (Phase 7, PLAN 5.2 / 6)
+  tierCost: [1, 1.5, 2, 3, 4],          // upgrade costs x this by territory tier
+  villageStockCap: 300,                 // gold a village holds before its convoy leaves
+  convoyEvery: 60,                      // seconds between a village's convoys
+  convoySpeed: 18,                      // map units / s along the roads
+  troopCost: { sword: 4, spear: 5, archer: 6, shield: 8, ram: 40, hound: 6 } as Record<UnitType, number>,
+  ramEvery: 30,                         // a castle recruits a ram after this many troops
+  startGarrison: 24,                    // the Last Camp's garrison at the start (*default*)
+  l3Warband: 3, l3WarbandMax: 12,       // warband cap per level-3 castle you hold, and its ceiling
+  enemyConvoyEvery: 45,                 // seconds between Dominion convoys (*default*; their economy is Phase 9)
+  enemyConvoyMax: 3,                    // ...at most this many on the roads
+  enemyConvoyCargo: 60,                 // ...each carrying this x territory tier
+  autosaveEvery: 60,                    // seconds on the map between autosaves (PLAN 13)
+
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
   testFieldTier: 1,

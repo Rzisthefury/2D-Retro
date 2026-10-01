@@ -32,6 +32,8 @@ interface BattleSpec {
   generalName?: string;                       // rescue: who you came for
   gateMult?: number;                          // castle gate HP x (castle level, PLAN 5.2)
   nodeId?: number;                            // the map node this battle is for (none: the debug battle list)
+  convoyId?: number;                          // convoy ambush: the map convoy this is
+  cargo?: number;                             // convoy ambush: the gold aboard
 }
 
 /** Ground colours per territory scenery (PLAN 10.1: the look comes from the territory). */
@@ -441,7 +443,7 @@ class Battle {
       wg.speed = WAR.wagonSpeed;
       this.structures.push(wg);
     }
-    this.cargo = WAR.convoyCargo * this.spec.tier * n;
+    this.cargo = this.spec.cargo ?? WAR.convoyCargo * this.spec.tier * n;
     this.exitSide = 'top';
     this.start = { x: this.w * 0.3, y: 70 };
     this.foeEdge = { x: 60, y: ry, spread: 120 };

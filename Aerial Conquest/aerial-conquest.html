@@ -517,6 +517,19 @@ const WAR = {
     mapPanSpeed: 900, // map units / s from the stick or WASD at close-up zoom
     mapZoomTime: 0.25, // seconds to glide between the two zooms
     mapNodeTap: 26, // tap radius around a node (screen px)
+    // the war economy (Phase 7, PLAN 5.2 / 6)
+    tierCost: [1, 1.5, 2, 3, 4], // upgrade costs x this by territory tier
+    villageStockCap: 300, // gold a village holds before its convoy leaves
+    convoyEvery: 60, // seconds between a village's convoys
+    convoySpeed: 18, // map units / s along the roads
+    troopCost: { sword: 4, spear: 5, archer: 6, shield: 8, ram: 40, hound: 6 },
+    ramEvery: 30, // a castle recruits a ram after this many troops
+    startGarrison: 24, // the Last Camp's garrison at the start (*default*)
+    l3Warband: 3, l3WarbandMax: 12, // warband cap per level-3 castle you hold, and its ceiling
+    enemyConvoyEvery: 45, // seconds between Dominion convoys (*default*; their economy is Phase 9)
+    enemyConvoyMax: 3, // ...at most this many on the roads
+    enemyConvoyCargo: 60, // ...each carrying this x territory tier
+    autosaveEvery: 60, // seconds on the map between autosaves (PLAN 13)
     // the Phase 0 test battlefield
     testField: { w: 1920, h: 1200 },
     testFieldTier: 1,
@@ -2576,7 +2589,7 @@ class Battle {
             wg.speed = WAR.wagonSpeed;
             this.structures.push(wg);
         }
-        this.cargo = WAR.convoyCargo * this.spec.tier * n;
+        this.cargo = this.spec.cargo ?? WAR.convoyCargo * this.spec.tier * n;
         this.exitSide = 'top';
         this.start = { x: this.w * 0.3, y: 70 };
         this.foeEdge = { x: 60, y: ry, spread: 120 };
@@ -2997,6 +3010,17 @@ class Campaign {
         }
         return out;
     }
+    /** A point on the road from node a to b at t (0..1), on the same bowed curve the map draws. */
+    roadPoint(a, b, t) {
+        if (a > b) {
+            [a, b] = [b, a];
+            t = 1 - t;
+        }
+        const A = this.nodes[a], B = this.nodes[b];
+        const mx = (A.x + B.x) / 2 + (B.y - A.y) * 0.08, my = (A.y + B.y) / 2 - (B.x - A.x) * 0.08;
+        const u = 1 - t;
+        return { x: u * u * A.x + 2 * u * t * mx + t * t * B.x, y: u * u * A.y + 2 * u * t * my + t * t * B.y };
+    }
     /** PLAN 4: you hold the Last Camp (a level-1 castle and its village); the Dominion holds the rest. */
     reset() {
         for (const n of this.nodes) {
@@ -3106,6 +3130,367 @@ class Campaign {
         return true;
     }
 }
+/* =========================================================================
+ * war.ts — the war state on the campaign map (PLAN 6, 7): the treasury's
+ * income, convoys, castle garrisons and troop production, node upgrades and
+ * the knight's warband. Ticks while the map is up (battles pause it).
+ *
+ * Armies on the road, the off-screen sim (Phase 8) and the Dominion's
+ * campaign AI (Phase 9) build on this.
+ * ========================================================================= */
+/** Recruit mixes a castle can be set to (PLAN 6: default auto-balance 40/20/25/15). */
+const RECRUIT_MIXES = [
+    { name: 'Balanced', mix: { sword: 0.4, spear: 0.2, archer: 0.25, shield: 0.15 } },
+    { name: 'Infantry', mix: { sword: 0.55, spear: 0.3, archer: 0.05, shield: 0.1 } },
+    { name: 'Archers', mix: { sword: 0.25, spear: 0.1, archer: 0.5, shield: 0.15 } },
+    { name: 'Shield wall', mix: { sword: 0.3, spear: 0.2, archer: 0.15, shield: 0.35 } },
+];
+function troopTotal(r) { let n = 0; for (const k of UNIT_ORDER)
+    n += r[k]; return n; }
+class War {
+    constructor(camp) {
+        this.time = 0; // seconds of map time this campaign
+        this.convoys = [];
+        this.nextConvoyId = 1;
+        this.enemyConvoyT = 0;
+        this.warband = emptyReserve(); // the knight's own troops (PLAN 7.2)
+        this.delivered = 0; // gold delivered by your convoys (for the HUD and checks)
+        this.camp = camp;
+        const N = camp.nodes.length;
+        this.stock = new Array(N).fill(0);
+        this.convoyT = new Array(N).fill(WAR.convoyEvery);
+        this.garrison = new Array(N).fill(null);
+        this.prod = new Array(N).fill(0);
+        this.sinceRam = new Array(N).fill(0);
+        this.mix = new Array(N).fill(0);
+        this.reset();
+    }
+    /** A fresh war: the Last Camp's garrison and a full warband. */
+    reset() {
+        this.time = 0;
+        this.stock.fill(0);
+        this.convoyT.fill(WAR.convoyEvery);
+        this.prod.fill(0);
+        this.sinceRam.fill(0);
+        this.mix.fill(0);
+        this.garrison.fill(null);
+        this.convoys = [];
+        this.enemyConvoyT = WAR.enemyConvoyEvery * 0.5;
+        this.delivered = 0;
+        for (const n of this.camp.nodes)
+            if (n.owner === 'player' && n.type === 'castle')
+                this.garrison[n.id] = this.recruitList(WAR.startGarrison, 0);
+        this.warband = this.recruitList(WAR.warbandBase, 0);
+    }
+    /** n troops in a mix (no gold involved): for the start and for tests. */
+    recruitList(n, mixIdx) {
+        const r = emptyReserve();
+        for (let k = 0; k < n; k++)
+            r[this.nextType(r, mixIdx)]++;
+        return r;
+    }
+    /** The type a castle recruits next: the one furthest under its share of the mix. */
+    nextType(r, mixIdx) {
+        const m = RECRUIT_MIXES[mixIdx].mix, tot = troopTotal(r) - r.ram + 1;
+        let best = 'sword', bd = -Infinity;
+        for (const k of ['sword', 'spear', 'archer', 'shield']) {
+            const d = m[k] - r[k] / tot;
+            if (d > bd) {
+                bd = d;
+                best = k;
+            }
+        }
+        return best;
+    }
+    income(n) { return n.type === 'village' ? War.INCOME[n.level - 1] : 0; }
+    production(n) { return n.type === 'castle' ? War.PRODUCTION[n.level - 1] : 0; }
+    cap(n) { return WAR.castleGarrison[n.level - 1]; }
+    /** Gold to raise a node a level (PLAN 5.2 x the tier multiplier), or 0 if it can't be. */
+    upgradeCost(n) {
+        if (n.type === 'outpost' || n.level >= 3)
+            return 0;
+        const t = this.camp.territories[n.territory];
+        return Math.round(War.UPGRADE[n.type][n.level - 1] * WAR.tierCost[t.tier - 1]);
+    }
+    /** Raise a node you hold a level, paying from the treasury. */
+    upgrade(n, p) {
+        const cost = this.upgradeCost(n);
+        if (n.owner !== 'player' || !cost || p.gold < cost)
+            return false;
+        p.gold -= cost;
+        n.level++;
+        return true;
+    }
+    /** The warband's cap: 12, +3 per level-3 castle you hold (max +12); talents add in Phase 11. */
+    warbandCap() {
+        const l3 = this.camp.nodes.filter((n) => n.type === 'castle' && n.owner === 'player' && n.level === 3).length;
+        return WAR.warbandBase + Math.min(WAR.l3WarbandMax, l3 * WAR.l3Warband);
+    }
+    /** Your castle nearest by road to node `from` (or -1). */
+    nearestCastle(from, team) {
+        const N = this.camp.nodes.length;
+        let best = -1, bd = Infinity;
+        for (const n of this.camp.nodes) {
+            if (n.type !== 'castle' || n.owner !== team)
+                continue;
+            const d = this.camp.dist[from * N + n.id];
+            if (d < bd) {
+                bd = d;
+                best = n.id;
+            }
+        }
+        return best;
+    }
+    /** The road route between two nodes. */
+    path(a, b) {
+        const N = this.camp.nodes.length, out = [a];
+        let k = a;
+        while (k !== b && out.length < N) {
+            k = this.camp.hop[k * N + b];
+            if (k < 0)
+                return [];
+            out.push(k);
+        }
+        return out;
+    }
+    /** Where a convoy is on the map (on the road's bowed curve, as the map draws it). */
+    convoyPos(c) {
+        if (c.leg >= c.path.length - 1) {
+            const n = this.camp.nodes[c.path[c.path.length - 1]];
+            return { x: n.x, y: n.y };
+        }
+        return this.camp.roadPoint(c.path[c.leg], c.path[c.leg + 1], c.t);
+    }
+    /* ---------------------------------------------------------------- tick */
+    /** Advance map time: income, convoys, production, the warband's refill. */
+    tick(dt, p) {
+        this.time += dt;
+        const camp = this.camp;
+        for (const n of camp.nodes) {
+            if (n.owner !== 'player')
+                continue;
+            if (n.type === 'village') {
+                this.stock[n.id] = Math.min(WAR.villageStockCap, this.stock[n.id] + this.income(n) / 60 * dt);
+                this.convoyT[n.id] -= dt;
+                if (this.convoyT[n.id] <= 0) {
+                    this.convoyT[n.id] = WAR.convoyEvery;
+                    const to = this.nearestCastle(n.id, 'player'), cargo = Math.floor(this.stock[n.id]);
+                    if (to >= 0 && cargo > 0) {
+                        this.stock[n.id] -= cargo;
+                        this.convoys.push({ id: this.nextConvoyId++, team: 'player', path: this.path(n.id, to), leg: 0, t: 0, cargo });
+                    }
+                }
+            }
+            else if (n.type === 'castle') {
+                this.produce(n, dt, p);
+            }
+        }
+        // the Dominion's convoys (its economy proper arrives with its campaign AI, Phase 9)
+        this.enemyConvoyT -= dt;
+        if (this.enemyConvoyT <= 0) {
+            this.enemyConvoyT = WAR.enemyConvoyEvery;
+            if (this.convoys.filter((c) => c.team === 'enemy').length < WAR.enemyConvoyMax)
+                this.sendEnemyConvoy();
+        }
+        // convoys roll along their roads
+        for (const c of this.convoys) {
+            let move = WAR.convoySpeed * dt;
+            while (move > 0 && c.leg < c.path.length - 1) {
+                const a = camp.nodes[c.path[c.leg]], b = camp.nodes[c.path[c.leg + 1]];
+                const len = Math.max(1, dist(a.x, a.y, b.x, b.y));
+                const left = (1 - c.t) * len;
+                if (move < left) {
+                    c.t += move / len;
+                    move = 0;
+                }
+                else {
+                    move -= left;
+                    c.leg++;
+                    c.t = 0;
+                }
+            }
+        }
+        for (const c of this.convoys) {
+            if (c.leg < c.path.length - 1)
+                continue;
+            if (c.team === 'player') {
+                p.gold += c.cargo;
+                this.delivered += c.cargo;
+            }
+        }
+        this.convoys = this.convoys.filter((c) => c.leg < c.path.length - 1);
+        this.refillWarband();
+    }
+    /** PLAN 6: castles recruit continuously while there's gold, up to their cap; a ram every 30. */
+    produce(n, dt, p) {
+        const g = this.garrison[n.id] || (this.garrison[n.id] = emptyReserve());
+        if (troopTotal(g) >= this.cap(n)) {
+            this.prod[n.id] = 0;
+            return;
+        }
+        this.prod[n.id] = Math.min(1, this.prod[n.id] + this.production(n) / 60 * dt);
+        while (this.prod[n.id] >= 1 && troopTotal(g) < this.cap(n)) {
+            const kind = this.sinceRam[n.id] >= WAR.ramEvery ? 'ram' : this.nextType(g, this.mix[n.id]);
+            const cost = WAR.troopCost[kind];
+            if (p.gold < cost)
+                return; // waits for gold, progress held
+            p.gold -= cost;
+            g[kind]++;
+            this.sinceRam[n.id] = kind === 'ram' ? 0 : this.sinceRam[n.id] + 1;
+            this.prod[n.id] -= 1;
+        }
+    }
+    /** The warband tops itself up from your castles' garrisons (biggest first) while you're on the map. */
+    refillWarband() {
+        let need = this.warbandCap() - troopTotal(this.warband);
+        if (need <= 0)
+            return;
+        const castles = this.camp.nodes.filter((n) => n.type === 'castle' && n.owner === 'player' && this.garrison[n.id])
+            .sort((a, b) => troopTotal(this.garrison[b.id]) - troopTotal(this.garrison[a.id]));
+        for (const c of castles) {
+            const g = this.garrison[c.id];
+            while (need > 0 && troopTotal(g) > 0) {
+                // take what the warband is shortest of, among what the castle has (rams stay home)
+                let pick = null, bd = -Infinity;
+                for (const k of ['sword', 'spear', 'archer', 'shield']) {
+                    if (!g[k])
+                        continue;
+                    const d = RECRUIT_MIXES[0].mix[k] - this.warband[k] / (troopTotal(this.warband) + 1);
+                    if (d > bd) {
+                        bd = d;
+                        pick = k;
+                    }
+                }
+                if (!pick)
+                    break;
+                g[pick]--;
+                this.warband[pick]++;
+                need--;
+            }
+            if (need <= 0)
+                return;
+        }
+    }
+    /**
+     * A Dominion village sends its gold as tribute to the warlord: the Dominion's
+     * highest-tier castle (the capital while it stands). *default*: long routes
+     * that cross your frontier, so there's something to ambush.
+     */
+    sendEnemyConvoy() {
+        const camp = this.camp;
+        const castles = camp.nodes.filter((n) => n.type === 'castle' && n.owner === 'enemy');
+        if (!castles.length)
+            return;
+        const top = Math.max(...castles.map((n) => camp.territories[n.territory].tier));
+        const seat = castles.find((n) => camp.territories[n.territory].tier === top);
+        const villages = camp.nodes.filter((n) => n.type === 'village' && n.owner === 'enemy' && n.territory !== seat.territory);
+        if (!villages.length)
+            return;
+        const v = villages[Math.floor(Math.random() * villages.length)];
+        const to = seat.id, path = this.path(v.id, to);
+        if (path.length < 2)
+            return;
+        const tier = camp.territories[v.territory].tier;
+        this.convoys.push({ id: this.nextConvoyId++, team: 'enemy', path, leg: 0, t: 0, cargo: WAR.enemyConvoyCargo * tier });
+    }
+    /** A Dominion convoy you can reach: on a road touching a node you hold or can attack (the frontier). */
+    canAmbush(c) {
+        if (c.team !== 'enemy' || c.leg >= c.path.length - 1)
+            return false;
+        return [c.path[c.leg], c.path[c.leg + 1]].some((id) => {
+            const n = this.camp.nodes[id];
+            return n.owner === 'player' || this.camp.canAttack(n);
+        });
+    }
+    /** The battle an ambush gives (PLAN 10.2: convoy ambush), carrying this convoy's cargo. */
+    ambushSpec(c) {
+        const n = this.camp.nodes[c.path[c.leg]], t = this.camp.territories[n.territory];
+        const spec = convoySpec();
+        spec.name = `Convoy near ${n.name}`;
+        spec.tier = t.tier;
+        spec.scenery = t.scenery;
+        spec.seed = 5000 + c.id * 31;
+        spec.cargo = c.cargo;
+        spec.convoyId = c.id;
+        return spec;
+    }
+    /** Battle over: survivors are the warband again (a loss loses it, PLAN 10.1). */
+    warbandBack(survivors) {
+        this.warband = survivors || emptyReserve();
+        const cap = this.warbandCap();
+        // over the cap (it can't be, but a save could say so): trim
+        while (troopTotal(this.warband) > cap) {
+            const k = UNIT_ORDER.reduce((a, b) => (this.warband[a] >= this.warband[b] ? a : b));
+            this.warband[k]--;
+        }
+    }
+    /** A node changed hands: a captured castle starts with an empty garrison, a village with an empty store. */
+    onCapture(n) {
+        if (n.type === 'castle') {
+            this.garrison[n.id] = emptyReserve();
+            this.prod[n.id] = 0;
+            this.sinceRam[n.id] = 0;
+            this.mix[n.id] = 0;
+        }
+        if (n.type === 'village') {
+            this.stock[n.id] = 0;
+            this.convoyT[n.id] = WAR.convoyEvery;
+        }
+    }
+    /* --------------------------------------------------------------- saves */
+    save() {
+        const r = (x) => x ? UNIT_ORDER.map((k) => x[k]) : null;
+        return {
+            time: Math.round(this.time), stock: this.stock.map((s) => Math.round(s)), convoyT: this.convoyT.map((s) => Math.round(s)),
+            garrison: this.garrison.map(r), prod: this.prod.map((s) => +s.toFixed(2)), sinceRam: this.sinceRam, mix: this.mix,
+            warband: r(this.warband), enemyConvoyT: Math.round(this.enemyConvoyT), delivered: this.delivered,
+            convoys: this.convoys.map((c) => [c.team === 'player' ? 1 : 0, c.path, c.leg, +c.t.toFixed(3), c.cargo]),
+        };
+    }
+    /** Restore, keeping only what fits this continent (PLAN 13: validate on load). */
+    load(s) {
+        this.reset();
+        if (!s || typeof s !== 'object')
+            return;
+        const N = this.camp.nodes.length;
+        const nums = (a, lo, hi) => Array.isArray(a) && a.length === N ? a.map((v) => clamp(+v || 0, lo, hi)) : null;
+        const res = (a) => {
+            if (!Array.isArray(a) || a.length !== UNIT_ORDER.length)
+                return null;
+            const r = emptyReserve();
+            UNIT_ORDER.forEach((k, i) => { r[k] = Math.max(0, a[i] | 0); });
+            return r;
+        };
+        this.time = Math.max(0, +s.time || 0);
+        this.stock = nums(s.stock, 0, WAR.villageStockCap) || this.stock;
+        this.convoyT = nums(s.convoyT, 0, WAR.convoyEvery) || this.convoyT;
+        this.prod = nums(s.prod, 0, 1) || this.prod;
+        this.sinceRam = nums(s.sinceRam, 0, WAR.ramEvery) || this.sinceRam;
+        this.mix = (nums(s.mix, 0, RECRUIT_MIXES.length - 1) || this.mix).map((v) => v | 0);
+        if (Array.isArray(s.garrison) && s.garrison.length === N) {
+            this.garrison = s.garrison.map((g, i) => this.camp.nodes[i].type === 'castle' && this.camp.nodes[i].owner === 'player' ? res(g) || emptyReserve() : null);
+        }
+        const wb = res(s.warband);
+        if (wb)
+            this.warband = wb;
+        this.enemyConvoyT = clamp(+s.enemyConvoyT || 0, 0, WAR.enemyConvoyEvery);
+        this.delivered = Math.max(0, +s.delivered || 0);
+        if (Array.isArray(s.convoys)) {
+            for (const c of s.convoys) {
+                if (!Array.isArray(c) || !Array.isArray(c[1]) || c[1].length < 2 || c[1].some((id) => !(id >= 0 && id < N)))
+                    continue;
+                const path = c[1];
+                if (!path.every((id, i) => i === 0 || this.camp.links[path[i - 1]].includes(id)))
+                    continue;
+                this.convoys.push({ id: this.nextConvoyId++, team: c[0] === 1 ? 'player' : 'enemy', path, leg: clamp(c[2] | 0, 0, path.length - 2), t: clamp(+c[3] || 0, 0, 1), cargo: Math.max(0, c[4] | 0) });
+            }
+        }
+    }
+}
+/* ------------------------------------------------------------- figures */
+War.INCOME = [20, 35, 55]; // PLAN 5.2 village gold / min
+War.PRODUCTION = [6, 10, 16]; // castle troops / min
+War.UPGRADE = { village: [150, 400], castle: [300, 800], keep: [250, 700] };
 /* =========================================================================
  * music.ts — the score. An orchestral, melody-first soundtrack in the
  * spirit of Kingdom Hearts, synthesised live: piano, strings, flute,
@@ -6047,10 +6432,61 @@ class Renderer {
             c.fillText(`tier ${t.tier}`, p.x, p.y + size);
         }
         c.restore();
+        // convoys on the roads
+        for (const cv of g.war.convoys)
+            this.drawMapConvoy(c, g, cv);
         // nodes
         for (const n of camp.nodes)
             this.drawMapNode(c, g, n);
         this.drawMapHud(c, g);
+    }
+    /** A convoy: a small covered wagon in its side's colour, gold aboard; ambushable ones pulse. */
+    drawMapConvoy(c, g, cv) {
+        const q = g.war.convoyPos(cv), p = g.mapToScreen(q.x, q.y);
+        if (p.x < -30 || p.x > VIEW_W + 30 || p.y < -30 || p.y > VIEW_H + 30)
+            return;
+        const k = lerp(0.8, 1.15, g.mapZoom), mine = cv.team === 'player';
+        c.save();
+        c.translate(p.x, p.y);
+        c.scale(k, k);
+        if (g.war.canAmbush(cv)) {
+            c.strokeStyle = `rgba(255,213,74,${0.5 + Math.sin(g.time * 5 + cv.id) * 0.3})`;
+            c.lineWidth = 2;
+            c.beginPath();
+            c.arc(0, -3, 13, 0, Math.PI * 2);
+            c.stroke();
+        }
+        if (g.mapConvoy === cv.id) {
+            c.strokeStyle = '#ffffff';
+            c.lineWidth = 2.5;
+            c.beginPath();
+            c.arc(0, -3, 16, 0, Math.PI * 2);
+            c.stroke();
+        }
+        c.fillStyle = 'rgba(0,0,0,0.35)';
+        c.beginPath();
+        c.ellipse(0, 5, 10, 3.5, 0, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = '#6b4a2b';
+        c.fillRect(-9, -4, 18, 7);
+        c.fillStyle = mine ? '#cfe3ff' : '#f0d8c8';
+        c.beginPath();
+        c.moveTo(-8, -4);
+        c.quadraticCurveTo(0, -15, 8, -4);
+        c.closePath();
+        c.fill();
+        c.fillStyle = mine ? PAL.ally : PAL.dominion;
+        c.fillRect(-2, -10, 4, 4);
+        c.fillStyle = '#2a1e10';
+        c.beginPath();
+        c.arc(-5, 4, 2.6, 0, Math.PI * 2);
+        c.arc(5, 4, 2.6, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = '#ffd54a';
+        c.beginPath();
+        c.arc(8, -8, 2.4, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
     }
     /** One node icon: type by shape, owner by colour, level by pips; attackable ones pulse. */
     drawMapNode(c, g, n) {
@@ -6147,6 +6583,23 @@ class Renderer {
                 c.fillRect(-2, -12, 4, 5);
                 break;
         }
+        // your castles show their garrison, your villages the gold waiting for the next convoy
+        if (mine && n.type === 'castle') {
+            const gn = g.war.garrison[n.id] ? troopTotal(g.war.garrison[n.id]) : 0;
+            c.fillStyle = 'rgba(10,20,40,0.85)';
+            c.fillRect(13, -20, 20, 11);
+            c.fillStyle = '#cfe6ff';
+            c.font = '700 9px ui-monospace, Menlo, Consolas, monospace';
+            c.textAlign = 'center';
+            c.fillText(String(gn), 23, -11.5);
+        }
+        if (mine && n.type === 'village') {
+            const f = g.war.stock[n.id] / WAR.villageStockCap;
+            c.fillStyle = 'rgba(0,0,0,0.6)';
+            c.fillRect(-12, 18, 24, 4);
+            c.fillStyle = '#ffd54a';
+            c.fillRect(-12, 18, 24 * f, 4);
+        }
         // level pips
         if (n.type !== 'outpost') {
             for (let i = 0; i < n.level; i++) {
@@ -6217,7 +6670,7 @@ class Renderer {
         c.fillText('THE VERDANT REACH', 16, 28);
         c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
         const items = [
-            ['gold', String(p.gold)], ['warband', `${g.warbandCap()}`], ['SP', String(p.skillPoints)], ['territories', `${camp.territoriesHeld('player')} / ${camp.territories.length}`],
+            ['gold', String(p.gold)], ['warband', `${troopTotal(g.war.warband)} / ${g.warbandCap()}`], ['SP', String(p.skillPoints)], ['territories', `${camp.territoriesHeld('player')} / ${camp.territories.length}`],
         ];
         let x = 260;
         for (const [k, v] of items) {
@@ -6237,9 +6690,63 @@ class Renderer {
         c.fillStyle = 'rgba(232,236,247,0.75)';
         c.fillText(help, VIEW_W / 2, VIEW_H - 8);
         c.restore();
-        if (g.mapSel >= 0)
+        const cv = g.selectedConvoy();
+        if (cv)
+            this.drawConvoyPanel(c, g, cv);
+        else if (g.mapSel >= 0)
             this.drawNodePanel(c, g, camp.nodes[g.mapSel]);
         this.drawNotices(c, g);
+    }
+    /** A selected convoy: whose, what it carries, where it's going; Ambush for theirs. */
+    drawConvoyPanel(c, g, cv) {
+        const P = MAP_PANEL, camp = g.camp, mine = cv.team === 'player';
+        c.save();
+        c.fillStyle = 'rgba(12,16,30,0.92)';
+        this.roundRect(c, P.x, P.y, P.w, P.h, 10);
+        c.fill();
+        c.strokeStyle = mine ? '#5f9bff' : '#d0505a';
+        c.lineWidth = 2;
+        this.roundRect(c, P.x, P.y, P.w, P.h, 10);
+        c.stroke();
+        const x = P.x + P.pad;
+        let y = P.y + P.pad + 18;
+        c.textAlign = 'left';
+        c.font = '900 18px Georgia, serif';
+        c.fillStyle = '#ffffff';
+        c.fillText(mine ? 'Your convoy' : 'Dominion convoy', x, y);
+        y += 22;
+        const row = (k, v, col = PAL.text) => {
+            c.fillStyle = PAL.dim;
+            c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+            c.fillText(k, x, y);
+            c.textAlign = 'right';
+            c.fillStyle = col;
+            c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+            c.fillText(v, P.x + P.w - P.pad, y);
+            c.textAlign = 'left';
+            y += 19;
+        };
+        row('Cargo', `${cv.cargo} gold`, '#ffd54a');
+        row('From', camp.nodes[cv.path[0]].name);
+        row('To', camp.nodes[cv.path[cv.path.length - 1]].name);
+        if (!mine) {
+            y += 4;
+            c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = g.war.canAmbush(cv) ? '#c7b8ff' : '#ff9a8a';
+            c.fillText(g.war.canAmbush(cv) ? 'Ambush: a convoy battle; win to take the cargo' : 'out of reach until it nears your frontier', x, y);
+        }
+        const btns = g.mapButtons();
+        btns.forEach((b, i) => {
+            const at = g.mapButtonAt(i, btns.length), main = b.label === 'Ambush';
+            c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : main ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
+            this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8);
+            c.fill();
+            c.textAlign = 'center';
+            c.font = `900 ${main ? 16 : 14}px ui-monospace, Menlo, Consolas, monospace`;
+            c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
+            c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+        });
+        c.restore();
     }
     /** The selected node's panel (PLAN 7.1). Buttons come from Game.mapButtons so taps and drawing agree. */
     drawNodePanel(c, g, n) {
@@ -6321,9 +6828,28 @@ class Renderer {
                 note('out of reach: take a bordering territory first', '#ff9a8a');
         }
         else {
-            row('Held by', 'you');
-            note('garrison, income, upgrades and armies', PAL.dim);
-            note('arrive with the war economy (Phase 7-8)', PAL.dim);
+            const w = g.war;
+            if (n.type === 'castle') {
+                const gr = w.garrison[n.id] || emptyReserve(), tot = troopTotal(gr), cap = w.cap(n);
+                row('Garrison', `${tot} / ${cap}`);
+                note(`sword ${gr.sword} · spear ${gr.spear} · archer ${gr.archer} · shield ${gr.shield} · ram ${gr.ram}`, PAL.dim);
+                const status = tot >= cap ? 'full' : g.player.gold < WAR.troopCost.sword ? 'waiting for gold' : `+${w.production(n)} / min`;
+                row('Recruiting', status, tot >= cap || g.player.gold < WAR.troopCost.sword ? '#ffb070' : '#9fe8b0');
+                row('Warband', `${troopTotal(w.warband)} / ${g.warbandCap()}`);
+                note('Send army and generals arrive in Phases 8 and 10', PAL.dim);
+            }
+            else if (n.type === 'village') {
+                row('Income', `${w.income(n)} gold / min`, '#ffd54a');
+                row('Gold waiting', `${Math.floor(w.stock[n.id])} / ${WAR.villageStockCap}`);
+                row('Next convoy', `${Math.ceil(w.convoyT[n.id])} s`);
+            }
+            else if (n.type === 'keep') {
+                row('Defense (sim)', `x${[1.5, 1.7, 2.0][n.level - 1]}`);
+                row('Defenders', `+${WAR.keepDefenders[n.level - 1]}`);
+            }
+            else {
+                note('outposts don\'t level; while you hold it, this territory\'s castle and keep fight a tier lower', PAL.dim);
+            }
         }
         // buttons
         const btns = g.mapButtons();
@@ -9472,7 +9998,7 @@ function freshSave() {
         weapon: 'w1', armor: 'a1', talents: {},
         potions: 3, ethers: 2,
         hero: 'wayfarer', blade: 'longsword',
-        war: null,
+        war: null, econ: null,
     };
 }
 function loadSave() {
@@ -9522,6 +10048,8 @@ function loadSave() {
                 d.blade = j.blade;
             if (Array.isArray(j.war))
                 d.war = j.war; // Campaign.load validates it against the continent
+            if (j.econ && typeof j.econ === 'object')
+                d.econ = j.econ; // ...and War.load this
         }
     }
     catch { /* private mode, blocked storage — play on regardless */ }
@@ -9627,6 +10155,9 @@ class Game {
         this.deathT = 0;
         /* --------------------------------------------------------- campaign map */
         this.camp = new Campaign();
+        this.war = new War(this.camp);
+        this.mapConvoy = -1; // selected convoy id, or -1
+        this.autosaveT = 0;
         /** Where the map is looking (map units, the view's centre) and how close (0 whole continent .. 1 close-up). */
         this.mapX = CONTINENT.w / 2;
         this.mapY = CONTINENT.h / 2;
@@ -9816,7 +10347,11 @@ class Game {
         this.freshCamp();
         this.screen = 'campaign';
         this.battleFrom = 'map';
-        this.camp.load(loadSave().war);
+        const sv = loadSave();
+        this.camp.load(sv.war);
+        this.war.load(sv.econ);
+        this.war.refillWarband();
+        this.mapConvoy = -1;
     }
     /** Debug: the Phase 4-5 list of one battle of each type (and the test field), from the tuning panel. */
     enterSandbox() {
@@ -9857,14 +10392,60 @@ class Game {
     }
     /** The node panel's buttons for the selection (shared by drawing and hit-testing). */
     mapButtons() {
+        const out = [];
+        const close = { label: 'Close', enabled: true, act: () => { this.mapSel = -1; this.mapConvoy = -1; } };
+        const cv = this.selectedConvoy();
+        if (cv) {
+            if (cv.team === 'enemy')
+                out.push({ label: 'Ambush', enabled: this.war.canAmbush(cv), act: () => this.ambush(cv), why: 'OUT OF REACH: IT MUST BE ON A ROAD AT YOUR FRONTIER' });
+            out.push(close);
+            return out;
+        }
         if (this.mapSel < 0)
             return [];
         const n = this.camp.nodes[this.mapSel];
-        const out = [];
         if (n.owner === 'enemy')
-            out.push({ label: 'Attack', enabled: this.camp.canAttack(n), act: () => this.attackNode(n) });
-        out.push({ label: 'Close', enabled: true, act: () => { this.mapSel = -1; } });
+            out.push({ label: 'Attack', enabled: this.camp.canAttack(n), act: () => this.attackNode(n), why: 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST' });
+        else {
+            if (n.type === 'castle') {
+                out.push({ label: `Mix: ${RECRUIT_MIXES[this.war.mix[n.id]].name}`, enabled: true, act: () => { this.war.mix[n.id] = (this.war.mix[n.id] + 1) % RECRUIT_MIXES.length; this.sfx.guard(); } });
+            }
+            const cost = this.war.upgradeCost(n);
+            if (n.type !== 'outpost') {
+                out.push({
+                    label: cost ? `Upgrade to L${n.level + 1}  ·  ${cost} g` : 'Level 3 (max)', enabled: cost > 0 && this.player.gold >= cost,
+                    act: () => { if (this.war.upgrade(n, this.player)) {
+                        this.sfx.levelUp();
+                        this.toast(`${n.name.toUpperCase()} NOW LEVEL ${n.level}`);
+                        this.save();
+                    } },
+                    why: cost ? `NEED ${cost} GOLD` : 'ALREADY LEVEL 3',
+                });
+            }
+        }
+        out.push(close);
         return out;
+    }
+    selectedConvoy() { return this.mapConvoy >= 0 ? this.war.convoys.find((c) => c.id === this.mapConvoy) || null : null; }
+    /** The convoy under a screen point (within the tap radius), or -1. */
+    convoyAt(x, y) {
+        let best = -1, bd = WAR.mapNodeTap * WAR.mapNodeTap;
+        for (const c of this.war.convoys) {
+            const q = this.war.convoyPos(c), p = this.mapToScreen(q.x, q.y), d = (p.x - x) ** 2 + (p.y - y) ** 2;
+            if (d < bd) {
+                bd = d;
+                best = c.id;
+            }
+        }
+        return best;
+    }
+    /** Ambush a Dominion convoy: a convoy battle for its cargo (PLAN 6). */
+    ambush(c) {
+        if (!this.war.canAmbush(c))
+            return;
+        this.sfx.cast(560);
+        this.battleFrom = 'map';
+        this.startBattle(this.war.ambushSpec(c));
     }
     /** Top-left of panel button i of n. */
     mapButtonAt(i, n) {
@@ -9878,9 +10459,15 @@ class Game {
         this.battleFrom = 'map';
         this.startBattle(this.camp.battleSpec(n));
     }
+    convoyCloser(cv, nd, at) {
+        const c = this.war.convoys.find((x) => x.id === cv), q = this.war.convoyPos(c), cp = this.mapToScreen(q.x, q.y);
+        const n = this.camp.nodes[nd], np = this.mapToScreen(n.x, n.y);
+        return (cp.x - at.x) ** 2 + (cp.y - at.y) ** 2 < ((np.x - at.x) ** 2 + (np.y - at.y) ** 2) * 0.5;
+    }
     /** Select a node (or none) and bring it into view. */
     selectNode(id) {
         this.mapSel = id;
+        this.mapConvoy = -1;
         if (id < 0)
             return;
         this.sfx.guard();
@@ -9933,6 +10520,15 @@ class Game {
     }
     handleMap(dt) {
         const inp = this.input;
+        // map time: income, convoys, production (PLAN 7: real time; battles pause it)
+        this.war.tick(dt, this.player);
+        if (this.mapConvoy >= 0 && !this.selectedConvoy())
+            this.mapConvoy = -1; // it arrived
+        this.autosaveT += dt;
+        if (this.autosaveT >= WAR.autosaveEvery) {
+            this.autosaveT = 0;
+            this.save();
+        }
         // zoom: wheel, pinch, Z / L / LT
         const z = inp.takeZoom();
         if (z > 0)
@@ -9972,13 +10568,22 @@ class Game {
                         btns[i].act();
                     else {
                         this.sfx.guard();
-                        this.toast(this.mapSel >= 0 ? 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST' : '');
+                        this.toast(btns[i].why || '');
                     }
                 }
             }
-            const inPanel = this.mapSel >= 0 && click.x >= MAP_PANEL.x && click.y >= MAP_PANEL.y && click.y <= MAP_PANEL.y + MAP_PANEL.h;
-            if (!used && !inPanel)
-                this.selectNode(this.nodeAt(click.x, click.y));
+            const inPanel = (this.mapSel >= 0 || this.mapConvoy >= 0) && click.x >= MAP_PANEL.x && click.y >= MAP_PANEL.y && click.y <= MAP_PANEL.y + MAP_PANEL.h;
+            if (!used && !inPanel) {
+                const cv = this.convoyAt(click.x, click.y), nd = this.nodeAt(click.x, click.y);
+                // a convoy wins only when it's clearly nearer than any node
+                if (cv >= 0 && (nd < 0 || this.convoyCloser(cv, nd, click))) {
+                    this.mapSel = -1;
+                    this.mapConvoy = cv;
+                    this.sfx.guard();
+                }
+                else
+                    this.selectNode(nd);
+            }
             if (this.screen !== 'campaign')
                 return;
         }
@@ -9990,6 +10595,16 @@ class Game {
             this.stepSelection(-1, 0);
         if (inp.wasPressed('right'))
             this.stepSelection(1, 0);
+        if ((inp.wasPressed('confirm') || inp.wasPressed('attack') || inp.wasPressed('jump')) && this.mapConvoy >= 0) {
+            const b0 = this.mapButtons()[0];
+            if (b0.enabled)
+                b0.act();
+            else {
+                this.sfx.guard();
+                this.toast(b0.why || '');
+            }
+            return;
+        }
         if ((inp.wasPressed('confirm') || inp.wasPressed('attack') || inp.wasPressed('jump')) && this.mapSel >= 0) {
             const n = this.camp.nodes[this.mapSel];
             if (n.owner === 'enemy' && this.camp.canAttack(n))
@@ -10001,9 +10616,12 @@ class Game {
             return;
         }
         if (inp.wasPressed('cancel')) {
-            if (this.mapSel >= 0)
+            if (this.mapSel >= 0 || this.mapConvoy >= 0) {
                 this.mapSel = -1;
+                this.mapConvoy = -1;
+            }
             else {
+                this.save();
                 this.screen = 'title';
                 this.titleIndex = 0;
             }
@@ -10123,7 +10741,9 @@ class Game {
         this.army.setEdge('enemy', b.foeEdge.x, b.foeEdge.y, b.foeEdge.spread);
         const fwd = (d) => top ? { x: b.start.x, y: b.start.y + d } : { x: b.start.x + d, y: b.start.y };
         let at = spec.kind === 'defense' ? { x: b.start.x - 60, y: b.start.y } : fwd(80);
-        this.spawnBlock(this.mixOf(this.warbandCap()), 'player', at.x, at.y, spec.tier);
+        // the warband: your own troops from the map (the debug battle list just gets a full one)
+        const wb = this.battleFrom === 'map' ? UNIT_ORDER.flatMap((k) => new Array(this.war.warband[k]).fill(k)) : this.mixOf(this.warbandCap());
+        this.spawnBlock(wb, 'player', at.x, at.y, spec.tier);
         const allies = unitList(spec.allies);
         at = spec.kind === 'defense' ? { x: b.start.x - 160, y: b.start.y + 120 } : fwd(190);
         if (allies.length)
@@ -10426,6 +11046,19 @@ class Game {
         this.wheelOpen = false;
         this.input.suppressMove = false;
         this.input.bot = null;
+        if (this.battleFrom === 'map') {
+            // the warband comes home: whoever is still standing (a loss loses it, PLAN 10.1)
+            let survivors = null;
+            if (result !== 'lose') {
+                const a = this.army;
+                survivors = { ...a.reserve[TEAM_PLAYER] };
+                for (let i = 0; i < a.cap; i++)
+                    if (a.alive[i] && a.team[i] === TEAM_PLAYER)
+                        survivors[UNIT_ORDER[a.type[i]]]++;
+            }
+            this.war.warbandBack(survivors);
+            b.notes.push(result === 'lose' ? 'the warband is lost' : `warband home: ${troopTotal(this.war.warband)} of ${this.warbandCap()}`);
+        }
         if (!b.outcome)
             b.outcome = result === 'win' ? 'Victory' : result === 'lose' ? 'You fell. Back to camp — the warband is lost, the node unchanged.' : 'You left the field. The attack is abandoned.';
         else if (result === 'lose' && !p.alive)
@@ -10435,7 +11068,8 @@ class Game {
             b.spoils.gold = Math.round((WAR.spoilGold[b.spec.kind] || 0) * b.spec.tier + kills * WAR.spoilGoldPerKill);
             if (b.spec.kind === 'convoy') {
                 b.spoils.gold += b.cargo;
-                b.notes = [`cargo taken: ${b.cargo} gold`];
+                b.notes = b.notes.filter((s) => !/aboard/.test(s));
+                b.notes.push(`cargo taken: ${b.cargo} gold`);
             }
             if (b.spec.kind === 'rescue')
                 b.notes.push(`${b.spec.generalName || 'The general'} rescued (loyalty +25 with Phase 10)`);
@@ -10443,6 +11077,7 @@ class Game {
                 // PLAN 5.3: the node is yours, a level down from the fighting
                 const n = this.camp.nodes[b.spec.nodeId];
                 this.camp.capture(n);
+                this.war.onCapture(n);
                 b.notes.push(n.type === 'castle' ? `${this.camp.territories[n.territory].name} is yours` : `${n.name} is yours (level ${n.level})`);
             }
             const commons = ['shard', 'plate', 'sigil', 'ember'];
@@ -10451,6 +11086,8 @@ class Game {
                 const m = pick(commons);
                 b.spoils.mats[m] = (b.spoils.mats[m] || 0) + 1;
             }
+            if (b.spec.convoyId !== undefined && this.battleFrom === 'map')
+                this.war.convoys = this.war.convoys.filter((c) => c.id !== b.spec.convoyId);
             p.gold += b.spoils.gold;
             for (const m of Object.keys(b.spoils.mats))
                 p.inv[m] = (p.inv[m] || 0) + (b.spoils.mats[m] || 0);
@@ -10458,9 +11095,11 @@ class Game {
             this.save();
         }
         else {
-            if (b.spec.kind === 'convoy')
-                b.notes = [];
+            b.notes = b.notes.filter((s) => !/aboard/.test(s));
             this.sfx.die();
+            // the war remembers a lost or abandoned battle too (the warband's fate)
+            if (this.battleFrom === 'map')
+                this.save();
         }
     }
     botDrive() {
@@ -10682,6 +11321,8 @@ class Game {
                     this.enterSandbox();
                 else {
                     this.enterCampaign();
+                    if (b.spec.convoyId !== undefined && b.result === 'win')
+                        this.banner('CONVOY TAKEN', `+${b.cargo} gold of their cargo`, '#ffd54a');
                     if (b.spec.nodeId !== undefined) {
                         // back on the map, looking at the node that was fought over
                         const n = this.camp.nodes[b.spec.nodeId];
@@ -11046,7 +11687,7 @@ class Game {
         return out;
     }
     /** The warband's size cap (PLAN 12.2: 12 base; talents and L3 castles add up to 60 in Phase 11). */
-    warbandCap() { return WAR.warbandBase; }
+    warbandCap() { return this.war.warbandCap(); }
     /** Spawn `kinds` as a block of ranks around (cx, cy); archers at the back. Past the live cap they go to reserve. */
     spawnBlock(kinds, side, cx, cy, tier = WAR.testFieldTier) {
         const f = this.field;
@@ -12052,12 +12693,15 @@ class Game {
             potions: p.potions, ethers: p.ethers,
             hero: this.heroStyle, blade: this.bladeStyle,
             war: this.camp.save(),
+            econ: this.war.save(),
         });
     }
     resetSave() {
         writeSave(freshSave());
         this.camp.reset();
+        this.war.reset();
         this.mapSel = -1;
+        this.mapConvoy = -1;
         this.mapZoom = this.mapZoomTo = 0;
         this.enemies.length = 0;
         this.player = new Player();

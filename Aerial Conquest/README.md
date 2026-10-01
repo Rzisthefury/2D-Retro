@@ -23,12 +23,136 @@ No dependencies, no bundler, nothing to install.
 | `src/items.ts` | materials, weapon/armour tiers, recipes |
 | `src/talents.ts` | Blade / Arcana / Survival talents, bought with skill points |
 | `src/army.ts` | the minion sim: typed-array slots, uniform grid, minion AI, arrows, `MinionRef`, reserves, orders, rout |
+| `src/war.ts` | the war on the map: village income and stores, convoys (yours and theirs), castle garrisons and recruiting, node upgrades, the warband, ambush specs, saves |
 | `src/campaign.ts` | the continent: territories, nodes, roads (data), borders, road paths, ownership, the frontier rule, garrisons and each node's battle spec |
 | `src/battle.ts` | battles: spec, seeded layouts for all eight types, `Structure` (houses, walls, gates, throne, wagons, rings, cell), zones and doors for walled layouts, objectives, scenery palettes, the stub's battle list |
 | `src/music.ts` | AF's adaptive score |
 | `src/entities.ts` | `Player`, `Enemy` (with boss AI), `Projectile`, `Pickup` |
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
+
+# Phase 7: war state and economy
+
+**What changed**
+
+- **New `src/war.ts`** holds the war's state on the map. It ticks in real
+  time while the map is up; battles pause it (*default*, as in Hyper
+  Knights).
+- **Villages** (PLAN 5.2 / 6):
+  - They earn 20 / 35 / 55 gold a minute by level into a local store
+    (cap 300).
+  - Every 60 s a convoy carries the store along the roads (`Campaign.path`)
+    to your nearest castle. Its gold enters the treasury when it arrives.
+  - Convoys are drawn as small wagons on the same bowed roads the map
+    draws (`Campaign.roadPoint`).
+- **Castles:**
+  - They recruit continuously, 6 / 10 / 16 troops a minute by level, while
+    the treasury can pay each troop's cost (sword 4, spear 5, archer 6,
+    shield 8, ram 40). They stop at the garrison cap of 40 / 80 / 140.
+  - A ram comes after every 30 troops.
+  - The mix is set per castle from its panel: Balanced 40/20/25/15 (the
+    default), Infantry, Archers or Shield wall.
+  - The Last Camp starts with 24 troops (*default*). A captured castle
+    starts empty.
+- **Upgrades** (PLAN 5.2 costs × `WAR.tierCost` 1 / 1.5 / 2 / 3 / 4):
+  - villages 150 / 400;
+  - castles 300 / 800;
+  - keeps 250 / 700;
+  - outposts don't level.
+  - A level-3 castle adds +3 warband cap (max +12).
+- **The warband** is now real troops:
+  - Each battle from the map fields exactly your warband. Whoever is
+    standing at the end comes home; a defeat loses it.
+  - On the map it refills to its cap from your castles' garrisons
+    (PLAN 7.2).
+  - The debug battle list still gets a full one for free.
+- **Dominion convoys** (*default* until their economy arrives in Phase 9):
+  - Every 45 s one of their villages sends 60 × tier gold as tribute to
+    their highest-tier castle (the capital), at most 3 on the roads at
+    once.
+  - A convoy on a road touching your frontier (a node you hold or can
+    attack) can be **Ambushed**. That starts a convoy battle, and a win
+    takes its cargo.
+- **Map UI:**
+  - Convoys are selectable, with a panel and an Ambush button.
+  - Your castles show a garrison badge; your villages show a gold bar.
+  - The top bar shows the warband as count / cap.
+  - Castle panel: garrison by type, recruiting status, warband, the Mix
+    and Upgrade buttons.
+  - Village panel: income, gold waiting, next convoy, Upgrade.
+  - Keep panel: sim defense, defenders, Upgrade.
+  - Disabled buttons say why when pressed (e.g. "NEED 150 GOLD").
+- **Saves:** a new `econ` block holds:
+  - village stores and timers;
+  - garrisons, recruit progress and mixes;
+  - the warband;
+  - convoys on the road;
+  - the Dominion convoy timer.
+
+  It's validated piece by piece on load. Autosave runs every 60 s on the
+  map and after every map battle, won or not.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13. Phase 7
+suite 24/24.
+
+- **DONE, capture a village:** Fennick taken through the attack flow came
+  over at level 1, earning 20 gold a minute.
+- **DONE, the convoy delivers gold:**
+  - Fennick's store held 10 gold at 30 s.
+  - At 60 s its convoy left with exactly 20 gold for The Last Camp (4 road
+    legs).
+  - It took over 5 s on the road, and the treasury rose by exactly 20.
+- **DONE, the castle produces troops:**
+  - With no gold, nothing in 60 s.
+  - With gold, 6 troops in a minute, and the gold spent equalled their
+    costs exactly.
+  - A ram arrived after 30.
+  - The garrison stopped at 40, with a 0.38 / 0.21 / 0.26 / 0.15 mix.
+- **DONE, upgrades work:**
+  - Fennick to L2 was refused at 120 gold ("NEED 150 GOLD"), then bought
+    at 150: income 20 → 35, and saved.
+  - Castle L2 brought cap 80 and 10 per minute. L3 lifted the warband cap
+    12 → 15. 300 + 800 gold, and no L4.
+  - Costs × tier: a tier-2 castle costs 450; a tier-5 keep to L3, 2800.
+- **DONE, thinning verified through real captures** (Millbrook Castle, L1,
+  keep +50%):
+  - with Fennick and Ashby held: 42;
+  - + Millbrook Watch: 33;
+  - + Millbrook Keep (no +50%): 22.
+  - The battle fielded exactly those numbers. The outpost's +1 tier and
+    the iron gate went with their nodes.
+  - With 4 small nodes held the cut stops at 60%: 24.
+- **Warband:** the battle fielded exactly the cap (15). 11 came home after
+  4 fell, and the warband refilled from the garrison on the map. A defeat
+  lost it, and with an empty garrison it stayed empty.
+- **Ambush:**
+  - A frontier convoy was ambushable; one deep in their land wasn't; yours
+    never are.
+  - Clicking it opened its panel; Ambush started a convoy battle carrying
+    its 120 gold.
+  - The win paid it into the spoils and treasury, and removed it from the
+    map.
+- **Save/reload** brought back stores, garrisons, a convoy mid-road, the
+  warband, levels and gold. A mangled `econ` block was dropped piece by
+  piece, no crash.
+- **Phone:** tap your castle → panel → tap Upgrade → level 2, 300 gold
+  paid.
+
+**Regressions:** Phase 0 30/30, 1 17/17, 2 23/23, 3 24/24, 4 24/24, 5
+46/46 functional (timing 5/8 in band on this single run; the autopilot
+varies run to run), 6 31/31.
+
+**Bug found and fixed:** a lost or withdrawn map battle wasn't saved, so
+the map reloaded the older state and a lost warband came back. Every map
+battle now saves at its result.
+
+**Assumed / not checked:**
+- The map pausing during battles.
+- The Last Camp's 24-troop start.
+- Dominion convoys as tribute to their capital (their real economy is
+  Phase 9).
+- Enemy interception of your convoys (Phase 8–9's sim).
+- No balance pass on income against troop and upgrade costs (Phase 14).
 
 # Phase 6: the campaign map
 

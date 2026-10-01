@@ -262,6 +262,15 @@ class Campaign {
     return out;
   }
 
+  /** A point on the road from node a to b at t (0..1), on the same bowed curve the map draws. */
+  roadPoint(a: number, b: number, t: number): { x: number; y: number } {
+    if (a > b) { [a, b] = [b, a]; t = 1 - t; }
+    const A = this.nodes[a], B = this.nodes[b];
+    const mx = (A.x + B.x) / 2 + (B.y - A.y) * 0.08, my = (A.y + B.y) / 2 - (B.x - A.x) * 0.08;
+    const u = 1 - t;
+    return { x: u * u * A.x + 2 * u * t * mx + t * t * B.x, y: u * u * A.y + 2 * u * t * my + t * t * B.y };
+  }
+
   /** PLAN 4: you hold the Last Camp (a level-1 castle and its village); the Dominion holds the rest. */
   reset() {
     for (const n of this.nodes) {
