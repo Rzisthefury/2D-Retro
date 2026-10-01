@@ -893,7 +893,17 @@ class Renderer {
 
     const flash = e.flash > 0;
     const telegraphing = e.state === 'telegraph';
-    const body = flash ? '#ffffff' : (telegraphing ? this.mix(d.color, d.accent, 0.45 + Math.sin(g.time * 26) * 0.25) : d.color);
+    // allies wear the team colour: a blue-washed body and blue eyes/trim
+    const ally = e.team === 'player';
+    const baseCol = ally ? this.mix(d.color, PAL.ally, 0.5) : d.color;
+    const accent = ally ? PAL.ally : d.accent;
+    const body = flash ? '#ffffff' : (telegraphing ? this.mix(baseCol, accent, 0.45 + Math.sin(g.time * 26) * 0.25) : baseCol);
+
+    if (ally && !dying) {
+      c.strokeStyle = this.alpha(PAL.ally, 0.75);
+      c.lineWidth = 2;
+      c.beginPath(); c.ellipse(0, e.z * Z_SCALE, d.radius * 1.35, d.radius * 0.55, 0, 0, Math.PI * 2); c.stroke();
+    }
 
     if (e.elite && !dying) {
       c.fillStyle = 'rgba(255,213,74,0.22)';
@@ -913,10 +923,10 @@ class Renderer {
     }
 
     switch (d.ai) {
-      case 'grunt': this.drawGrunt(c, e, body, flash ? '#fff' : d.accent, g); break;
-      case 'bruiser': this.drawBruiser(c, e, body, flash ? '#fff' : d.accent); break;
-      case 'caster': this.drawCaster(c, e, body, flash ? '#fff' : d.accent, g); break;
-      case 'flyer': this.drawFlyer(c, e, body, flash ? '#fff' : d.accent, g); break;
+      case 'grunt': this.drawGrunt(c, e, body, flash ? '#fff' : accent, g); break;
+      case 'bruiser': this.drawBruiser(c, e, body, flash ? '#fff' : accent); break;
+      case 'caster': this.drawCaster(c, e, body, flash ? '#fff' : accent, g); break;
+      case 'flyer': this.drawFlyer(c, e, body, flash ? '#fff' : accent, g); break;
     }
 
     if (e.boss && !dying) {
@@ -1064,7 +1074,7 @@ class Renderer {
     const top = ey - e.def.height - 20;
     c.fillStyle = 'rgba(0,0,0,0.55)';
     c.fillRect(ex - w / 2 - 1, top - 1, w + 2, 5);
-    c.fillStyle = e.state === 'stagger' ? '#ffd54a' : '#ff6b6b';
+    c.fillStyle = e.state === 'stagger' ? '#ffd54a' : e.team === 'player' ? PAL.ally : '#ff6b6b';
     c.fillRect(ex - w / 2, top, w * clamp(e.hp / e.maxHp, 0, 1), 3);
     // poise pips
     if (e.poise < e.maxPoise) {
@@ -1303,7 +1313,8 @@ class Renderer {
     c.fillText('TEST FIELD', VIEW_W - 18, 30);
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText(`groups cleared ${g.groupsCleared}  ·  enemies ${g.enemies.filter((e) => e.alive).length}`, VIEW_W - 18, 48);
+    const allies = g.enemies.filter((e) => e.alive && e.team === 'player').length;
+    c.fillText(`groups cleared ${g.groupsCleared}  ·  foes ${g.foesAlive()}  ·  allies ${allies}`, VIEW_W - 18, 48);
     c.restore();
 
     // equipped gear, small, under the bars
@@ -2166,8 +2177,11 @@ class Renderer {
     return `rgb(${r},${g},${bl})`;
   }
 
+  /** '#rrggbb' or '#rgb' -> [r, g, b]. Anything unparseable reads as mid-grey rather than NaN. */
   private hex(h: string): [number, number, number] {
-    const s = h.replace('#', '');
-    return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+    let s = h.replace('#', '');
+    if (s.length === 3) s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2];
+    const v = [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+    return v.some((n) => Number.isNaN(n)) ? [128, 128, 128] : v as [number, number, number];
   }
 }

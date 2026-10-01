@@ -25,7 +25,79 @@ No dependencies, no bundler, nothing to install.
 | `src/music.ts` | AF's adaptive score |
 | `src/entities.ts` | `Player`, `Enemy` (with boss AI), `Projectile`, `Pickup` |
 | `src/render.ts` | battlefield, characters, VFX, HUD, pause menu, title |
-| `src/main.ts` | `Game`: loop, screens (`title`, `battle`), test field, damage, menus, save, debug panel |
+| `src/main.ts` | `Game`: loop, screens (`title`, `battle`), test field, team-aware damage (`hostilesOf`), menus, save, debug panel |
+
+# Phase 1: teams
+
+Allies are `Enemy` entities on the player's side. This is the base for the
+warband, generals and armies (PLAN 9.2, 11.1).
+
+**What changed**
+
+- `Enemy.team` (`'player' | 'enemy'`, default `'enemy'`) and `Enemy.target`.
+  Every `WAR.retargetFrames` (10) frames a unit picks the nearest hostile.
+  Dominion units can pick the knight or any ally; allies pick any Dominion
+  unit. A unit sticks with its current target unless a new one is clearly
+  closer (`WAR.retargetSwitch` 0.8), so it doesn't flip-flop between two foes.
+- All four AIs (grunt, bruiser, caster, flyer), the idle "notice" check and
+  the boss moves (slam, fan, rush, dive) chase and aim at `target` instead of
+  the knight. `Player` has `team = 'player'`; `Combatant = Player | Enemy`.
+- Hits are resolved by team in `main.ts`:
+  - `hostilesOf(team)` lists who a side may fight.
+  - `enemyStrike` lands on every hostile in the arc (the knight, allies, or
+    Dominion units).
+  - Bolts carry a `team` and hit the first hostile they touch.
+  - A boss shockwave hits every grounded hostile in its ring.
+  - Unit-on-unit damage uses the normal formula, scaled by
+    `WAR.unitDamageMult`, with light poise damage (`WAR.unitPoiseDamage`).
+- The knight never hurts allies. Combo hit resolution, Whirl pull, attack
+  homing, lock-on cycling, touch auto lock-on, Fire homing and Thunder all
+  skip `team === 'player'`.
+- An ally with nothing to fight falls in beside the knight
+  (`WAR.allyFollowRange` 160 px). Its follow speed is pegged to the knight's
+  walk (×0.8 near, ×1.1 when over 2× the range behind), so allies keep up
+  whatever their own speed. This needed `MOVE_GAIN`: enemy movement eases
+  and damps velocity, so a unit settles at about 48% of the speed it asks for.
+- Allies look different: blue-washed body, blue eyes/trim, a blue ground
+  ring, and a blue health bar.
+- Test field: two allied Shades (`WAR.testAllies`) fight beside the knight
+  and are topped back up with each new group. A group counts as cleared when
+  no Dominion units remain. The HUD shows foes and allies separately.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13, Phase 1
+suite 17/17, plus the Phase 0 suite as regression:
+
+- **Done-when:** an allied Shade fights two hostile Shades with the knight out
+  of reach. It damages them and kills at least one within 9 s.
+- **Done-when:** the hostiles fight the ally (its HP drops). A hostile targets
+  the knight when the knight is nearer and switches to the ally when the
+  knight steps back.
+- The knight's combo, Fire and Thunder leave an ally untouched; lock-on skips allies.
+- A hostile caster's bolts hurt the ally. An allied caster's bolts hurt the
+  foe and never the knight. A boss shockwave damages allies.
+- An idle ally walks to the knight, and keeps within range while the knight walks.
+- A group clears while an ally still lives, and the next group tops allies back to 2.
+- Phone: the test field has its allies, and touch auto lock-on picks the foe, never the ally.
+
+Final runs: Phase 1 suite 17/17 on 5 consecutive runs; Phase 0 suite 30/30
+on 3 more.
+
+**Bug found and fixed:** the renderer's colour helper (`hex`) only read
+6-digit `#rrggbb`. A 3-digit `#rgb` colour (used by a test boss) produced
+`NaN`, and the canvas exception stopped the whole frame loop. All shipped
+colours are 6-digit, so players couldn't hit it, but generated lord palettes
+(Phase 11) could have. `hex` now reads both forms and falls back to grey
+instead of `NaN`. Checked directly: `#fa4` and `#ffaa44` give the same result.
+
+**Test-harness note:** the Phase 0 save round-trip check failed
+intermittently (about 1 run in 6). Diagnostics showed the save key missing
+after a reload, not overwritten. The game has no code that deletes a key.
+The cause was the test's own page-start script, which re-runs on every
+reload and sometimes wiped storage. With it removed, that suite passed 17
+runs in a row. Separately, a direct save→reload stress test lost 0 of 60 saves.
+
+**Assumed / not checked**: how fights feel on a real phone; balance of
+unit-on-unit damage (tuned in Phase 14).
 
 # Phase 0 (v2): strip
 

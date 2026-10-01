@@ -42,6 +42,7 @@ function inArc(
 type PState = 'idle' | 'attack' | 'cast' | 'hurt' | 'dead' | 'dash';
 
 class Player {
+  readonly team: Team = 'player';
   x = VIEW_W / 2; y = VIEW_H / 2 + 40; z = 0;
   vx = 0; vy = 0; vz = 0;
   facing = -Math.PI / 2;
@@ -218,7 +219,7 @@ class Player {
   }
 
   cycleLock(g: Game) {
-    const live = g.enemies.filter((e) => e.alive);
+    const live = g.enemies.filter((e) => e.alive && e.team === 'enemy');
     if (!live.length) { this.lock = null; return; }
     live.sort((a, b) => dist(this.x, this.y, a.x, a.y) - dist(this.x, this.y, b.x, b.y));
     if (!this.lock) { this.lock = live[0]; g.sfx.guard(); return; }
@@ -386,7 +387,7 @@ class Player {
     let best: Enemy | null = null;
     let bestScore = Infinity;
     for (const e of g.enemies) {
-      if (!e.alive) continue;
+      if (!e.alive || e.team !== 'enemy') continue;
       const d = dist(this.x, this.y, e.x, e.y);
       if (d > TUNING.homingRange) continue;
       const ang = Math.atan2(e.y - this.y, e.x - this.x);
@@ -433,7 +434,7 @@ class Player {
         this.facing += def.spinRate;
         if (def.pull) {
           for (const e of g.enemies) {
-            if (!e.alive) continue;
+            if (!e.alive || e.team !== 'enemy') continue;
             const d = dist(this.x, this.y, e.x, e.y);
             if (d > this.reach(def) * 1.5 || d < 12) continue;
             const a = Math.atan2(this.y - e.y, this.x - e.x);
@@ -485,7 +486,7 @@ class Player {
 
   private resolveHits(g: Game, def: AttackDef) {
     for (const e of g.enemies) {
-      if (!e.alive || this.attackHits.has(e)) continue;
+      if (!e.alive || e.team !== 'enemy' || this.attackHits.has(e)) continue;
       if (!inArc(this.x, this.y, this.z, this.facing, this.reach(def), def.arc, e.x, e.y, e.z, e.radius)) continue;
       this.attackHits.add(e);
       g.hitEnemy(e, def, this);
@@ -599,6 +600,12 @@ class Player {
 
 type EState = 'spawn' | 'idle' | 'chase' | 'reposition' | 'telegraph' | 'attack' | 'recover' | 'stagger' | 'dead' | 'special';
 
+/** Which side a fighter is on. The knight is always 'player'. */
+type Team = 'player' | 'enemy';
+
+/** Anything a unit can fight: the knight or another Enemy entity. */
+type Combatant = Player | Enemy;
+
 class Enemy {
   def: EnemyDef;
   x: number; y: number; z: number;
@@ -630,6 +637,11 @@ class Enemy {
 
   level: number;
   tier: number;
+
+  // teams (PLAN 9.2 / 11.1): allies are Enemy entities with team 'player'
+  team: Team = 'enemy';
+  target: Combatant | null = null;   // the hostile this unit is fighting
+  private retargetT = 0;
 
   // an un-aggro'd enemy idles near home until you come close (garrisons later)
   aggro = true;
@@ -701,7 +713,17 @@ class Enemy {
 
     if (this.cooldown > 0) this.cooldown--;
 
+    if (--this.retargetT <= 0 || !this.target || !this.target.alive) {
+      this.pickTarget(g);
+      this.retargetT = WAR.retargetFrames;
+    }
+
     if (!this.aggro) { this.idle(g, dt); this.physics(g, dt); return; }
+
+    // nothing to fight: allies fall in beside the knight, hostiles stand ground
+    if (!this.target && this.state !== 'stagger' && this.state !== 'special') {
+      this.noTarget(g, dt); this.physics(g, dt); return;
+    }
 
     if (this.boss && this.updateBoss(g, dt)) { this.physics(g, dt); return; }
 
@@ -740,7 +762,37 @@ class Enemy {
     g.separate(this);
   }
 
-  faceTarget(p: Player, dt: number, rate = 9) {
+  /**
+   * The nearest hostile: for the Dominion that is the knight or any ally; for
+   * allies, any Dominion unit. Sticks with the current target unless the new
+   * one is clearly closer, so units don't flip-flop between two foes.
+   */
+  pickTarget(g: Game) {
+    let best: Combatant | null = null, bd = Infinity;
+    for (const c of g.hostilesOf(this.team)) {
+      const d = dist(this.x, this.y, c.x, c.y);
+      if (d < bd) { bd = d; best = c; }
+    }
+    const cur = this.target;
+    if (cur && cur.alive && best && best !== cur
+      && dist(this.x, this.y, cur.x, cur.y) * WAR.retargetSwitch < bd) return;
+    this.target = best;
+  }
+
+  private noTarget(g: Game, dt: number) {
+    if (this.state === 'telegraph' || this.state === 'attack' || this.state === 'recover') this.state = 'chase';
+    const k = g.player;
+    const kd = dist(this.x, this.y, k.x, k.y);
+    if (this.team === 'player' && k.alive && kd > WAR.allyFollowRange) {
+      // follow speed is pegged to the knight's walk, so allies keep up whatever their own speed
+      const want = TUNING.moveSpeed * (kd > WAR.allyFollowRange * 2 ? WAR.allyCatchUp : WAR.allyFollowSpeed);
+      this.moveToward(k.x, k.y, dt, want / MOVE_GAIN / Math.max(1, this.speed * TUNING.enemySpeedMult));
+      this.facing = angleLerp(this.facing, Math.atan2(this.vy, this.vx), clamp(6 * dt, 0, 1));
+    } else { this.vx *= 0.8; this.vy *= 0.8; }
+    if (this.def.hover) this.z = lerp(this.z, this.def.hover + Math.sin(this.wobble) * 10, clamp(3 * dt, 0, 1));
+  }
+
+  faceTarget(p: Combatant, dt: number, rate = 9) {
     const want = Math.atan2(p.y - this.y, p.x - this.x);
     this.facing = angleLerp(this.facing, want, clamp(rate * dt, 0, 1));
   }
@@ -779,7 +831,7 @@ class Enemy {
 
   private aiGrunt(g: Game, dt: number) {
     if (this.tickStagger(dt)) return;
-    const p = g.player;
+    const p = this.target!;
     const d = dist(this.x, this.y, p.x, p.y);
     const reach = this.def.reach + this.radius + p.radius * 0.5;
 
@@ -829,7 +881,7 @@ class Enemy {
 
   private aiBruiser(g: Game, dt: number) {
     if (this.tickStagger(dt)) return;
-    const p = g.player;
+    const p = this.target!;
     const d = dist(this.x, this.y, p.x, p.y);
     const reach = this.def.reach + this.radius;
 
@@ -878,7 +930,7 @@ class Enemy {
 
   private aiCaster(g: Game, dt: number) {
     if (this.tickStagger(dt)) return;
-    const p = g.player;
+    const p = this.target!;
     const d = dist(this.x, this.y, p.x, p.y);
     const ideal = 210;
 
@@ -921,7 +973,7 @@ class Enemy {
 
   private aiFlyer(g: Game, dt: number) {
     if (this.tickStagger(dt)) return;
-    const p = g.player;
+    const p = this.target!;
     const d = dist(this.x, this.y, p.x, p.y);
     const reach = this.def.reach + this.radius;
 
@@ -962,10 +1014,10 @@ class Enemy {
 
   /* ------------------------------------------------------------- idling */
 
-  /** Amble around home; notice the player when they come close. */
+  /** Amble around home; notice the nearest hostile when it comes close. */
   private idle(g: Game, dt: number) {
-    const p = g.player;
-    if (p.alive && dist(this.x, this.y, p.x, p.y) < AGGRO_RANGE && Math.abs(p.z - this.z) < 200) {
+    const p = this.target;
+    if (p && p.alive && dist(this.x, this.y, p.x, p.y) < AGGRO_RANGE && Math.abs(p.z - this.z) < 200) {
       this.aggro = true;
       this.state = 'chase';
       this.cooldown = Math.max(this.cooldown, 20);
@@ -999,7 +1051,7 @@ class Enemy {
    */
   private updateBoss(g: Game, dt: number): boolean {
     const b = this.boss!;
-    const p = g.player;
+    const p = this.target;
     if (!this.enraged && this.hp < this.maxHp * 0.5) {
       this.enraged = true;
       g.banner('ENRAGED', b.name, b.accent);
@@ -1009,7 +1061,7 @@ class Enemy {
     if (this.state === 'special') { this.runMove(g, dt); return true; }
     if (this.state === 'stagger' || this.state === 'spawn') return false;
     if (this.specialCd > 0) { this.specialCd--; return false; }
-    if (this.state !== 'chase' || !p.alive) return false;
+    if (this.state !== 'chase' || !p || !p.alive) return false;
 
     this.move = pick(b.moves);
     this.state = 'special';
@@ -1031,7 +1083,7 @@ class Enemy {
   tell(base: number): number { return Math.round(base * (this.enraged ? 0.75 : 1)); }
 
   private runMove(g: Game, dt: number) {
-    const p = g.player;
+    const p = this.target || g.player;
     const f = ++this.moveFrame;
     this.vx *= 0.85; this.vy *= 0.85;
     switch (this.move) {
@@ -1151,7 +1203,8 @@ class Projectile {
   radius: number;
   life: number;
   color: string;
-  owner: ProjOwner;
+  owner: ProjOwner;   // 'player' = the knight's spell (knight's magic stat); 'enemy' = a unit's bolt (uses `mag`)
+  team: Team;         // whose side the shot is on: it hits only the other side
   power: number;
   pierce: boolean;
   homing: number;
@@ -1166,9 +1219,10 @@ class Projectile {
     x: number; y: number; z: number; vx: number; vy: number;
     radius: number; life: number; color: string; owner: ProjOwner;
     power: number; pierce?: boolean; homing?: number; target?: Enemy | null; slowOnHit?: boolean;
-    mag?: number;
+    mag?: number; team?: Team;
   }) {
     this.mag = o.mag ?? 8;
+    this.team = o.team ?? (o.owner === 'player' ? 'player' : 'enemy');
     this.x = o.x; this.y = o.y; this.z = o.z;
     this.vx = o.vx; this.vy = o.vy;
     this.radius = o.radius; this.life = o.life; this.color = o.color;
@@ -1268,6 +1322,10 @@ class Pickup {
 /* ----------------------------------------------------------- boss bodies */
 
 const AGGRO_RANGE = 300;     // how close before an idle enemy notices you
+// moveToward eases velocity 15% toward the request each 60 Hz frame and physics
+// then damps it by 0.86, so a unit settles at 0.86*0.15/(1-0.85*0.86) ~ 48% of
+// the speed it asks for. Anything that must hit a real px/s divides by this.
+const MOVE_GAIN = (0.86 * 0.15) / (1 - 0.85 * 0.86);
 const SLAM_RADIUS = 150;
 const SHOCK_MULT = 1.5;       // slam / dive damage relative to a normal swing
 const BOSS_HP_SCALE = 0.75;   // boss data HP -> fight HP, tuned so fights last ~40-90 hits

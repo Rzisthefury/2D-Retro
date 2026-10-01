@@ -346,11 +346,21 @@ const WAR = {
   levelsPerRank: 4,          // knight upgrade rank -> AF level-curve equivalent (rank 10 ~ level 41)
   upgradeRanks: 10,
 
+  // teams (Phase 1): allied and hostile Enemy entities
+  retargetFrames: 10,        // how often a unit re-picks its nearest hostile
+  retargetSwitch: 0.8,       // only switch if the new target is this much closer (no flip-flopping)
+  allyFollowRange: 160,      // an ally with nothing to fight stays this close to the knight
+  allyFollowSpeed: 0.8,      // following speed as a multiple of the knight's walk speed...
+  allyCatchUp: 1.1,          // ...and when over 2x the follow range behind
+  unitDamageMult: 1,         // unit-on-unit melee/bolt damage multiplier
+  unitPoiseDamage: 10,       // poise damage of a unit's swing on another unit
+
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
   testFieldTier: 1,
   testFieldLevel: 4,
   testRespawnDelay: 2.5,     // seconds between a cleared group and the next
+  testAllies: 2,             // allied Shades fighting beside the knight on the test field
 };
 
 /* ------------------------------------------------------ tier scaling */
@@ -440,4 +450,5 @@ const PAL = {
   mp: '#4fb8ff',
   mpCharge: '#ffd54a',
   danger: '#ff5f56',
+  ally: '#5fb4ff',            // allied units' team colour
 };

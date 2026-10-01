@@ -435,7 +435,7 @@ class Game {
     this.music.setTrack(id, transpose, tempo);
     this.music.duck(this.menuOpen || this.paused);
     const p = this.player;
-    const fighting = p.alive && this.enemies.some((e) => e.alive && e.aggro);
+    const fighting = p.alive && this.enemies.some((e) => e.alive && e.aggro && e.team === 'enemy');
     this.music.target = fighting ? 3 : 0;
   }
 
@@ -489,11 +489,27 @@ class Game {
     this.groupsCleared = 0;
     this.spawnTestGroup();
     this.follow(true);
-    this.banner('TEST FIELD', 'Phase 0 combat sandbox  ·  the campaign map arrives in Phase 6', '#8fb4ff');
+    this.banner('TEST FIELD', 'combat sandbox  ·  two allied Shades fight beside you', '#8fb4ff');
   }
 
-  /** The next group of Shades, around the knight but not on top of them. */
+  /** Top the knight's allied Shades back up to `WAR.testAllies`, beside the knight. */
+  private topUpAllies() {
+    const p = this.player, f = this.field;
+    let have = this.enemies.filter((e) => e.alive && e.team === 'player').length;
+    for (; have < WAR.testAllies; have++) {
+      const x = clamp(p.x - 50 + rnd(-20, 20), f.x + 40, f.x + f.w - 40);
+      const y = clamp(p.y + (have % 2 ? 50 : -50), f.y + 40, f.y + f.h - 40);
+      const a = new Enemy(ENEMIES.shade, x, y, WAR.testFieldLevel, WAR.testFieldTier);
+      a.team = 'player';
+      a.facing = 0;
+      this.enemies.push(a);
+      this.ring(x, y, 0, 8, 60, PAL.ally);
+    }
+  }
+
+  /** The next group of Shades, around the knight but not on top of them, plus allies topped up. */
   private spawnTestGroup() {
+    this.topUpAllies();
     const ids = this.composition(this.groupsCleared + 1, ['shade', 'caster', 'flyer', 'bruiser']);
     const p = this.player, f = this.field;
     for (let i = 0; i < ids.length; i++) {
@@ -510,7 +526,7 @@ class Game {
   }
 
   private updateTestField(dt: number) {
-    if (this.enemies.some((e) => e.alive)) return;
+    if (this.foesAlive() > 0) return;
     if (this.respawnT <= 0) {
       this.groupsCleared++;
       this.respawnT = WAR.testRespawnDelay;
@@ -622,48 +638,79 @@ class Game {
     if (def.finisher) this.ring(e.x, e.y, e.z + 10, 12, 90, '#ffd54a');
   }
 
-  /** An enemy's melee swing, resolved against the player. */
-  enemyStrike(e: Enemy, reach: number, mult: number) {
+  /* ---------------------------------------------------------------- teams */
+
+  /** Everything alive that `team` may fight: the knight and allies for the Dominion, the Dominion for allies. */
+  hostilesOf(team: Team): Combatant[] {
+    const out: Combatant[] = [];
+    if (team === 'enemy' && this.player.alive) out.push(this.player);
+    for (const e of this.enemies) if (e.alive && e.team !== team) out.push(e);
+    return out;
+  }
+
+  /** Dominion units still standing (allies don't count). */
+  foesAlive(): number { return this.enemies.filter((e) => e.alive && e.team === 'enemy').length; }
+
+  /** A unit's hit on another unit: physical, scaled by the attacker, light poise damage. */
+  private unitHitsUnit(src: Enemy, t: Enemy, mult: number, angle: number, knockback: number) {
+    const r = physDamage(src.def.power * mult * WAR.unitDamageMult * (src.str / src.def.str), src.str, t.edef);
+    t.applyDamage(this, r.dmg, WAR.unitPoiseDamage * mult, angle, knockback, 0);
+    this.floatText(t.x + rnd(-6, 6), t.y, t.z + t.def.height + 8, String(r.dmg), t.team === 'player' ? '#ff9d9d' : '#cfe0ff', 13);
+    this.burst(t.x, t.y, t.z + t.def.height * 0.5, 6, t.team === 'player' ? '#ff8a80' : '#8fb4ff');
+  }
+
+  /** The knight takes a Dominion unit's physical hit (god mode shrugs it off). */
+  private unitHitsKnight(e: Enemy, mult: number, angle: number, knockback: number, stun: number) {
     const p = this.player;
-    if (!p.alive) return;
-    if (!inArc(e.x, e.y, e.z, e.facing, reach, 1.0, p.x, p.y, p.z, p.radius)) return;
-    e.hasHitThisSwing = true;
     if (this.god) { this.floatText(p.x, p.y, p.z + 40, 'GOD', '#7fe8ff', 14); return; }
     const r = physDamage(e.def.power * mult * TUNING.enemyDamageMult * (e.str / e.def.str), e.str, p.stats.def);
-    const ang = Math.atan2(p.y - e.y, p.x - e.x);
-    p.takeHit(this, r.dmg, ang, 240, 22);
+    p.takeHit(this, r.dmg, angle, knockback, stun);
     this.burst(p.x, p.y, p.z + 20, 8, '#ff8a80');
   }
 
-  /** An enemy bolt, aimed at the player plus `spread` radians. Scales with the caster. */
+  /** A unit's melee swing: lands on every hostile in its arc (the knight, allies, or Dominion units). */
+  enemyStrike(e: Enemy, reach: number, mult: number) {
+    let hit = false;
+    for (const t of this.hostilesOf(e.team)) {
+      if (!inArc(e.x, e.y, e.z, e.facing, reach, 1.0, t.x, t.y, t.z, t.radius)) continue;
+      hit = true;
+      const ang = Math.atan2(t.y - e.y, t.x - e.x);
+      if (t instanceof Player) this.unitHitsKnight(e, mult, ang, 240, 22);
+      else this.unitHitsUnit(e, t, mult, ang, 160);
+    }
+    if (hit) e.hasHitThisSwing = true;
+  }
+
+  /** A unit's bolt, aimed at its target plus `spread` radians. Scales with the caster. */
   spawnEnemyBolt(e: Enemy, spread = 0) {
-    const p = this.player;
-    const ang = Math.atan2(p.y - e.y, p.x - e.x) + spread;
+    const t = e.target;
+    const ang = (t ? Math.atan2(t.y - e.y, t.x - e.x) : e.facing) + spread;
     const sp = 300;
     this.projectiles.push(new Projectile({
       x: e.x + Math.cos(ang) * 18, y: e.y + Math.sin(ang) * 18, z: e.z + e.def.height * 0.7,
       vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-      radius: e.boss ? 8 : 6, life: 2.4, color: e.def.accent, owner: 'enemy',
+      radius: e.boss ? 8 : 6, life: 2.4, color: e.def.accent, owner: 'enemy', team: e.team,
       power: e.def.power * 0.9 * (e.str / e.def.str),
       mag: e.str * 0.6,
     }));
     this.sfx.cast(260);
   }
 
-  /** A boss's area attack landing at (x, y). Being in the air clears it. */
+  /** A boss's area attack landing at (x, y): hits every hostile on the ground in the ring. Being in the air clears it. */
   bossShock(e: Enemy, x: number, y: number, r: number, mult: number) {
-    const p = this.player;
-    if (!p.alive || p.z > 26 || dist(x, y, p.x, p.y) > r + p.radius) return;
-    if (this.god) { this.floatText(p.x, p.y, p.z + 40, 'GOD', '#7fe8ff', 14); return; }
-    const res = physDamage(e.def.power * mult * TUNING.enemyDamageMult * (e.str / e.def.str), e.str, p.stats.def);
-    p.takeHit(this, res.dmg, Math.atan2(p.y - y, p.x - x), 320, 26);
-    this.burst(p.x, p.y, p.z + 20, 10, '#ff8a80');
+    for (const t of this.hostilesOf(e.team)) {
+      if (t.z > 26 + (t instanceof Enemy ? t.def.hover : 0) || dist(x, y, t.x, t.y) > r + t.radius) continue;
+      const ang = Math.atan2(t.y - y, t.x - x);
+      if (t instanceof Player) this.unitHitsKnight(e, mult, ang, 320, 26);
+      else this.unitHitsUnit(e, t, mult, ang, 220);
+    }
   }
 
   projectileCollide(proj: Projectile) {
     if (proj.owner === 'player') {
+      // the knight's spells: Dominion units only
       for (const e of this.enemies) {
-        if (!e.alive || proj.hits.has(e)) continue;
+        if (!e.alive || e.team === proj.team || proj.hits.has(e)) continue;
         if (Math.abs(e.z + e.def.height * 0.5 - proj.z) > 56) continue;
         if (dist(proj.x, proj.y, e.x, e.y) > e.radius + proj.radius + 4) continue;
         proj.hits.add(e);
@@ -678,15 +725,26 @@ class Game {
         this.sfx.hit(false);
         if (!proj.pierce) { proj.dead = true; return; }
       }
-    } else {
-      const p = this.player;
-      if (!p.alive || this.god) return;
-      if (Math.abs(p.z + 18 - proj.z) > 56) return;
-      if (dist(proj.x, proj.y, p.x, p.y) > p.radius + proj.radius + 4) return;
+      return;
+    }
+    // a unit's bolt: the first hostile it touches
+    for (const t of this.hostilesOf(proj.team)) {
+      const h = t instanceof Player ? 18 : t.def.height * 0.5;
+      if (Math.abs(t.z + h - proj.z) > 56) continue;
+      if (dist(proj.x, proj.y, t.x, t.y) > t.radius + proj.radius + 4) continue;
+      if (t instanceof Player && this.god) continue;   // god mode: shots pass through the knight
       proj.dead = true;
-      const r = magicDamage(proj.power * TUNING.enemyDamageMult, proj.mag, p.stats.mres);
-      p.takeHit(this, r.dmg, Math.atan2(p.y - proj.y, p.x - proj.x), 170, 16);
+      const ang = Math.atan2(t.y - proj.y, t.x - proj.x);
+      if (t instanceof Player) {
+        const r = magicDamage(proj.power * TUNING.enemyDamageMult, proj.mag, t.stats.mres);
+        t.takeHit(this, r.dmg, ang, 170, 16);
+      } else {
+        const r = magicDamage(proj.power * WAR.unitDamageMult, proj.mag, t.mres);
+        t.applyDamage(this, r.dmg, WAR.unitPoiseDamage, ang, 90, 0);
+        this.floatText(t.x, t.y, t.z + t.def.height + 8, String(r.dmg), proj.color, 13);
+      }
       this.burst(proj.x, proj.y, proj.z, 10, proj.color);
+      return;
     }
   }
 
@@ -709,7 +767,7 @@ class Game {
       // Thunder: bolts on up to three nearby enemies.
       const surge = p.hasT('surge');
       const targets = this.enemies
-        .filter((e) => e.alive && dist(e.x, e.y, p.x, p.y) < (surge ? 330 : 260))
+        .filter((e) => e.alive && e.team === 'enemy' && dist(e.x, e.y, p.x, p.y) < (surge ? 330 : 260))
         .sort((a, b) => dist(a.x, a.y, p.x, p.y) - dist(b.x, b.y, p.x, p.y))
         .slice(0, surge ? 5 : 3);
       if (!targets.length) { this.toast('NO TARGET'); return; }
@@ -751,7 +809,7 @@ class Game {
     let best: Enemy | null = null;
     let bd = maxD;
     for (const e of this.enemies) {
-      if (!e.alive) continue;
+      if (!e.alive || e.team !== 'enemy') continue;
       const d = dist(x, y, e.x, e.y);
       if (d < bd) { bd = d; best = e; }
     }
