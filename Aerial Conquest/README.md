@@ -32,6 +32,119 @@ No dependencies, no bundler, nothing to install.
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
 
+# Phase 11: progression and bosses
+
+**What changed** (PLAN 11.3, 12; numbers in `WAR`):
+
+- **Knight upgrades (gold):**
+  - New **Knight** tab in the pause menu (tabs are now Gear · Forge ·
+    Talents · Knight · Status, keys 1-5).
+  - Vitality, Might and Arcana, 10 ranks each. A rank costs
+    `100 × rank²` gold (`WAR.upgradeCost`).
+  - Each row shows the stat now → after the next rank.
+- **Skill points from conquest:**
+  - +2 for the first capture of each enemy castle, +1 for each keep, plus
+    a capital bonus (`WAR.spCastle / spKeep / spCapital`).
+  - First capture only: a node lost and retaken pays nothing again
+    (`War.spTaken`, saved).
+  - Live captures list the SP on the results screen; captures by your
+    off-screen armies get a banner on the map.
+- **Command branch** (the 4th column in Talents):
+  - Rally Banner, Drillmaster, Sharpened Steel, Muster, Warlord's
+    Presence, Grand Host, per PLAN 12.2.
+  - HP and damage apply to your troops as they spawn.
+  - Muster speeds your reserve stream ×1.3.
+  - Presence: +20% damage for your troops within 300 px of the knight.
+  - The off-screen sim multiplies your armies and garrisons by the same
+    HP × damage.
+- **Warband cap** = 12 + talents (8 + 12 + 16) + 3 per L3 castle
+  (max 12) = 60.
+- **Forge:**
+  - Recipes cost gold + materials.
+  - Forging works only on the map, at a castle you hold: open the menu
+    from the map (MENU button bottom-left, or Tab), or use your castle's
+    new **Forge** button. In battle the tab is read-only.
+- **Materials** cut to 4 common (Shadow Shard, Bulwark Plate, Chant
+  Sigil, Dark Iron) + 3 rare (Wisp Ember, Radiant Crystal, Void Core).
+  - Won battles pay 1-3 commons × tier.
+  - A castle pays 2 of its Lord's rare by territory tier: ember at tiers
+    1-2, crystal at 3-4.
+  - The warlord pays 3 Void Core.
+  - Recipe gold: 150 / 400 / 900 / 1800 / 3500 for tiers 2-6.
+- **Gear** cut to 6 weapon and 6 armour tiers (PLAN 12.3). AF's tiers
+  7-11 needed boss materials that no longer exist. Saves holding them
+  fall back to a valid tier on load.
+- **Warlord Garrick Thorne** holds the capital. He has two signature
+  moves:
+  - **Thornline**: a line of six shocks marching at you.
+  - **Howl**: calls a pack of 6 Thornhounds, even past the live cap,
+    while fewer than 12 are on the field.
+
+  He fights in four phases, a new pattern per quarter of his HP:
+  brute → stalker → sorcerer → skylord. Beaten before the throne he
+  "FALLS" (no recruit offer). The debug battle list has his fight.
+- **Thornhounds:**
+  - Packs of 6: one per tier-4 node, two per tier-5 node, in their
+    garrisons too.
+  - Every army marching out of the warlord's land brings a pack.
+- Lords (Phase 10) and named keep Captains (Phase 5/6) were already in.
+- **Map panel:** a panel with 5+ buttons (your castle) lays them out two
+  per row, with labels shrunk to fit. Before this, the General button
+  overlapped the castle's garrison rows. A stale "arrive in Phases 8 and
+  10" line is gone.
+
+**Deviation:** PLAN 12.2 counts 12 keeps, but the map has 11 enemy keeps:
+the Last Camp has no keep, per PLAN 4. 5 + 22 + 11 + 3 would be 41, so the
+capital bonus is **+4** (not +3) to land the whole tree exactly on 42.
+Change `WAR.spCapital` if you'd rather have it another way.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13. Phase 11
+suite 34/34.
+
+- **Warband cap:** 12 → 20 → 32 → 48 → 51 → 54 → 57 → 60, and a 5th L3
+  castle stays at 60.
+- **SP:** capturing all 11 castles and 11 keeps went 5 → 42. A retaken
+  castle and a village paid 0. A live keep paid +1 and said so; the
+  live capital paid +6.
+- **Knight tab** by keys: 100 then 400 gold, next 900; rank 10 refuses.
+- **Talents:** Left wrapped to Command, Enter learned Banner (cap 20), a
+  double tap learned Sharpened Steel.
+- **Forge:** Iron Fang took 150 gold, 4 shard and 3 iron. Materials
+  without the gold: refused, nothing spent. Mid-battle: refused. The
+  castle's Forge button opens the Forge tab.
+- **Reload:** upgrades, talents, SP, free SP, gold, first captures and
+  the Presence loyalty multiplier all came back. The keep taken before
+  the reload paid nothing again.
+- **Troops in battle:** HP ×1.3 (27 → 35), damage ×1.15, stream ×1/1.3,
+  Presence 1.2 near / 1.0 far. Sim ×1.495.
+- **Thornhounds:** 0 / 6 / 12 at tiers ≤3 / 4 / 5, garrisons matching. A
+  capital army carried 6.
+- **Spoils:** a tier-1 castle paid 2 Wisp Ember plus commons only; the
+  warlord paid 3 Void Core.
+- **Warlord:** patterns bruiser → grunt → caster → flyer at 70 / 45 / 20%
+  HP. Howl spawned 6. Thornline made 6 shocks. "WARLORD GARRICK THORNE
+  FALLS / now the throne".
+- **Phone:** tap MENU → KNIGHT → Might twice bought rank 1 for 100 gold;
+  the ✕ closed the menu.
+- Regressions:
+  - Phases 0-10 all pass: 30/30, 17/17, 23/23, 24/24, 24/24, 46/46
+    functional, 31/31, 24/24, 17/17, 20/20, 28/28. Phase 5 battle times:
+    5 of 8 in band, as before.
+  - Test updates, all for intended changes:
+    - Phase 0 expects 5 tabs, and that forging in battle is refused.
+    - Phases 4 and 5 find debug-list rows by label, since the warlord row
+      was added.
+    - Every suite's map-button helper uses the button's own width.
+
+**Assumed / not yet verified:**
+- None of the new costs are balanced: knight upgrades total 115,500 gold
+  for all 30 ranks. Recipe costs, warlord HP (7,417 at tier 5) and hound
+  counts are defaults for Phase 14.
+- The warlord was not fought by hand; his moves and phases were driven by
+  the test.
+- PLAN 7.1's Generals tab in the pause menu is not added: the map's
+  roster (G / the top-bar button) does that job.
+
 # Phase 10: generals and loyalty
 
 **What changed** (new `src/generals.ts`; the logic is in `war.ts`, PLAN 9):
