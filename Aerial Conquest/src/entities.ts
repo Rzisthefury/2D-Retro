@@ -90,10 +90,12 @@ class Player {
   charging = false;
   chargeT = 0;
 
+  // progression: gold upgrades and skill points (PLAN 12.1-12.2)
+  upgrades: KnightUpgrades = freshUpgrades();
+  skillPoints = WAR.startSkillPoints;   // SP earned so far; spent = apSpent(talents)
+
   // resources
-  level = 1;
-  exp = 0;
-  stats: Stats = statsForLevel(1);
+  stats: Stats = statsForKnight(this.upgrades);
   hp = this.stats.maxHp;
   mp = this.stats.maxMp;
   potions = 3;
@@ -110,7 +112,7 @@ class Player {
 
   refreshStats(full: boolean) {
     const prev = this.stats;
-    const s = statsForLevel(this.level);
+    const s = statsForKnight(this.upgrades);
     s.maxHp = Math.round((s.maxHp + this.armor.hpBonus) * (this.hasT('vitality') ? 1.2 : 1));
     s.mres += this.armor.mresBonus;
     s.mag += this.weapon.magBonus;
@@ -629,17 +631,15 @@ class Enemy {
   level: number;
   tier: number;
 
-  // overworld: enemies idle near home until you come close, and give up
-  // the chase if you drag them too far from it
+  // an un-aggro'd enemy idles near home until you come close (garrisons later)
   aggro = true;
-  elite = false;              // a rare, tougher variant with better loot
+  elite = false;              // a tougher variant
   homeX = 0; homeY = 0;
   wanderX = 0; wanderY = 0;
   wanderT = 0;
 
   // bosses only: the signature-move state machine layered on the base AI
   boss: BossDefinition | null = null;
-  superboss = false;
   move: BossMove | null = null;
   moveFrame = 0;
   moveStep = 0;
@@ -648,8 +648,8 @@ class Enemy {
   enraged = false;
 
   /**
-   * `level` comes from the location's level band, `tier` from the location.
-   * `extra` is any further multiplier on top, such as a superboss's.
+   * `level` and `tier` come from the battle (PLAN v2: tiers 1-5 from Phase 11).
+   * `extra` is any further multiplier on top.
    */
   constructor(def: EnemyDef, x: number, y: number, level: number, tier: number, extra = 1) {
     this.def = def;
@@ -702,12 +702,6 @@ class Enemy {
     if (this.cooldown > 0) this.cooldown--;
 
     if (!this.aggro) { this.idle(g, dt); this.physics(g, dt); return; }
-    if (g.screen === 'world' && this.state !== 'stagger' && this.state !== 'special'
-      && dist(this.x, this.y, this.homeX, this.homeY) > LEASH
-      && dist(this.x, this.y, g.player.x, g.player.y) > AGGRO_RANGE) {
-      this.aggro = false;              // lost you: head home
-      this.wanderX = this.homeX; this.wanderY = this.homeY; this.wanderT = 4;
-    }
 
     if (this.boss && this.updateBoss(g, dt)) { this.physics(g, dt); return; }
 
@@ -966,7 +960,7 @@ class Enemy {
     else if (this.cooldown <= 0 && p.alive) this.beginTelegraph(g);
   }
 
-  /* --------------------------------------------------- overworld idling */
+  /* ------------------------------------------------------------- idling */
 
   /** Amble around home; notice the player when they come close. */
   private idle(g: Game, dt: number) {
@@ -994,9 +988,9 @@ class Enemy {
 
   /* ------------------------------------------------------------- bosses */
 
-  /** Frames between signature moves; faster once enraged or Ascendant. */
+  /** Frames between signature moves; faster once enraged. */
   private moveCooldown(): number {
-    return Math.round(230 * (this.enraged ? 0.7 : 1) * (this.superboss ? 0.8 : 1) / TUNING.enemyAggression);
+    return Math.round(230 * (this.enraged ? 0.7 : 1) / TUNING.enemyAggression);
   }
 
   /**
@@ -1059,7 +1053,7 @@ class Enemy {
         const t = this.tell(34);
         this.faceTarget(p, dt, 6);
         if (f === t) {
-          const n = this.enraged || this.superboss ? 7 : 5;
+          const n = this.enraged ? 7 : 5;
           for (let i = 0; i < n; i++) g.spawnEnemyBolt(this, (i - (n - 1) / 2) * 0.22);
         }
         if (f >= t + 26) this.endMove();
@@ -1273,8 +1267,7 @@ class Pickup {
 
 /* ----------------------------------------------------------- boss bodies */
 
-const AGGRO_RANGE = 300;     // overworld: how close before an enemy notices you
-const LEASH = 760;           // ...and how far it will follow you from home
+const AGGRO_RANGE = 300;     // how close before an idle enemy notices you
 const SLAM_RADIUS = 150;
 const SHOCK_MULT = 1.5;       // slam / dive damage relative to a normal swing
 const BOSS_HP_SCALE = 0.75;   // boss data HP -> fight HP, tuned so fights last ~40-90 hits

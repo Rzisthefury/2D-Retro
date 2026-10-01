@@ -1,9 +1,10 @@
 # Aerial Conquest
 
-Hyper Knights' territory-conquest structure played with Aerial Finisher's knight
-and action combat. `PLAN.md` is the full spec and `CLAUDE.md` holds the build
-rules. This README gets one section per phase. Below them are Aerial Finisher's
-engine notes, inherited from the fork.
+Hyper Knights' campaign (conquer a continent territory by territory from an
+illustrated strategy map, with an economy and an army) played with Aerial
+Finisher's knight and action combat. `PLAN.md` (v2, approved 2026-10-01) is
+the spec and `CLAUDE.md` the build rules. One README section per phase; below
+them, the engine notes inherited from Aerial Finisher.
 
 ## Build
 
@@ -13,64 +14,100 @@ engine notes, inherited from the fork.
 `aerial-conquest.html` is the playable single file. `dist/` is scratch output.
 No dependencies, no bundler, nothing to install.
 
-# Phase 0: fork & strip
+## Layout (after v2 Phase 0)
+
+| file | what lives there |
+|---|---|
+| `src/config.ts` | `TUNING`, attack frame data, spells, `ENEMIES`, boss types, `statsForKnight`, **`WAR`** (all new conquest tunables), menu/touch geometry, palette |
+| `src/core.ts` | math, buffered input (keyboard, gamepad, touch), WebAudio SFX |
+| `src/items.ts` | materials, weapon/armour tiers, recipes |
+| `src/talents.ts` | Blade / Arcana / Survival talents, bought with skill points |
+| `src/music.ts` | AF's adaptive score |
+| `src/entities.ts` | `Player`, `Enemy` (with boss AI), `Projectile`, `Pickup` |
+| `src/render.ts` | battlefield, characters, VFX, HUD, pause menu, title |
+| `src/main.ts` | `Game`: loop, screens (`title`, `battle`), test field, damage, menus, save, debug panel |
+
+# Phase 0 (v2): strip
+
+PLAN v2 keeps only Aerial Finisher's knight, combat, talent tree, gear and
+music. This pass removes everything else.
 
 **What changed**
 
-- Forked from `../Aerial Finisher` (open-world build): `src/`, `build.js`,
-  `shell.html`, `tsconfig.json` and this README. Aerial Finisher itself is untouched.
-  Its `Claude outputs/` folder (art and music references) and
-  `aerial-finisher-src.zip` were not copied.
-- Renamed to **AERIAL CONQUEST**: canvas wordmark (`render.ts drawTitle`, still
-  positioned with `measureText`), page `<title>`, header and tagline in `shell.html`.
-- Save key changed from `aerial-finisher-save-v2` to `aerial-conquest-slot1`. Slots
-  2 and 3 and the slot picker come in Phase 12. The game never reads or writes
-  Aerial Finisher's keys.
-- Removed the Colosseum and Wave Trials:
-  - the Colosseum building in the Haven, its road and its overworld/map drawing;
-    `BuildingKind` loses `'colosseum'`
-  - the `trial` screen; `GameScreen` is now `title | world | dungeon`
-  - `BattleState.kind` is now `'boss'` only, and its `totalWaves` field is gone
-  - `startTrial`, `startWave`, `updateBattle`, `waveScale`, `nudgeTrial`, the
-    prompt `nudge` arrows, rest points, `bestWave`
-  - `WorldState.trialBest` / `unlockedWaveTiers`, `BossDefinition.unlocksWaveTier`,
-    `lockedTierText`, `maxWaveTier`, and the `{ tier: N }` unlocks on 9 bosses
-  - `TUNING.waveScaling` and its slider; the debug panel's "Skip to wave +5"
-  - the colosseum room look and HUD block, and the map tab's Colosseum row
-- `MAP_VERSION` 4 → 5, because removing a building shifts building indices.
-- `build.js` now writes `aerial-conquest.html` itself (Aerial Finisher copied
-  its HTML by hand).
-- Kept as is: dungeon wave rooms (`waveIntro`, `composition`, `sfx.wave`),
-  bosses, Ascendants, chests, landmarks, barriers. Barriers are removed in Phase 6.
+- **Deleted** `world.ts`, `location.ts`, `overworld.ts`, `dungeon.ts` and
+  `superboss.ts`, plus everything that read them: the walkable tile world,
+  regions and barriers, towns, landmarks, chests, waypoints, checkpoints,
+  roaming spawners, dungeons and their rooms, AF's 30 bosses, Ascendants,
+  the MAP tab, the minimap, door prompts and the LEAVE button.
+- **Levels and EXP removed.** `statsForLevel`, `expToNext`, `MAX_LEVEL`,
+  `Player.level/exp`, `grantExp` and the EXP bar are gone. The knight's base stats come
+  from `statsForKnight(upgrades)` (PLAN 12.1: Vitality / Might / Arcana
+  ranks, each worth `WAR.levelsPerRank` = 4 old levels). All ranks are 0
+  until the gold shop arrives in Phase 11, which gives AF's level-1 stats.
+- **Talents cost skill points (SP)**, not AP-per-level. `Player.skillPoints`
+  starts at `WAR.startSkillPoints` = 5 (PLAN 12.2). The HUD and menus say SP.
+- **No field drops.** Kills no longer drop materials or potions. PLAN v2 pays
+  spoils on the battle results screen (Phase 4+).
+- **New screen set:** `title` and `battle`. New Game / Continue opens a
+  **test battlefield** (1920×1200, `WAR.testField`) with new top-down art:
+  mown grass bands, dirt patches, tufts, pebbles, wildflowers and a treeline
+  border, all placed from a cell hash so they stay fixed while the camera
+  scrolls. Groups of Shades (shade / caster / flyer / bruiser) keep coming;
+  each cleared group brings a bigger one after `WAR.testRespawnDelay`.
+  Dying restarts the field and keeps gear, talents and materials.
+- **Pause menu:** 4 tabs, Gear · Forge · Talents · Status. Forging works
+  anywhere for now; PLAN puts it at castles, with a gold fee, in Phase 11.
+  The SP badge moved left so it no longer overlaps the close box.
+- **Music:** the battle plays AF's forest theme for now; PLAN maps the war
+  contexts and adds the war layer in Phase 13. `ZONE_MUSIC` (region map) removed.
+- Enemy overworld leash removed; idle "notice the knight" AI kept for
+  garrisons later. The boss AI types moved to `config.ts` for castle lords.
+- Save (`aerial-conquest-slot1`) now holds SP, upgrades, gear, materials,
+  talents, supplies and looks. No level, EXP or world block.
+- Source: 9,163 → 6,802 lines.
 
 **Verified**: headless Chromium (Playwright), desktop 1280×800 and emulated
-iPhone 13 landscape, 34/34 checks passing:
+iPhone 13 landscape. 30/30 checks passed on 5 consecutive runs. One earlier
+run failed the reload check; the cause was the test's own storage seeding (a
+`sessionStorage` flag lost across reload on `file://`), and moving that marker
+into localStorage cleared it:
 
-- builds clean under `strict`; title, header and canvas wordmark read AERIAL
-  CONQUEST; the wordmark measures 560 px at 62 px, inside the 960 px view
-- Start enters the world; walking, ground combo damage, jump, dash charge and the
-  Fire spell's MP cost all work; all 5 pause tabs open
-- dungeon: enter, wave room spawns, clearing opens the door, boss starts, boss win
-  is recorded, B leaves to the world
-- no Colosseum building; `startTrial` / `startWave` / `updateBattle` don't exist;
-  saves have no `trialBest`, `unlockedWaveTiers` or `bestWave`
-- writes `aerial-conquest-slot1`; a planted `aerial-finisher-save-v2` (level 77) is
-  neither loaded nor modified; level and boss kills survive a reload
-- phone: touch mode detected, tap Start, ATK button damages an enemy, virtual
-  stick moves the knight, BACK button leaves a dungeon; no page errors on either
-  device
-- overworld frame pacing in headless Chromium was 16.7 ms average. This is a
-  sanity check only, not real-device performance.
+- the removed globals (`WORLD_MAP`, `LOCATION_LIST`, `dungeonRooms`,
+  `makeAscendant`, `freshWorld`, `expToNext`, `MAX_LEVEL`, `statsForLevel`,
+  `ZONE_MUSIC`) don't exist; `Player` has no level/EXP; `Game` has no world/dungeon
+- title → Start → test field with Shades; the camera scrolls as the knight
+  walks; the knight is held inside the field
+- ground combo, air combo (airborne hits), Whirl finisher (6/6 enemies around
+  hit), dash charge, Fire spell (MP spent, damage dealt), and a bruiser
+  guarding a frontal hit
+- talents cost SP (5 → 3 for Whirl); a cleared group is followed by a new one
+- 4-tab menu; forging w2 with materials equips it; AF's score plays on the field
+- death → R → field restarts at full HP with gear and talents kept
+- save has SP/upgrades and no level/world keys; the AF save is untouched;
+  upgrades raise stats and survive a reload
+- phone: touch mode, tap Start, ATK hits, stick moves the knight, MENU button
+  + tab tap, close box; no page errors on either device
 
-**Assumed / not checked**: real-phone feel, gamepad input, audio output (headless).
-Whirl, air combos and guard weren't driven separately; that code wasn't edited.
+**Assumed / not checked**: real-phone feel, gamepad, audio output (headless).
+The items list still has AF's 16 materials and Ascendant flavour text. PLAN
+cuts it to one continent's worth in Phase 11.
+
+# Phase 0 (v1): fork & strip (superseded)
+
+The first pass under PLAN v1: forked Aerial Finisher into this folder,
+renamed it to AERIAL CONQUEST (canvas wordmark measured with `measureText`,
+page title, header), changed the save key to `aerial-conquest-slot1`,
+removed the Colosseum and Wave Trials, and made `build.js` write
+`aerial-conquest.html`. All of that carries into v2.
 
 ---
 
 # Inherited: Aerial Finisher engine notes
 
-Everything below documents the engine as forked. References to the Colosseum,
-Wave Trials or `aerial-finisher` save keys are historical; Phase 0 removed them.
+Everything below documents Aerial Finisher's engine as forked. Phase 0 removed
+the Colosseum, Wave Trials, the open world, dungeons, levels/EXP and the
+`aerial-finisher` save keys, so mentions of those below are historical. The
+knight, combat, talents, gear, music and touch controls are as described.
 
 ## Aerial Finisher — v1 combat arena
 
@@ -286,117 +323,10 @@ against 960x540, so that is a deliberate later job.
 
 ---
 
-# rev 7 - a bigger world, a new score
+# rev 6-7 (kept parts)
 
-See the sections below; rev 7 changes are folded in.
-
-# rev 6 - open world, dungeons
-
-The game is an open world you walk around, Zelda-style: a smooth-scrolling
-camera over one connected map, enemies scattered through every region, and
-a dungeon in each region holding its bosses. Levels run 1-100.
-
-## Files
-
-| file | what lives there |
-|---|---|
-| `src/world.ts` | `WorldLocation`, `BossDefinition`, `WorldState` (incl. your position and checkpoint); save (de)serialisation, unlock rules, the quest hint |
-| `src/location.ts` | the Haven and 12 regions, 30 bosses, tier level bands, forge flavour - all data |
-| `src/overworld.ts` | the tile map: region grid, cliffs, passages and barriers, clutter, roads, buildings, enemy spawn points; tile collision; spawning; camera |
-| `src/dungeon.ts` | a dungeon's rooms (hall, wave rooms, boss rooms), waystones and altars |
-| `src/superboss.ts` | Ascendant variants: stat scaling, Star Fragment spoils |
-
-Build order: config, core, items, talents, world, location, superboss,
-overworld, dungeon, music, entities, render, main.
-
-## The world
-
-`REGION_GRID` in overworld.ts lays the 12 regions and the Haven out on a
-5x3 grid (two cells are mountains). Each region is **128x80 tiles** of 40px
-(16x the area of rev 6), ringed by cliffs; neighbours are joined by a
-6-tile passage. The whole map is 640x240 tiles and generated from fixed
-seeds, so it is the same every load; a flood fill keeps only spawn points
-and chests you can actually walk to. `MAP_VERSION` is saved with your
-position, so a save from an older map layout wakes you at the Haven.
-
-The **Haven** is the exception: a 56x36-tile valley in the middle of its
-cell (`HAVEN_RECT`), ringed by mountains, with roads tunnelled out to the
-forest, the coast and the desert. It holds the Haven Forge, Harrow Inn,
-the colosseum and the Lantern Fountain.
-
-Every other region has:
-- a **dungeon** (the Haven has the **colosseum** instead)
-- **two towns** - rest stops, checkpoints and waypoints; the first has the
-  region's forge where it has one
-- a **landmark** per biome (the Eldest Tree, the Drowned Ship, the Fallen
-  Colossus, the Mirror Oasis, the Lake of Cinders, the Still Lake, the
-  Wind Shrine, the Monolith, the Lantern Fountain)
-- **14 treasure chests** (materials for the tier, supplies, sometimes a
-  boss material); opened ones stay open
-- **~110 enemy spawn points**, one in twelve an **Elite**: x2.6 HP,
-  x1.35 attack, bigger, glowing, x3 loot and EXP, a chance at a boss
-  material, and a slower respawn
-
-A passage into a region you have not opened is a glowing **barrier**.
-
-**Waypoints**: every town and dungeon door you reach is added; open the
-MAP tab, pick one with the arrows (or tap it) and press ENTER to warp -
-not while something is chasing you.
-
-The HUD minimap shows the region you are in at one pixel per tile, with
-towns, the dungeon door and unopened chests marked.
-
-**Enemies** live on spawn points. A spawner fills when you are 560-1500px
-away (so never on-screen), its enemy idles near home until you come within
-300px, chases, and gives up if you drag it 760px from home. Killed enemies
-respawn after 28s (Elites 84s); idle ones far away are put back. Only
-enemies within ~1150px of you are simulated.
-
-## Dungeons
-
-`dungeonRooms`: an entrance hall, then for each of the region's bosses two
-wave rooms and the boss's room. A room's east door is barred until the
-room is clear; walk into it to go on. The last boss opens the next region
-(its barrier drops); another boss opens a Wave Trial tier. B leaves at any
-time - rooms refill, beaten bosses stay beaten.
-
-The hall has a **waystone** for every section you have reached, so a
-beaten boss is a checkpoint. A beaten boss's room has two **altars**:
-rematch it, or face its **Ascendant** (x1.5 stats, x2 spoils, Star
-Fragments). Ascendants unlock nothing.
-
-## Music
-
-`music.ts` is an orchestral, melody-first score synthesised live: piano,
-bells, flute, strings, pads, choir, soft brass, harp, pizzicato, marimba,
-an oud-like pluck, bass, gentle drums and timpani through a generated
-hall reverb and a compressor.
-
-Twelve original themes, each two 8-bar sections written in readable
-notation (roman-numeral chords, scale-degree melodies):
-
-| theme | where | feel |
-|---|---|---|
-| Heart's Lantern | title | piano lullaby, D major |
-| Lanterns of the Haven | the Haven | celesta waltz, 3/4 |
-| Where the Old Trees Listen | forests | flute over harp |
-| Saltglass Morning | coast | marimba and flute, 6/8 |
-| Verses in Stone | ruins | dorian strings |
-| Glass and Wind | desert | oud, phrygian dominant |
-| Embers Rising | volcanoes | horn over a string ostinato |
-| Frostveil Lullaby | tundra | bells and piano |
-| Above the Storm | sky | lydian strings |
-| The Space Between Stars | the Rift | bells and choir |
-| Beneath | dungeons | low piano and cello |
-| Crown of Thorns | bosses, colosseum | everything, with timpani |
-
-Regions sharing a biome play it in a different key and tempo
-(`ZONE_MUSIC`). When enemies engage, a combat layer (drums, driving bass,
-brass stabs) fades in on the next bar and the tune moves to a brighter
-instrument; it fades out after the fight. Every third pass the melody
-rests. Themes crossfade on a fresh bar, and the menu ducks the music.
-Default volume is 20%; every theme measures ~-14 dBFS RMS at full volume.
-`Music.render(id, seconds, combat)` renders a theme offline for testing.
+The open world, regions, dungeons, barriers and their music mapping were
+removed in v2 Phase 0. What survives:
 
 ## Hero and blade looks
 
@@ -420,25 +350,9 @@ You can turn mid-swing: holding a direction rotates you toward it during
 any attack (`TUNING.swingTurnRate`, 11 - a full about-face takes ~0.2s),
 and the hitbox and lunge turn with you. The Whirl still spins on its own.
 
-## Tiers and scaling
-
-`TIER_SCALING` (config.ts) multiplies HP/attack/defence/EXP by tier;
-`LEVEL_SCALING` adds a little per enemy level inside the tier band
-(`TIER_LEVELS`: tier 1 is Lv 1-8, tier 10 is Lv 87-100). Boss attack is fed
-in gently and HP scaled (`BOSS_HP_SCALE`, `SHOCK_MULT`) so a slam runs ~16%
-of your HP at tier 1 to ~50% at tier 10. 1.45M EXP to level 100.
+## Boss AI
 
 Bosses: four patterns, each a base AI plus signature moves - **slam**
 (ground ring, be airborne), **fan** (bolt spread), **rush** (a string of
 lunges), **dive** (lands on a marked spot). Enrage under 50% HP.
 
-## Save
-
-`aerial-finisher-save-v2` holds level, gear, materials, talents and a
-`world` block: current region, discovered regions, beaten bosses and
-Ascendants, unlocked regions and tiers, trial bests, your position and your
-checkpoint. Unlocks are re-derived from beaten bosses on load; a position
-that is no longer standable falls back to the checkpoint.
-
-Debug panel (`): **Unlock all areas + tiers**, god mode, levels,
-materials; "Skip to wave +5" only works in a Wave Trial.

@@ -1,5 +1,6 @@
 /* =========================================================================
- * talents.ts — three branches, 18 nodes, 1 AP per level.
+ * talents.ts — three branches, 18 nodes, bought with skill points (SP) won
+ * by conquest (PLAN 12.2). The Command branch arrives in Phase 11.
  * Dash, the Whirl finisher and the combo extensions all live here, so the
  * moveset is something you build rather than something you're handed.
  * ========================================================================= */
@@ -70,8 +71,6 @@ function talentsIn(b: Branch): TalentDef[] { return TALENTS.filter((t) => t.bran
 function talentById(id: string): TalentDef | undefined { return TALENTS.find((t) => t.id === id); }
 
 type TalentSet = Record<string, boolean>;
-
-function apPerLevel(level: number): number { return level; } // 1 AP per level, level 1 included
 
 function apSpent(set: TalentSet): number {
   let n = 0;

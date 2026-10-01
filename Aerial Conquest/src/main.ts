@@ -1,7 +1,10 @@
 /* =========================================================================
- * main.ts — the Game: fixed-timestep loop, the world state machine
- * (location -> travel -> location, location -> battle -> location),
- * progression, saving, and glue.
+ * main.ts — the Game: fixed-timestep loop, screens, progression, saving
+ * and glue.
+ *
+ * Phase 0 (PLAN v2) strips Aerial Finisher down to the knight and its
+ * combat. Until the campaign map exists (Phase 6), New Game drops you on a
+ * test battlefield: open ground and endless groups of Shades.
  * ========================================================================= */
 
 interface MenuRow { label: string; right?: string; enabled: boolean; act: () => void; color?: string; }
@@ -11,35 +14,17 @@ type SynthState = 'owned' | 'ready' | 'lack';
 interface SynthEntry { kind: 'w' | 'a'; id: string; name: string; recipe: Recipe; state: SynthState; }
 
 /**
- * title    — the front menu
- * world    — the open world: walk anywhere, fight what you find
- * dungeon  — inside a region's dungeon, room by room
- * The forge is an overlay opened from a town's forge.
+ * title   — the front menu
+ * battle  — a scrolling battlefield (Phase 0: the test field)
+ * campaign and victory arrive in later phases.
  */
-type GameScreen = 'title' | 'world' | 'dungeon';
-
-interface BattleState {
-  kind: 'boss';
-  boss: BossDefinition | null;
-  superboss: boolean;
-  tier: number;             // enemy tier: the boss's
-  bossEnemy: Enemy | null;
-}
-
-/** Something you can use by standing next to it and pressing ENTER (or tapping). */
-interface Prompt {
-  label: string;
-  sub?: string;
-  act: () => void;
-  color: string;
-}
+type GameScreen = 'title' | 'battle';
 
 interface SaveData {
-  level: number; exp: number;
+  skillPoints: number; upgrades: KnightUpgrades;
   inv: Inventory; weapons: string[]; armors: string[];
   weapon: string; armor: string; talents: TalentSet;
   potions: number; ethers: number;
-  world: WorldSave;
   hero: HeroStyle; blade: BladeStyle;
 }
 
@@ -49,11 +34,10 @@ const SAVE_KEY = 'aerial-conquest-slot1';
 
 function freshSave(): SaveData {
   return {
-    level: 1, exp: 0,
+    skillPoints: WAR.startSkillPoints, upgrades: freshUpgrades(),
     inv: {}, weapons: ['w1'], armors: ['a1'],
     weapon: 'w1', armor: 'a1', talents: {},
     potions: 3, ethers: 2,
-    world: worldToSave(freshWorld()),
     hero: 'wayfarer', blade: 'longsword',
   };
 }
@@ -64,8 +48,12 @@ function loadSave(): SaveData {
     const raw = localStorage.getItem(SAVE_KEY);
     if (raw) {
       const j = JSON.parse(raw) || {};
-      d.level = clamp(j.level | 0 || 1, 1, MAX_LEVEL);
-      d.exp = Math.max(0, j.exp | 0);
+      if (typeof j.skillPoints === 'number') d.skillPoints = Math.max(0, j.skillPoints | 0);
+      if (j.upgrades && typeof j.upgrades === 'object') {
+        for (const k of Object.keys(d.upgrades) as (keyof KnightUpgrades)[]) {
+          d.upgrades[k] = clamp(j.upgrades[k] | 0, 0, WAR.upgradeRanks);
+        }
+      }
       d.potions = Math.max(0, j.potions | 0);
       d.ethers = Math.max(0, j.ethers | 0);
       if (j.inv && typeof j.inv === 'object') {
@@ -84,9 +72,8 @@ function loadSave(): SaveData {
       if (j.talents && typeof j.talents === 'object') {
         for (const t of TALENTS) if (j.talents[t.id]) d.talents[t.id] = true;
       }
-      // Saves from before the open world have no `world`: they start at the hub
-      // with their level, gear and materials intact.
-      d.world = worldToSave(worldFromSave(j.world));
+      // never hold more talents than the points that bought them
+      d.skillPoints = Math.max(d.skillPoints, apSpent(d.talents));
       if (HERO_STYLES.some((h) => h.id === j.hero)) d.hero = j.hero;
       if (BLADE_STYLES.some((b) => b.id === j.blade)) d.blade = j.blade;
     }
@@ -96,8 +83,8 @@ function loadSave(): SaveData {
 
 /** Push a save blob onto a player instance. */
 function applySave(p: Player, d: SaveData) {
-  p.level = d.level;
-  p.exp = d.exp;
+  p.skillPoints = d.skillPoints;
+  p.upgrades = { ...d.upgrades };
   p.inv = { ...d.inv };
   p.ownedWeapons = d.weapons.slice();
   p.ownedArmors = d.armors.slice();
@@ -129,7 +116,8 @@ class Game {
   rings: RingFx[] = [];
   pickups: Pickup[] = [];
 
-  arena = { x: 60, y: 90, w: VIEW_W - 120, h: VIEW_H - 170 };
+  /** The playable rectangle of the current battlefield, in world px. */
+  field = { x: 0, y: 0, w: WAR.testField.w, h: WAR.testField.h };
 
   time = 0;
   accumulator = 0;
@@ -143,22 +131,9 @@ class Game {
   heroStyle: HeroStyle = 'wayfarer';
   bladeStyle: BladeStyle = 'longsword';
 
-  // ---- the world
-  world: WorldState = freshWorld();
-  spawners: Spawner[] = makeSpawners();
-  dungeon: DungeonRun | null = null;
-  battle: BattleState | null = null;
-  props: RoomProp[] = [];      // waystones and altars in the current dungeon room
-  prompt: Prompt | null = null;
   camX = 0; camY = 0;
-  mapIndex = 0;                // region cursor on the MAP tab
-  forgeOpen = false;           // the station's forge overlay is up
-  rested = '';                 // forge you last rested at (reset when you walk away)
-  barrierToastT = 0;
-  saveT = 0;
-  roomClearT = 0;
-
-  battleOver = 0;              // counts down after a battle is won, then back to the location
+  respawnT = 0;                // test field: countdown to the next group
+  groupsCleared = 0;           // test field: groups beaten this visit
 
   comboCount = 0;
   comboTimer = 0;
@@ -173,11 +148,11 @@ class Game {
   titleIndex = 0;
   optionIndex = 0;
 
-  waveIntro = 0;               // grace period before the wave activates
+  waveIntro = 0;               // grace period before a fresh group activates
   touchSpell = 0;              // which spell the MAG button casts
 
   menuOpen = false;
-  menuTab = 0;                 // 0 gear · 1 synthesis · 2 talents · 3 status · 4 map
+  menuTab = 0;                 // 0 gear · 1 forge · 2 talents · 3 status
   gearIndex = 0;
   synthIndex = 0;
   talentBranch = 0;
@@ -199,62 +174,19 @@ class Game {
 
     const save = loadSave();
     applySave(this.player, save);
-    this.world = worldFromSave(save.world);
     this.heroStyle = save.hero;
     this.bladeStyle = save.blade;
-    this.player.x = this.world.pos.x;
-    this.player.y = this.world.pos.y;
-    this.mapIndex = this.nearestWaypoint();
+    this.placePlayer();
     this.bannerT = 0;
     this.follow(true);
   }
 
-  /** The region you are in (or, inside, the one the dungeon belongs to). */
-  get place(): WorldLocation {
-    return locById(this.dungeon ? this.dungeon.region : this.world.currentLocation);
-  }
-
-  /** Whose look the screen is using right now. */
-  scene(): WorldLocation { return this.place; }
-
   inCombat(): boolean { return this.screen !== 'title'; }
-
-  /** In a dungeon room rather than the open world. */
-  inRoom(): boolean { return this.screen === 'dungeon'; }
-
-  /** The forge you are standing at, if any. */
-  nearForge(): Building | null {
-    const t = this.nearTown();
-    return t && t.kind === 'forge' ? t : null;
-  }
-
-  /** The town (with or without a forge) you are standing in, if any. */
-  nearTown(): Building | null {
-    if (this.screen !== 'world') return null;
-    for (const b of WORLD_MAP.buildings) {
-      if (isTown(b) && dist(this.player.x, this.player.y, b.doorX, b.doorY) < 170) return b;
-    }
-    return null;
-  }
-
-  /** The discovered waypoint closest to you, as a building index. */
-  nearestWaypoint(): number {
-    let best = -1, bd = Infinity;
-    this.world.waypoints.forEach((i) => {
-      const b = WORLD_MAP.buildings[i];
-      const d = dist(this.world.pos.x, this.world.pos.y, b.doorX, b.doorY);
-      if (d < bd) { bd = d; best = i; }
-    });
-    return best;
-  }
-
-  atStation(): boolean { return !!this.nearForge(); }
 
   hasSave(): boolean {
     const p = this.player;
-    return p.level > 1 || p.ownedWeapons.length > 1
-      || p.ownedArmors.length > 1 || Object.keys(p.talents).length > 0
-      || this.world.completedBosses.size > 0 || this.world.discoveredLocations.size > 1;
+    return p.ownedWeapons.length > 1 || p.ownedArmors.length > 1 || Object.keys(p.talents).length > 0
+      || Object.values(p.upgrades).some((r) => r > 0) || MAT_ORDER.some((m) => (p.inv[m] || 0) > 0);
   }
 
   titleRows(): string[] {
@@ -339,11 +271,11 @@ class Game {
     switch (label) {
       case 'Continue':
       case 'Start':
-        this.enterWorld();
+        this.enterBattle();
         break;
       case 'New Game':
         this.resetSave();
-        this.enterWorld();
+        this.enterBattle();
         break;
       case 'Options':
         this.titleMode = 'options'; this.optionIndex = 0;
@@ -361,14 +293,11 @@ class Game {
     }
   }
 
-  enterWorld() {
+  /** Into the test battlefield (the campaign map replaces this in Phase 6). */
+  enterBattle() {
     this.titleMode = 'root';
-    this.screen = 'world';
-    this.player.x = this.world.pos.x;
-    this.player.y = this.world.pos.y;
-    this.follow(true);
-    const l = this.place;
-    this.banner(l.name.toUpperCase(), l.tier ? `tier ${l.tier}  ·  recommended Lv ${recommendedLevel(l)}` : 'safe ground', l.look.accent);
+    this.screen = 'battle';
+    this.startTestField();
     this.input.clearBuffer();
   }
 
@@ -419,7 +348,7 @@ class Game {
       this.toast(this.sfx.muted ? 'SOUND OFF' : 'SOUND ON');
     }
     if (this.input.wasPressed('menu') && this.player.alive) {
-      if (this.menuOpen) this.closeMenu(); else this.openMenu(this.menuTab === 1 && !this.atStation() ? 0 : this.menuTab);
+      if (this.menuOpen) this.closeMenu(); else this.openMenu(this.menuTab);
       this.input.clearBuffer();
     }
     this.syncMusic();
@@ -436,7 +365,6 @@ class Game {
     this.time += dt;
     if (this.toastT > 0) this.toastT -= dt;
     if (this.bannerT > 0) this.bannerT -= dt;
-    if (this.barrierToastT > 0) this.barrierToastT -= dt;
     if (this.comboDisplay > 0) this.comboDisplay--;
     if (this.comboTimer > 0 && --this.comboTimer === 0) this.comboCount = 0;
     this.shakeAmount *= Math.pow(0.86, dt * 60);
@@ -448,32 +376,20 @@ class Game {
 
     if (!this.player.alive) {
       this.deathT += dt;
-      for (const e of this.enemies) if (this.awake(e)) e.update(this, dt);
+      for (const e of this.enemies) e.update(this, dt);
       this.cull();
       this.input.endTick();
       return;
     }
 
-    // What is in reach to use: a door, a forge, a waystone, an altar.
-    const screenBefore = this.screen;
-    this.prompt = this.screen === 'world' ? this.worldPrompt() : this.screen === 'dungeon' ? this.roomPrompt() : null;
-    const tap = this.input.takeTap();
-    const tapped = (r: { x: number; y: number; w: number; h: number }) =>
-      !!tap && tap.x >= r.x && tap.x <= r.x + r.w && tap.y >= r.y && tap.y <= r.y + r.h;
-    let used = false;
-    if (this.prompt) {
-      if (this.input.wasPressed('confirm') || tapped(PROMPT_BTN)) { this.prompt.act(); used = true; }
-    }
-    if (this.inRoom() && (this.input.wasPressed('back') || tapped(BACK_BTN))) { this.leaveRoom(); this.input.endTick(); return; }
-    if (used && this.screen !== screenBefore) { this.input.endTick(); return; }
-
+    this.input.takeTap();   // taps outside the touch controls do nothing on the field
     if (this.input.touchChip >= 0) {
       this.touchSpell = this.input.touchChip;
       this.sfx.guard();
     }
     if (this.input.consume('magic')) this.player.tryCast(this, SPELLS[this.touchSpell]);
 
-    if (!used) this.handleMenu();
+    this.handleMenu();
     this.player.update(this, dt);
     this.player.pollMagic(this);
 
@@ -486,31 +402,25 @@ class Game {
         this.sfx.wave();
       }
     } else {
-      for (const e of this.enemies) if (this.awake(e)) e.update(this, dt);
+      for (const e of this.enemies) e.update(this, dt);
     }
     for (const p of this.projectiles) p.update(this, dt);
     for (const p of this.pickups) p.update(this, dt);
 
     this.cull();
-    if (this.screen === 'world') this.updateWorld(dt);
-    else if (this.screen === 'dungeon') this.updateDungeon(dt);
+    this.updateTestField(dt);
     this.follow(false);
     this.input.endTick();
   }
 
-
-  /** Enemies far from you in the open world are asleep. */
-  private awake(e: Enemy): boolean {
-    return this.screen !== 'world' || dist(e.x, e.y, this.player.x, this.player.y) < 1150;
-  }
-
-  /** Point the camera at the player (the open world scrolls; rooms don't). */
+  /** The camera follows the knight, clamped to the battlefield. */
   follow(snap: boolean) {
-    if (this.screen !== 'world') { this.camX = 0; this.camY = 0; return; }
-    const c = cameraFor(this.player.x, this.player.y);
-    if (snap) { this.camX = c.x; this.camY = c.y; return; }
-    this.camX = lerp(this.camX, c.x, 0.2);
-    this.camY = lerp(this.camY, c.y, 0.2);
+    const f = this.field;
+    const tx = clamp(this.player.x - VIEW_W / 2, f.x, Math.max(f.x, f.x + f.w - VIEW_W));
+    const ty = clamp(this.player.y - VIEW_H / 2, f.y, Math.max(f.y, f.y + f.h - VIEW_H));
+    if (snap) { this.camX = tx; this.camY = ty; return; }
+    this.camX = lerp(this.camX, tx, 0.2);
+    this.camY = lerp(this.camY, ty, 0.2);
   }
 
   private cull() {
@@ -519,27 +429,20 @@ class Game {
     this.pickups = this.pickups.filter((p) => !p.collected && p.life > 0);
   }
 
-  /** Intensity for the score, resolved from what is actually happening. */
-  /** Pick the theme for where you are, and whether the combat layer is up. */
+  /** Pick the theme for the screen, and whether the combat layer is up. */
   private syncMusic() {
     const [id, transpose, tempo] = this.musicFor();
     this.music.setTrack(id, transpose, tempo);
     this.music.duck(this.menuOpen || this.paused);
     const p = this.player;
-    const fighting = p.alive && this.enemies.some((e) => e.alive && e.aggro
-      && (this.screen !== 'world' || dist(e.x, e.y, p.x, p.y) < 700));
-    this.music.target = fighting && this.battleOver <= 0 ? 3 : 0;
+    const fighting = p.alive && this.enemies.some((e) => e.alive && e.aggro);
+    this.music.target = fighting ? 3 : 0;
   }
 
-  /** [theme, transpose, tempo] for the current screen and place. */
+  /** [theme, transpose, tempo] for the current screen. Phase 13 maps the war contexts properly. */
   musicFor(): [string, number, number] {
     if (this.screen === 'title') return ['title', 0, 1];
-    if (this.screen === 'dungeon' && this.dungeon) {
-      const shift = (REGION_IDS.indexOf(this.dungeon.region) % 5) - 2;
-      if (this.battle?.kind === 'boss' && this.battle.bossEnemy?.alive) return ['boss', shift, 1];
-      return ['dungeon', shift, 1];
-    }
-    return ZONE_MUSIC[this.world.currentLocation] || ZONE_MUSIC.hub;
+    return ['forest', 0, 1];
   }
 
   private updateVfx(dt: number) {
@@ -561,391 +464,65 @@ class Game {
     this.rings = this.rings.filter((r) => r.life > 0);
   }
 
-  /* ---------------------------------------------------------- open world */
+  /* ---------------------------------------------------------- test field */
 
-  private updateWorld(dt: number) {
+  /** Stand the knight in the middle-left of the field. */
+  private placePlayer() {
     const p = this.player;
-    const w = this.world;
-    tickSpawners(this, dt);
-
-    // crossing into a new region
-    const r = regionAtPx(p.x, p.y);
-    if (r && r !== w.currentLocation) {
-      w.currentLocation = r;
-      const first = !w.discoveredLocations.has(r);
-      w.discoveredLocations.add(r);
-      const l = locById(r);
-      this.banner(l.name.toUpperCase(),
-        l.tier ? `tier ${l.tier}  ·  recommended Lv ${recommendedLevel(l)}${first ? '  ·  discovered' : ''}` : 'safe ground',
-        l.look.accent);
-      this.mapIndex = REGION_IDS.indexOf(r);
-      this.save();
-    }
-
-    // towns and dungeon doors are checkpoints (where you wake after a defeat)
-    // and waypoints (where the map can warp you)
-    WORLD_MAP.buildings.forEach((b, i) => {
-      if (!isWaypoint(b) || b.region !== w.currentLocation || dist(p.x, p.y, b.doorX, b.doorY) > 110) return;
-      if (!w.waypoints.has(i)) {
-        w.waypoints.add(i);
-        this.banner('WAYPOINT', `${b.name} — warp here from the MAP`, locById(b.region).look.accent);
-      }
-      if (Math.hypot(w.checkpoint.x - b.doorX, w.checkpoint.y - b.doorY) > 1) {
-        w.checkpoint = { x: b.doorX, y: b.doorY };
-        this.toast('CHECKPOINT');
-        this.save();
-      }
-    });
-
-    // towns are rest stops: whole again, pack topped up, once per visit
-    const town = this.nearTown();
-    const townKey = town ? String(WORLD_MAP.buildings.indexOf(town)) : '';
-    if (town && this.rested !== townKey) {
-      this.rested = townKey;
-      p.hp = p.stats.maxHp;
-      p.mp = p.stats.maxMp;
-      p.charging = false;
-      p.potions = Math.max(p.potions, 3);
-      p.ethers = Math.max(p.ethers, 2);
-      this.toast(`RESTED AT ${town.name.toUpperCase()}`);
-      this.ring(p.x, p.y, 0, 10, 80, PAL.hp);
-    } else if (!town && this.rested) {
-      const rb = WORLD_MAP.buildings[+this.rested];
-      if (!rb || dist(p.x, p.y, rb.doorX, rb.doorY) > 450) this.rested = '';
-    }
-
-    // bumping into a sealed passage says what opens it
-    if (this.barrierToastT <= 0) {
-      const tx = Math.floor(p.x / TILE), ty = Math.floor(p.y / TILE);
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        if (this.barrierToastT > 0 || !barrierUp(w, tx + dx, ty + dy)) continue;
-        const pa = WORLD_MAP.passages[WORLD_MAP.passageOf[(ty + dy) * WORLD_TW + tx + dx]];
-        const locked = w.unlockedAreas.has(pa.a) ? pa.b : pa.a;
-        this.toast(lockedAreaText(locked).toUpperCase());
-        this.barrierToastT = 3;
-      }
-    }
-
-    // save anywhere: your spot in the world is written every few seconds
-    w.pos = { x: p.x, y: p.y };
-    this.saveT += dt;
-    if (this.saveT > 4) { this.saveT = 0; this.save(); }
+    p.x = this.field.x + this.field.w * 0.3;
+    p.y = this.field.y + this.field.h / 2;
+    p.vx = p.vy = 0; p.z = 0;
   }
 
-  /** The door, forge or arena you are standing at, if any. */
-  private worldPrompt(): Prompt | null {
+  /** A fresh test field: knight in place, full HP/MP, supplies topped up, first group out. */
+  startTestField() {
     const p = this.player;
-    for (const c of WORLD_MAP.chests) {
-      if (this.world.openedChests.has(c.id) || dist(p.x, p.y, c.x, c.y) > 52) continue;
-      return { label: 'Open the chest', act: () => this.openChest(c), color: PAL.mpCharge };
-    }
-    let best: Building | null = null;
-    for (const b of WORLD_MAP.buildings) {
-      if (b.kind === 'town' || b.kind === 'landmark') continue;
-      if (dist(p.x, p.y, b.doorX, b.doorY) > 62) continue;
-      if (!best || dist(p.x, p.y, b.doorX, b.doorY) < dist(p.x, p.y, best.doorX, best.doorY)) best = b;
-    }
-    if (!best) return null;
-    const b = best;
-    const l = locById(b.region);
-    if (b.kind === 'dungeon') {
-      const beaten = l.bosses.filter((x) => bossDefeated(this.world, x.id)).length;
-      return {
-        label: `Enter the ${l.name} dungeon`,
-        sub: `${beaten}/${l.bosses.length} bosses  ·  recommended Lv ${recommendedLevel(l)}${beaten === l.bosses.length ? '  ·  cleared' : ''}`,
-        act: () => this.enterDungeon(b.region), color: l.look.accent,
-      };
-    }
-    if (b.kind === 'forge') {
-      return { label: l.stationName || 'Forge', sub: 'forge gear  ·  every recipe', act: () => this.openForge(), color: l.look.accent };
-    }
-    return null;
-  }
-
-  /** Loot a chest: materials for the region's tier, supplies, sometimes a boss material. */
-  openChest(c: Chest) {
-    if (this.world.openedChests.has(c.id)) return;
-    this.world.openedChests.add(c.id);
-    const loc = locById(c.region);
-    const tier = Math.max(1, loc.tier);
-    for (let k = 0; k < 3; k++) {
-      for (const d of rollDrops(pick(loc.enemyTypes), tier + 1, 3)) this.pickups.push(new Pickup(c.x, c.y, 20, d.kind, d.id, d.count));
-    }
-    if (loc.bosses.length && Math.random() < 0.2) {
-      this.pickups.push(new Pickup(c.x, c.y, 20, 'mat', loc.bosses[0].uniqueMaterials[0], rndInt(1, 2)));
-    }
-    if (Math.random() < 0.5) this.pickups.push(new Pickup(c.x, c.y, 20, Math.random() < 0.6 ? 'potion' : 'ether', null, 1));
-    this.sfx.levelUp();
-    this.ring(c.x, c.y, 0, 8, 70, PAL.mpCharge);
-    this.burst(c.x, c.y, 16, 14, PAL.mpCharge);
-    const left = WORLD_MAP.chests.filter((x) => x.region === c.region && !this.world.openedChests.has(x.id)).length;
-    this.toast(`CHEST OPENED  ·  ${left} LEFT IN ${loc.name.toUpperCase()}`);
-    this.save();
-  }
-
-  /** Warp to a discovered waypoint from the MAP tab. Not while something is chasing you. */
-  warpTo(i: number) {
-    const b = WORLD_MAP.buildings[i];
-    if (!b || !this.world.waypoints.has(i)) { this.toast('NOT DISCOVERED YET'); return; }
-    if (this.screen !== 'world') { this.toast('WARP FROM THE OPEN WORLD'); return; }
-    const p = this.player;
-    if (this.enemies.some((e) => e.alive && e.aggro && dist(e.x, e.y, p.x, p.y) < 700)) { this.toast('CAN’T WARP MID-FIGHT'); return; }
-    this.closeMenu();
-    this.toWorld(b.doorX, b.doorY + (b.kind === 'forge' || b.kind === 'town' ? -TILE : TILE / 2));
-    this.ring(this.player.x, this.player.y, 0, 10, 120, locById(b.region).look.accent);
-    this.sfx.cast(640);
-    const l = locById(b.region);
-    this.banner(b.name.toUpperCase(), l.name, l.look.accent);
-  }
-
-  /** Empty the open world of enemies; their spawners refill as you walk. */
-  private clearWorldEnemies() {
+    this.field = { x: 0, y: 0, w: WAR.testField.w, h: WAR.testField.h };
     this.enemies.length = 0;
     this.projectiles.length = 0;
-    this.player.lock = null;
-    for (const sp of this.spawners) { sp.enemy = null; sp.cooldown = 0; }
-  }
-
-  /** Step back out into the open world at a building's door. */
-  private toWorld(x: number, y: number) {
-    // loot left on the floor is swept into your pack rather than lost
-    for (const p of this.pickups) if (!p.collected) { p.collected = true; this.collect(p); }
     this.pickups.length = 0;
-    this.screen = 'world';
-    this.dungeon = null;
-    this.battle = null;
-    this.props = [];
-    this.battleOver = 0;
-    this.waveIntro = 0;
-    this.clearWorldEnemies();
-    this.player.x = x;
-    this.player.y = y;
-    this.player.vx = this.player.vy = 0;
-    this.world.pos = { x, y };
-    this.world.currentLocation = regionAtPx(x, y) || this.world.currentLocation;
+    p.lock = null;
+    this.placePlayer();
+    p.refreshStats(true);
+    p.potions = Math.max(p.potions, 3);
+    p.ethers = Math.max(p.ethers, 2);
+    this.groupsCleared = 0;
+    this.spawnTestGroup();
     this.follow(true);
-    this.save();
+    this.banner('TEST FIELD', 'Phase 0 combat sandbox  ·  the campaign map arrives in Phase 6', '#8fb4ff');
   }
 
-  openMenu(tab: number) {
-    this.menuOpen = true;
-    this.menuTab = tab;
-    this.menuIndex = 0;
-    if (tab === 4) this.mapIndex = this.nearestWaypoint();
-    this.input.clearBuffer();
-  }
-
-  closeMenu() {
-    this.menuOpen = false;
-    this.forgeOpen = false;
-  }
-
-  openForge() {
-    if (!this.atStation()) { this.toast('NO FORGE HERE'); return; }
-    this.openMenu(1);
-    this.forgeOpen = true;
-    this.sfx.cast(420);
-  }
-
-  /* ------------------------------------------------------------ dungeons */
-
-  enterDungeon(region: string) {
-    const loc = locById(region);
-    const door = buildingOf('dungeon', region)!;
-    this.world.checkpoint = { x: door.doorX, y: door.doorY };
-    this.world.pos = { x: door.doorX, y: door.doorY };
-    this.clearWorldEnemies();
-    this.dungeon = { region, rooms: dungeonRooms(loc), index: 0, doorOpen: true, fighting: false };
-    this.screen = 'dungeon';
-    this.enterRoom(0);
-    this.banner(`${loc.name.toUpperCase()}`, 'dungeon  ·  clear each room to open its door  ·  B to leave', loc.look.accent);
-    this.sfx.cast(380);
-    this.save();
-  }
-
-  /** Walk into room `i`: fill it with its wave, its boss, or its props. */
-  enterRoom(i: number) {
-    const run = this.dungeon!;
-    const loc = this.place;
-    run.index = i;
-    const room = run.rooms[i];
-    this.enemies.length = 0;
-    this.projectiles.length = 0;
-    this.battle = null;
-    this.battleOver = 0;
-    this.waveIntro = 0;
-    this.props = [];
-    this.player.lock = null;
-    this.player.x = this.arena.x + 60;
-    this.player.y = this.arena.y + this.arena.h / 2;
-    this.player.vx = this.player.vy = 0;
-
-    if (room.kind === 'hall') {
-      run.doorOpen = true;
-      run.fighting = false;
-      const secs = reachableSections(this.world, loc);
-      secs.forEach((sec, k) => this.props.push({
-        kind: 'waystone', x: waystoneX(this.arena, k, secs.length), y: this.arena.y + 80,
-        label: sec === 0 ? 'Waystone: from the start' : `Waystone: past ${loc.bosses[sec - 1].name}`,
-        act: () => this.enterRoom(sectionStart(run, sec)), color: loc.look.accent,
-      }));
-    } else if (room.kind === 'wave') {
-      run.doorOpen = false;
-      run.fighting = true;
-      this.spawnRoomWave(roomWave(run));
-    } else {
-      const b = room.boss!;
-      if (bossDefeated(this.world, b.id)) this.setupAltars(b);
-      else this.startBoss(b, false);
-    }
-  }
-
-  /** A beaten boss's room: open door, and two altars to fight it again. */
-  private setupAltars(b: BossDefinition) {
-    const run = this.dungeon!;
-    run.doorOpen = true;
-    run.fighting = false;
-    const cx = this.arena.x + this.arena.w / 2;
-    this.props = [
-      { kind: 'altar', x: cx - ALTAR.dx, y: this.arena.y + ALTAR.y - 90, label: `Rematch ${b.name}`, act: () => this.startBoss(b, false), color: b.accent },
-      { kind: 'altar', x: cx + ALTAR.dx, y: this.arena.y + ALTAR.y - 90,
-        label: `${superDefeated(this.world, b.id) ? '★ ' : ''}Face the Ascendant  ·  x2 spoils`, act: () => this.startBoss(b, true), color: '#ffd54a' },
-    ];
-  }
-
-  private spawnRoomWave(n: number) {
-    const loc = this.place;
-    const ids = this.composition(n, loc.enemyTypes);
+  /** The next group of Shades, around the knight but not on top of them. */
+  private spawnTestGroup() {
+    const ids = this.composition(this.groupsCleared + 1, ['shade', 'caster', 'flyer', 'bruiser']);
+    const p = this.player, f = this.field;
     for (let i = 0; i < ids.length; i++) {
-      const pos = this.spawnPoint(i, ids.length);
-      this.enemies.push(new Enemy(ENEMIES[ids[i]], pos.x, pos.y, rollEnemyLevel(loc), loc.tier));
-      this.ring(pos.x, pos.y, 0, 8, 60, loc.look.accent);
+      const ang = (i / ids.length) * Math.PI * 2 + rnd(-0.3, 0.3);
+      const r = rnd(260, 380);
+      const x = clamp(p.x + Math.cos(ang) * r, f.x + 40, f.x + f.w - 40);
+      const y = clamp(p.y + Math.sin(ang) * r * 0.7, f.y + 40, f.y + f.h - 40);
+      const e = new Enemy(ENEMIES[ids[i]], x, y, WAR.testFieldLevel, WAR.testFieldTier);
+      e.aggro = true;
+      this.enemies.push(e);
+      this.ring(x, y, 0, 8, 60, '#8fb4ff');
     }
     this.waveIntro = Math.max(0, TUNING.waveIntro);
   }
 
-  /** The prop you are standing at in a dungeon room. */
-  private roomPrompt(): Prompt | null {
-    const p = this.player;
-    for (const pr of this.props) {
-      if (dist(p.x, p.y, pr.x, pr.y) < 60) return { label: pr.label, act: pr.act, color: pr.color };
-    }
-    return null;
-  }
-
-  /** Where the east door of the current room leads: -1 means back outside. */
-  nextRoom(): number {
-    const run = this.dungeon!;
-    const room = run.rooms[run.index];
-    if (room.kind === 'hall') {
-      const secs = reachableSections(this.world, this.place);
-      return sectionStart(run, secs[secs.length - 1]);
-    }
-    return run.index + 1 < run.rooms.length ? run.index + 1 : -1;
-  }
-
-  private updateDungeon(dt: number) {
-    const run = this.dungeon!;
-    if (this.battleOver > 0) {
-      this.battleOver -= dt;
-      if (this.battleOver <= 0) {
-        const b = this.battle?.boss;
-        this.battle = null;
-        if (b) this.setupAltars(b);
-      }
+  private updateTestField(dt: number) {
+    if (this.enemies.some((e) => e.alive)) return;
+    if (this.respawnT <= 0) {
+      this.groupsCleared++;
+      this.respawnT = WAR.testRespawnDelay;
+      this.sfx.wave();
+      this.banner('GROUP CLEARED', `${this.groupsCleared} so far  ·  next group incoming`, '#4fe08a');
       return;
     }
-    if (run.fighting && !this.enemies.some((e) => e.alive)) {
-      if (this.battle?.kind === 'boss') { this.winBoss(); return; }
-      run.fighting = false;
-      run.doorOpen = true;
-      this.sfx.wave();
-      this.banner('ROOM CLEAR', 'the door is open  →', '#4fe08a');
-      this.save();
-    }
-    // walk out through the east door
-    const a = this.arena, p = this.player;
-    const pushing = this.input.moveVector().x > 0.3;
-    if (run.doorOpen && pushing && p.x >= a.x + a.w - p.radius - 3 && Math.abs(p.y - (a.y + a.h / 2)) < ROOM_DOOR.h / 2) {
-      const next = this.nextRoom();
-      if (next < 0) {
-        this.leaveRoom();
-        this.banner('DUNGEON CLEARED', this.place.name, this.place.look.accent);
-      } else this.enterRoom(next);
-    }
+    this.respawnT -= dt;
+    if (this.respawnT <= 0) { this.respawnT = 0; this.spawnTestGroup(); }
   }
 
-  /** B: out of a dungeon, back to its door. Rooms refill. */
-  private leaveRoom() {
-    if (this.screen === 'dungeon' && this.dungeon) {
-      const door = buildingOf('dungeon', this.dungeon.region)!;
-      this.toWorld(door.doorX, door.doorY + 10);
-      this.toast('LEFT THE DUNGEON — ITS ROOMS WILL REFILL');
-    }
-  }
-
-  /* ------------------------------------------------------------- battles */
-
-  bossLevel(b: BossDefinition): number { return TIER_LEVELS[clamp(b.tier, 1, 10)][1]; }
-
-  /** The boss steps out in its room (from the door, or from an altar). */
-  startBoss(b: BossDefinition, superboss: boolean) {
-    if (!this.dungeon) return;
-    this.props = [];
-    this.battle = { kind: 'boss', boss: b, superboss, tier: b.tier, bossEnemy: null };
-    this.dungeon.doorOpen = false;
-    this.dungeon.fighting = true;
-    this.spawnBoss();
-    this.waveIntro = Math.max(0, TUNING.waveIntro);
-    this.banner(superboss ? ascendantName(b).toUpperCase() : b.name.toUpperCase(),
-      superboss ? 'hard mode  ·  x1.5 stats  ·  x2 spoils' : b.title,
-      superboss ? '#ffd54a' : b.accent);
-  }
-
-  private spawnBoss() {
-    const bt = this.battle!;
-    const b = bt.boss!;
-    const a = this.arena;
-    const e = new Enemy(bossEnemyDef(b), a.x + a.w / 2 + 120, a.y + a.h / 2 - 40, this.bossLevel(b), b.tier);
-    e.boss = b;
-    if (bt.superboss) makeAscendant(e, b);
-    this.enemies.push(e);
-    bt.bossEnemy = e;
-    this.ring(e.x, e.y, 0, 12, 140, b.accent);
-    // deeper bosses bring a guard or two
-    const guards = b.tier >= 7 ? 2 : b.tier >= 4 ? 1 : 0;
-    for (let i = 0; i < guards; i++) {
-      const pos = this.spawnPoint(i * 2 + 1, 4);
-      const id = pick(this.place.enemyTypes);
-      this.enemies.push(new Enemy(ENEMIES[id], pos.x, pos.y, this.levelFor(bt.tier), bt.tier));
-    }
-  }
-
-  /** The boss is down: record it, open what it opens, drop its spoils. */
-  private winBoss() {
-    const bt = this.battle!;
-    const b = bt.boss!;
-    const first = !bossDefeated(this.world, b.id);
-    const opened = defeatBoss(this.world, b);
-    const e = bt.bossEnemy!;
-    const mult = bt.superboss ? b.superboss.dropMultiplier : 1;
-    for (const m of b.uniqueMaterials) {
-      this.pickups.push(new Pickup(e.x, e.y, 30, 'mat', m, Math.round(rndInt(2, 4) * mult)));
-    }
-    for (const d of rollDrops(ENEMIES[pick(this.place.enemyTypes)].id, b.tier + 2, 2 * mult)) {
-      this.pickups.push(new Pickup(e.x, e.y, 30, d.kind, d.id, d.count));
-    }
-    if (b.tier >= 5) this.pickups.push(new Pickup(e.x, e.y, 30, 'mat', 'core', Math.round(rndInt(1, 2) * mult)));
-    this.pickups.push(new Pickup(e.x, e.y, 30, 'potion', null, 1));
-    if (bt.superboss) winAscendant(this, b, e);
-    this.battleOver = 3.5;
-    this.sfx.levelUp();
-    const sub = opened.length ? `Unlocked: ${opened.join('  ·  ')}` : first ? 'Its spoils are yours' : 'Farmed again';
-    this.banner(bt.superboss ? 'ASCENDANT FELLED' : 'BOSS DEFEATED', sub, b.accent);
-    this.save();
-  }
-
-  /** Enemy costs for filling a wave from a set of enemy types. */
+  /** Enemy costs for filling a group from a set of enemy types. */
   private composition(wave: number, types: string[]): string[] {
     let budget = 3 + Math.min(wave, 14) * 1.3;
     const table: Record<string, { cost: number; cap: number }> = {
@@ -969,52 +546,20 @@ class Game {
     return out;
   }
 
-  /** Level for an enemy fighting at `tier`: drawn from that tier's band. */
-  private levelFor(tier: number): number {
-    const band = TIER_LEVELS[clamp(tier, 1, 10)];
-    return rndInt(band[0], band[1]);
-  }
-
-  spawnPoint(i: number, total: number) {
-    const a = this.arena;
-    const cx = a.x + a.w / 2, cy = a.y + a.h / 2;
-    const ang = (i / total) * Math.PI * 2 + rnd(-0.25, 0.25);
-    const rx = a.w * 0.38, ry = a.h * 0.36;
-    let x = cx + Math.cos(ang) * rx;
-    let y = cy + Math.sin(ang) * ry;
-    // never drop an enemy right on top of the player
-    if (dist(x, y, this.player.x, this.player.y) < 140) {
-      x = cx - Math.cos(ang) * rx;
-      y = cy - Math.sin(ang) * ry;
-    }
-    return {
-      x: clamp(x, a.x + 30, a.x + a.w - 30),
-      y: clamp(y, a.y + 30, a.y + a.h - 30),
-    };
-  }
-
   /* ---------------------------------------------------------- collisions */
 
-  /** Keep something inside the playable space: world tiles outside, room walls inside. */
+  /** Keep something inside the battlefield. */
   clampToArena(o: { x: number; y: number; radius: number }) {
-    if (this.screen === 'world') { collideWorld(this.world, o); return; }
-    const a = this.arena;
-    o.x = clamp(o.x, a.x + o.radius, a.x + a.w - o.radius);
-    o.y = clamp(o.y, a.y + o.radius, a.y + a.h - o.radius);
+    const f = this.field;
+    o.x = clamp(o.x, f.x + o.radius, f.x + f.w - o.radius);
+    o.y = clamp(o.y, f.y + o.radius, f.y + f.h - o.radius);
   }
 
   /** The space projectiles may fly in before they are discarded. */
-  bounds(): { x: number; y: number; w: number; h: number } {
-    return this.screen === 'world' ? { x: 0, y: 0, w: WORLD_PW, h: WORLD_PH } : { x: 0, y: 0, w: VIEW_W, h: VIEW_H };
-  }
+  bounds(): { x: number; y: number; w: number; h: number } { return this.field; }
 
-  /** Trees, rocks, walls and barriers stop shots; water and lava do not. */
-  blocksShot(x: number, y: number): boolean {
-    if (this.screen !== 'world') return false;
-    const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
-    const t = tileAt(tx, ty);
-    return t === T_SOLID || t === T_WALL || t === T_BUILD || barrierUp(this.world, tx, ty);
-  }
+  /** Nothing on the open test field stops a shot (walls and gates arrive in Phase 4-5). */
+  blocksShot(_x: number, _y: number): boolean { return false; }
 
   /** Cheap separation so enemies don't stack into a single blob. */
   separate(e: Enemy) {
@@ -1215,7 +760,8 @@ class Game {
 
   /* ------------------------------------------------------- pause menu */
 
-  apFree(): number { return apPerLevel(this.player.level) - apSpent(this.player.talents); }
+  /** Skill points not yet spent on talents. */
+  apFree(): number { return this.player.skillPoints - apSpent(this.player.talents); }
 
   gearEntries(): GearEntry[] {
     const p = this.player;
@@ -1245,13 +791,10 @@ class Game {
     if (inp.wasPressed('cancel')) { this.closeMenu(); return; }
 
     for (let i = 0; i < MENU_TABS; i++) {
-      if (inp.wasPressed(('spell' + (i + 1)) as Action)) { this.menuTab = i; if (i !== 1) this.forgeOpen = false; }
+      if (inp.wasPressed(('spell' + (i + 1)) as Action)) this.menuTab = i;
     }
 
-    const cycle = (d: number) => {
-      this.menuTab = (this.menuTab + d + MENU_TABS) % MENU_TABS;
-      if (this.menuTab !== 1) this.forgeOpen = false;
-    };
+    const cycle = (d: number) => { this.menuTab = (this.menuTab + d + MENU_TABS) % MENU_TABS; };
 
     if (this.menuTab === 2) {
       if (inp.wasPressed('left')) { this.talentBranch = (this.talentBranch + 2) % 3; this.talentIndex = 0; this.sfx.guard(); }
@@ -1260,16 +803,6 @@ class Game {
       if (inp.wasPressed('down')) { this.talentIndex = (this.talentIndex + 1) % list.length; this.sfx.guard(); }
       if (inp.wasPressed('up')) { this.talentIndex = (this.talentIndex - 1 + list.length) % list.length; this.sfx.guard(); }
       if (inp.wasPressed('confirm')) this.learnTalent(list[this.talentIndex].id);
-      return;
-    }
-
-    if (this.menuTab === 4) {
-      // the world map: arrows move between waypoints, ENTER warps
-      if (inp.wasPressed('left')) this.moveMapCursor(-1, 0);
-      if (inp.wasPressed('right')) this.moveMapCursor(1, 0);
-      if (inp.wasPressed('up')) this.moveMapCursor(0, -1);
-      if (inp.wasPressed('down')) this.moveMapCursor(0, 1);
-      if (inp.wasPressed('confirm')) this.warpTo(this.mapIndex);
       return;
     }
 
@@ -1295,25 +828,14 @@ class Game {
     }
   }
 
-  /** Step the map cursor to the nearest discovered waypoint roughly in a direction. */
-  private moveMapCursor(dx: number, dy: number) {
-    const cur = WORLD_MAP.buildings[this.mapIndex];
-    if (!cur) { this.mapIndex = this.nearestWaypoint(); return; }
-    const from = mapPointPx(cur.doorX, cur.doorY);
-    let best = -1, bestScore = Infinity;
-    this.world.waypoints.forEach((i) => {
-      if (i === this.mapIndex) return;
-      const b = WORLD_MAP.buildings[i];
-      const p = mapPointPx(b.doorX, b.doorY);
-      const vx = p.x - from.x, vy = p.y - from.y;
-      const d = Math.hypot(vx, vy) || 1;
-      const along = (vx * dx + vy * dy) / d;
-      if (along < 0.3) return;
-      const score = d / along;
-      if (score < bestScore) { bestScore = score; best = i; }
-    });
-    if (best >= 0) { this.mapIndex = best; this.sfx.guard(); }
+  openMenu(tab: number) {
+    this.menuOpen = true;
+    this.menuTab = clamp(tab, 0, MENU_TABS - 1);
+    this.menuIndex = 0;
+    this.input.clearBuffer();
   }
+
+  closeMenu() { this.menuOpen = false; }
 
   equip(e: GearEntry) {
     const p = this.player;
@@ -1324,10 +846,9 @@ class Game {
     this.save();
   }
 
-  /** Forging only happens at a crafting station. */
+  /** Forge anywhere for now; Phase 11 moves the forge to castles you hold and adds the gold fee. */
   craft(e: SynthEntry) {
     const p = this.player;
-    if (!this.atStation()) { this.toast('FIND A CRAFTING STATION TO FORGE'); return; }
     if (e.state === 'owned') { this.toast('ALREADY FORGED'); return; }
     if (e.state === 'lack') { this.toast('NOT ENOUGH MATERIALS'); return; }
     spend(p.inv, e.recipe.needs);
@@ -1335,7 +856,7 @@ class Game {
     else { p.ownedArmors.push(e.id); p.armor = armorById(e.id); }
     p.refreshStats(false);
     this.sfx.levelUp();
-    this.banner('FORGED', `${e.name} — ${this.place.stationName || 'the forge'}`, this.place.look.accent);
+    this.banner('FORGED', e.name, '#ffd54a');
     this.save();
   }
 
@@ -1348,7 +869,7 @@ class Game {
       this.toast('REQUIRES ' + (talentById(t.needs)?.name || '').toUpperCase());
       return;
     }
-    if (this.apFree() < t.cost) { this.toast('NOT ENOUGH AP'); return; }
+    if (this.apFree() < t.cost) { this.toast('NOT ENOUGH SP'); return; }
     p.talents[id] = true;
     p.refreshStats(false);
     p.dashCharges = p.maxDash();
@@ -1356,7 +877,6 @@ class Game {
     this.banner('LEARNED', t.name, BRANCHES.find((b) => b.id === t.branch)!.color);
     this.save();
   }
-
 
   /* ---------------------------------------------------------------- menu */
 
@@ -1420,6 +940,7 @@ class Game {
 
   /* --------------------------------------------------------- progression */
 
+  /** No EXP and no field drops in v2: spoils are paid on the results screen (Phase 4+). */
   onEnemyDeath(e: Enemy) {
     this.sfx.die();
     this.burst(e.x, e.y, e.z + e.def.height * 0.5, 22, e.def.accent);
@@ -1427,43 +948,7 @@ class Game {
     this.shake(4 * TUNING.shakeScale);
     this.hitstop(4 * TUNING.hitstopScale);
     if (this.player.lock === e) this.player.lock = null;
-
-    const luck = TUNING.dropRate * (this.player.hasT('scavenger') ? 1.55 : 1) * (e.elite ? 3 : 1);
-    if (e.elite) {
-      const loc = locById(regionAtPx(e.x, e.y) || HUB_ID);
-      if (loc.bosses.length && Math.random() < 0.3) this.pickups.push(new Pickup(e.x, e.y, e.z + 12, 'mat', loc.bosses[0].uniqueMaterials[0], 1));
-      this.pickups.push(new Pickup(e.x, e.y, e.z + 12, 'potion', null, 1));
-      this.banner('ELITE FELLED', '', PAL.mpCharge);
-    }
-    for (const d of rollDrops(e.def.id, e.tier, luck)) {
-      this.pickups.push(new Pickup(e.x, e.y, e.z + 12, d.kind, d.id, d.count));
-    }
-    this.grantExp(e.exp, e.x, e.y, e.z);
   }
-
-  grantExp(amount: number, x: number, y: number, z: number) {
-    const p = this.player;
-    if (p.level >= MAX_LEVEL) return;
-    p.exp += amount;
-    this.floatText(x, y, z + 54, `+${amount} EXP`, PAL.exp, 13);
-    let guard = 0;
-    while (p.level < MAX_LEVEL && p.exp >= expToNext(p.level) && guard++ < 50) {
-      p.exp -= expToNext(p.level);
-      p.level++;
-      p.refreshStats(false);
-      this.sfx.levelUp();
-      this.banner('LEVEL UP', `Level ${p.level}  ·  ${this.statLine()}`, '#ffd54a');
-      this.ring(p.x, p.y, 0, 10, 140, '#ffd54a');
-      this.burst(p.x, p.y, 30, 30, '#ffd54a');
-    }
-    this.save();
-  }
-
-  private statLine(): string {
-    const s = this.player.stats;
-    return `HP ${s.maxHp}  MP ${s.maxMp}  STR ${s.str.toFixed(0)}  MAG ${s.mag.toFixed(0)}  DEF ${s.def.toFixed(0)}`;
-  }
-
 
   onPlayerDeath() {
     this.deathT = 0;
@@ -1472,27 +957,18 @@ class Game {
     this.save();
   }
 
-  /**
-   * Back on your feet after a defeat. Levels, gear, materials and talents all
-   * persist — you wake at the last safe place: where the road started, or the
-   * location the battle was in.
-   */
+  /** Back on your feet: the test field starts over. (Phase 4: back to the map, warband lost.) */
   recoverFromDeath() {
     this.player = new Player();
     applySave(this.player, loadSave());
-    this.projectiles.length = 0;
-    this.pickups.length = 0;
     this.particles.length = 0;
     this.floats.length = 0;
     this.deathT = 0;
     this.comboCount = 0;
     this.menuMode = 'root';
     this.menuIndex = 0;
-    const cp = this.world.checkpoint;
-    this.toWorld(cp.x, cp.y);
-    this.player.hp = this.player.stats.maxHp;
-    this.player.mp = this.player.stats.maxMp;
-    this.banner('DEFEATED', `You wake at your last checkpoint in ${this.place.name}. Nothing was lost.`, '#ff9d9d');
+    this.startTestField();
+    this.banner('DEFEATED', 'The test field starts over. Gear, talents and materials are kept.', '#ff9d9d');
   }
 
   /* --------------------------------------------------- touch menu taps */
@@ -1503,7 +979,6 @@ class Game {
       const tx = MENU_TAB.x + i * (MENU_TAB.w + MENU_TAB.gap);
       if (tap.x >= tx && tap.x <= tx + MENU_TAB.w && tap.y >= MENU_TAB.y && tap.y <= MENU_TAB.y + MENU_TAB.h) {
         this.menuTab = i;
-        if (i !== 1) this.forgeOpen = false;
         this.sfx.guard(); return true;
       }
     }
@@ -1530,19 +1005,6 @@ class Game {
         return true;
       }
     }
-    if (this.menuTab === 4) {
-      // tap a waypoint to select it, tap it again to warp there
-      let hit = -1;
-      this.world.waypoints.forEach((i) => {
-        const b = WORLD_MAP.buildings[i];
-        const p = mapPointPx(b.doorX, b.doorY);
-        if (Math.hypot(tap.x - p.x, tap.y - p.y) < 14) hit = i;
-      });
-      if (hit >= 0) {
-        if (this.mapIndex === hit) this.warpTo(hit); else { this.mapIndex = hit; this.sfx.guard(); }
-        return true;
-      }
-    }
     if (this.menuTab === 2) {
       const colW = (VIEW_W - 52 - 20) / 3;
       for (let b = 0; b < 3; b++) {
@@ -1560,33 +1022,26 @@ class Game {
     return false;
   }
 
-  /** Save anywhere: this runs on every meaningful change, and from the panel. */
+  /** Save: runs on every meaningful change, and from the panel. */
   save() {
     const p = this.player;
-    if (this.screen === 'world' && p.alive) this.world.pos = { x: p.x, y: p.y };
     writeSave({
-      level: p.level, exp: p.exp,
+      skillPoints: p.skillPoints, upgrades: p.upgrades,
       inv: p.inv, weapons: p.ownedWeapons, armors: p.ownedArmors,
       weapon: p.weapon.id, armor: p.armor.id, talents: p.talents,
       potions: p.potions, ethers: p.ethers,
-      world: worldToSave(this.world),
       hero: this.heroStyle, blade: this.bladeStyle,
     });
   }
 
   resetSave() {
     writeSave(freshSave());
-    this.world = freshWorld();
-    this.spawners = makeSpawners();
     this.enemies.length = 0;
     this.player = new Player();
     applySave(this.player, loadSave());
-    this.player.x = this.world.pos.x;
-    this.player.y = this.world.pos.y;
+    this.placePlayer();
     this.toast('SAVE RESET');
   }
-
-  /* ----------------------------------------------------------------- fx */
 
   /* ----------------------------------------------------------------- fx */
 
@@ -1679,19 +1134,6 @@ class Game {
   }
 }
 
-/** A world pixel position on the MAP tab. */
-function mapPointPx(x: number, y: number): { x: number; y: number } {
-  const gx = MAP_BOX.x + 12, gy = MAP_BOX.y + 12, gw = MAP_BOX.w - 24, gh = MAP_BOX.h - 24;
-  return { x: gx + (x / WORLD_PW) * gw, y: gy + (y / WORLD_PH) * gh };
-}
-
-/** Screen rectangle of a region on the MAP tab. */
-function mapRect(id: string): { x: number; y: number; w: number; h: number } {
-  const { rx, ry } = regionCell(id);
-  const cw = (MAP_BOX.w - 24) / GRID_W, ch = (MAP_BOX.h - 24) / GRID_H;
-  return { x: MAP_BOX.x + 12 + rx * cw + 2, y: MAP_BOX.y + 12 + ry * ch + 2, w: cw - 4, h: ch - 4 };
-}
-
 /* ==================================================== debug tuning panel */
 
 function buildDebugPanel(g: Game) {
@@ -1702,12 +1144,10 @@ function buildDebugPanel(g: Game) {
   let html = '<div class="dbg-head">TUNING <span class="dbg-hint">` to hide</span></div>';
   html += '<div class="dbg-actions">'
     + '<button data-act="heal">Full heal</button>'
-    + '<button data-act="level">+1 level</button>'
-    + '<button data-act="level10">+10 levels</button>'
+    + '<button data-act="upgrade">+1 rank all upgrades</button>'
     + '<button data-act="kill">Clear enemies</button>'
     + '<button data-act="mats">+50 all materials</button>'
-    + '<button data-act="ap">+10 AP (levels)</button>'
-    + '<button data-act="areas">Unlock all areas</button>'
+    + '<button data-act="sp">+10 SP</button>'
     + '<button data-act="god">God mode: off</button>'
     + '<button data-act="reset">Reset save</button>'
     + '<button data-act="defaults">Reset tuning</button>'
@@ -1742,9 +1182,12 @@ function buildDebugPanel(g: Game) {
           g.player.mp = g.player.stats.maxMp;
           g.player.charging = false;
           break;
-        case 'level': g.grantExp(expToNext(g.player.level), g.player.x, g.player.y, 20); break;
-        case 'level10':
-          for (let i = 0; i < 10; i++) g.grantExp(expToNext(g.player.level), g.player.x, g.player.y, 20);
+        case 'upgrade':
+          for (const k of Object.keys(g.player.upgrades) as (keyof KnightUpgrades)[]) {
+            g.player.upgrades[k] = Math.min(WAR.upgradeRanks, g.player.upgrades[k] + 1);
+          }
+          g.player.refreshStats(false);
+          g.toast('UPGRADES +1'); g.save();
           break;
         case 'kill':
           for (const e of g.enemies) if (e.alive) e.applyDamage(g, 999999, 0, 0, 0, 0);
@@ -1753,15 +1196,12 @@ function buildDebugPanel(g: Game) {
           for (const m of MAT_ORDER) g.player.inv[m] = (g.player.inv[m] || 0) + 50;
           g.toast('MATERIALS ADDED'); g.save();
           break;
-        case 'ap':
-          for (let i = 0; i < 10; i++) g.grantExp(expToNext(g.player.level), g.player.x, g.player.y, 20);
-          break;
-        case 'areas':
-          for (const l of LOCATION_LIST) g.world.unlockedAreas.add(l.id);
-          g.toast('ALL AREAS OPEN'); g.save();
+        case 'sp':
+          g.player.skillPoints += 10;
+          g.toast('+10 SP'); g.save();
           break;
         case 'god': g.god = !g.god; btn.textContent = `God mode: ${g.god ? 'on' : 'off'}`; break;
-        case 'reset': g.resetSave(); if (g.screen !== 'title') g.enterWorld(); break;
+        case 'reset': g.resetSave(); if (g.screen !== 'title') g.enterBattle(); break;
         case 'defaults':
           for (const k of Object.keys(defaults)) (TUNING as any)[k] = defaults[k];
           panel.querySelectorAll<HTMLInputElement>('input[type=range]').forEach((el) => {

@@ -1,5 +1,5 @@
 /* =========================================================================
- * render.ts — arena, characters, VFX, HUD and the KH2-style command menu.
+ * render.ts — battlefields, characters, VFX, HUD and the KH2-style command menu.
  * Programmer art, but with real animation timing driven by the frame data.
  * ========================================================================= */
 
@@ -53,18 +53,12 @@ class Renderer {
     const sh = g.shakeAmount;
     if (sh > 0.1) c.translate(rnd(-sh, sh), rnd(-sh, sh));
 
-    // The open world scrolls under a camera; rooms are drawn as they are.
-    const outside = g.screen === 'world' || g.screen === 'title';
-    let cam = { x: 0, y: 0 };
-    if (outside) {
-      cam = g.screen === 'title' ? cameraFor(g.player.x, g.player.y) : { x: g.camX, y: g.camY };
-      c.translate(-Math.round(cam.x), -Math.round(cam.y));
-      this.drawWorld(c, g, cam);
-    } else {
-      this.drawRoom(c, g);
-    }
-    const onScreen = (x: number, y: number) => !outside
-      || (x > cam.x - 80 && x < cam.x + VIEW_W + 80 && y > cam.y - 80 && y < cam.y + VIEW_H + 160);
+    // The battlefield scrolls under the camera (the title screen shows it behind the menu).
+    const cam = { x: g.camX, y: g.camY };
+    c.translate(-Math.round(cam.x), -Math.round(cam.y));
+    this.drawField(c, g, cam);
+    const onScreen = (x: number, y: number) =>
+      x > cam.x - 80 && x < cam.x + VIEW_W + 80 && y > cam.y - 80 && y < cam.y + VIEW_H + 160;
 
     // Ground-level markers sit under everything.
     for (const e of g.enemies) if (e.alive && onScreen(e.x, e.y)) this.drawTelegraph(c, e);
@@ -98,409 +92,93 @@ class Renderer {
     this.drawHud(c, g);
   }
 
-  /* ------------------------------------------------------- open world */
+  /* ------------------------------------------------------- battlefield */
 
-  /** Tiles in view, then the buildings standing on them. */
-  private drawWorld(c: CanvasRenderingContext2D, g: Game, cam: { x: number; y: number }) {
-    const tx0 = Math.max(0, Math.floor(cam.x / TILE) - 1), tx1 = Math.min(WORLD_TW - 1, Math.ceil((cam.x + VIEW_W) / TILE) + 1);
-    const ty0 = Math.max(0, Math.floor(cam.y / TILE) - 1), ty1 = Math.min(WORLD_TH - 1, Math.ceil((cam.y + VIEW_H) / TILE) + 1);
-    c.fillStyle = '#0a0b10';
+  /**
+   * Open ground: a grass base, mown bands, worn dirt patches, tufts and
+   * pebbles, and a treeline hedge round the edge. Everything is placed from a
+   * hash of its cell, so it stays put while the camera moves. New art for
+   * Aerial Conquest; nothing here comes from Aerial Finisher's regions.
+   */
+  private drawField(c: CanvasRenderingContext2D, g: Game, cam: { x: number; y: number }) {
+    const f = g.field;
+    // beyond the field: dark forest
+    c.fillStyle = '#16241a';
     c.fillRect(cam.x - 10, cam.y - 10, VIEW_W + 20, VIEW_H + 20);
-    for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) this.drawTile(c, g, tx, ty);
-    for (const b of WORLD_MAP.buildings) {
-      const bx = b.tx * TILE, by = b.ty * TILE;
-      if (bx > cam.x + VIEW_W + 200 || bx + b.tw * TILE < cam.x - 200 || by > cam.y + VIEW_H + 200 || by + b.th * TILE < cam.y - 200) continue;
-      this.drawBuilding(c, g, b);
+    // grass, in broad mown bands
+    const band = 96;
+    const b0 = Math.max(0, Math.floor((cam.y - f.y) / band)), b1 = Math.ceil((cam.y + VIEW_H - f.y) / band);
+    for (let b = b0; b <= b1; b++) {
+      const y = f.y + b * band;
+      if (y >= f.y + f.h) break;
+      c.fillStyle = b % 2 ? '#3f6a3a' : '#43703d';
+      c.fillRect(Math.max(f.x, cam.x - 10), y, Math.min(f.w, VIEW_W + 20), Math.min(band, f.y + f.h - y));
     }
-    for (const ch of WORLD_MAP.chests) {
-      if (ch.x < cam.x - 40 || ch.x > cam.x + VIEW_W + 40 || ch.y < cam.y - 40 || ch.y > cam.y + VIEW_H + 40) continue;
-      this.drawChest(c, g, ch);
-    }
-  }
-
-  private drawChest(c: CanvasRenderingContext2D, g: Game, ch: Chest) {
-    const open = g.world.openedChests.has(ch.id);
-    const x = ch.x, y = ch.y;
-    c.save();
-    c.fillStyle = 'rgba(0,0,0,0.35)';
-    c.beginPath(); c.ellipse(x, y + 10, 16, 5, 0, 0, Math.PI * 2); c.fill();
-    c.fillStyle = '#6a4424'; c.fillRect(x - 14, y - 6, 28, 16);
-    c.fillStyle = '#d8a84a'; c.fillRect(x - 14, y - 1, 28, 3); c.fillRect(x - 2, y - 4, 4, 8);
-    if (open) {
-      c.fillStyle = '#4a2e18'; c.fillRect(x - 14, y - 16, 28, 8);
-    } else {
-      c.fillStyle = '#7a5030'; c.fillRect(x - 14, y - 12, 28, 7);
-      c.fillStyle = '#d8a84a'; c.fillRect(x - 14, y - 12, 28, 2);
-      c.globalAlpha = 0.35 + Math.sin(g.time * 3 + x) * 0.25;
-      c.fillStyle = '#fff3b0';
-      c.beginPath(); c.arc(x, y - 18 + Math.sin(g.time * 2 + y) * 2, 2.5, 0, Math.PI * 2); c.fill();
-    }
-    c.restore();
-  }
-
-  private drawTile(c: CanvasRenderingContext2D, g: Game, tx: number, ty: number) {
-    const i = ty * WORLD_TW + tx;
-    const t = WORLD_MAP.tiles[i];
-    const ri = WORLD_MAP.region[i];
-    const x = tx * TILE, y = ty * TILE;
-    const v = WORLD_MAP.variant[i];
-    if (ri < 0) {
-      // mountains between regions
-      c.fillStyle = v % 3 ? '#15171f' : '#181a23';
-      c.fillRect(x, y, TILE, TILE);
-      if (v % 5 === 0) { c.fillStyle = '#20232e'; c.beginPath(); c.moveTo(x + 6, y + 34); c.lineTo(x + 20, y + 10); c.lineTo(x + 34, y + 34); c.fill(); }
-      return;
-    }
-    const loc = locById(REGION_IDS[ri]);
-    const look = loc.look;
-    const theme = loc.theme;
-
-    // ground
-    c.fillStyle = look.floorAlt;
-    c.fillRect(x, y, TILE, TILE);
-    if ((tx + ty) % 2 === 0) { c.fillStyle = 'rgba(255,255,255,0.018)'; c.fillRect(x, y, TILE, TILE); }
-    if (t === T_GROUND && v % 6 === 0) {
-      c.fillStyle = look.grid;
-      c.fillRect(x + (v % 29), y + (v % 23) + 6, 3, 3);
-      c.fillRect(x + ((v * 7) % 31), y + ((v * 3) % 27) + 4, 2, 2);
-    }
-    if (t === T_PATH) {
-      c.fillStyle = this.alpha(look.motif, 0.13);
-      c.fillRect(x, y, TILE, TILE);
-    }
-
-    if (t === T_WALL) {
-      // the cliff ring around a region
-      c.fillStyle = '#0d0f16';
-      c.fillRect(x, y, TILE, TILE);
-      c.fillStyle = this.alpha(look.accent, 0.08);
-      c.fillRect(x, y, TILE, 5);
-      if (v % 4 === 0) { c.fillStyle = '#161923'; c.fillRect(x + 8, y + 12, 14, 10); }
-    } else if (t === T_LIQUID) {
-      this.drawLiquid(c, g, theme, x, y, v);
-    } else if (t === T_SOLID) {
-      this.drawObstacle(c, theme, look, x, y, v);
-    }
-
-    // a sealed passage
-    if (WORLD_MAP.passageOf[i] >= 0 && barrierUp(g.world, tx, ty)) {
-      const pulse = 0.35 + Math.sin(g.time * 3 + tx + ty) * 0.15;
-      c.fillStyle = `rgba(190,120,255,${pulse})`;
-      c.fillRect(x, y, TILE, TILE);
-      c.strokeStyle = 'rgba(240,210,255,0.7)';
+    // per-cell details
+    const cell = 64;
+    const cx0 = Math.max(0, Math.floor((cam.x - f.x) / cell) - 1), cx1 = Math.min(Math.ceil(f.w / cell), Math.ceil((cam.x + VIEW_W - f.x) / cell) + 1);
+    const cy0 = Math.max(0, Math.floor((cam.y - f.y) / cell) - 1), cy1 = Math.min(Math.ceil(f.h / cell), Math.ceil((cam.y + VIEW_H - f.y) / cell) + 1);
+    for (let cy = cy0; cy < cy1; cy++) for (let cx = cx0; cx < cx1; cx++) {
+      const h = this.cellHash(cx, cy);
+      const x = f.x + cx * cell, y = f.y + cy * cell;
+      if (h % 23 === 0) {
+        // a worn dirt patch
+        c.fillStyle = 'rgba(122,96,60,0.55)';
+        c.beginPath(); c.ellipse(x + 32, y + 32, 26 + (h % 9), 14 + (h % 5), (h % 7) * 0.4, 0, Math.PI * 2); c.fill();
+      }
+      // grass tufts
+      const tufts = h % 4;
+      c.strokeStyle = (h >> 3) % 2 ? '#5c8f4c' : '#335a30';
       c.lineWidth = 1.5;
-      c.beginPath();
-      for (let k = 6; k < TILE; k += 12) { c.moveTo(x + k, y); c.lineTo(x + k, y + TILE); }
-      c.stroke();
+      for (let k = 0; k < tufts; k++) {
+        const tx = x + ((h >> (k * 3)) % cell), ty = y + ((h >> (k * 3 + 5)) % cell);
+        c.beginPath();
+        c.moveTo(tx - 3, ty); c.lineTo(tx - 4, ty - 6);
+        c.moveTo(tx, ty); c.lineTo(tx, ty - 8);
+        c.moveTo(tx + 3, ty); c.lineTo(tx + 4, ty - 6);
+        c.stroke();
+      }
+      if (h % 11 === 0) {
+        // a pebble
+        c.fillStyle = '#8a8f86';
+        c.beginPath(); c.ellipse(x + (h % 50) + 7, y + ((h >> 4) % 50) + 7, 4, 2.6, 0, 0, Math.PI * 2); c.fill();
+      }
+      if (h % 37 === 0) {
+        // a few wildflowers
+        c.fillStyle = (h >> 2) % 2 ? '#f3e27a' : '#e9eef7';
+        for (let k = 0; k < 3; k++) c.fillRect(x + ((h >> k) % 48) + 8, y + ((h >> (k + 6)) % 48) + 8, 3, 3);
+      }
+    }
+    // the treeline round the edge
+    c.strokeStyle = '#1f3522';
+    c.lineWidth = 3;
+    c.strokeRect(f.x, f.y, f.w, f.h);
+    const tree = (tx: number, ty: number, s: number) => {
+      if (tx < cam.x - 60 || tx > cam.x + VIEW_W + 60 || ty < cam.y - 60 || ty > cam.y + VIEW_H + 60) return;
+      c.fillStyle = 'rgba(0,0,0,0.25)';
+      c.beginPath(); c.ellipse(tx + 4, ty + 10, s * 0.9, s * 0.4, 0, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#254a2a';
+      c.beginPath(); c.arc(tx, ty - s * 0.3, s, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#2f5d33';
+      c.beginPath(); c.arc(tx - s * 0.3, ty - s * 0.6, s * 0.6, 0, Math.PI * 2); c.fill();
+    };
+    for (let x = f.x; x <= f.x + f.w; x += 44) {
+      const h = this.cellHash(x, 7);
+      tree(x, f.y - 6, 20 + (h % 8));
+      tree(x + 22, f.y + f.h + 18, 20 + ((h >> 3) % 8));
+    }
+    for (let y = f.y; y <= f.y + f.h; y += 44) {
+      const h = this.cellHash(3, y);
+      tree(f.x - 14, y, 20 + (h % 8));
+      tree(f.x + f.w + 14, y + 22, 20 + ((h >> 3) % 8));
     }
   }
 
-  private drawLiquid(c: CanvasRenderingContext2D, g: Game, theme: Theme, x: number, y: number, v: number) {
-    const t = g.time;
-    if (theme === 'Volcano') {
-      c.fillStyle = '#7a220c'; c.fillRect(x, y, TILE, TILE);
-      c.fillStyle = `rgba(255,140,40,${0.35 + Math.sin(t * 2 + v) * 0.15})`;
-      c.fillRect(x + 4, y + 4, TILE - 8, TILE - 8);
-    } else if (theme === 'Sky' || theme === 'Rift') {
-      c.fillStyle = '#04050a'; c.fillRect(x, y, TILE, TILE);
-      if (v % 3 === 0) { c.fillStyle = theme === 'Rift' ? '#c070ff' : '#cfe0ff'; c.globalAlpha = 0.4 + Math.sin(t + v) * 0.3; c.fillRect(x + (v % 30), y + (v % 26), 2, 2); c.globalAlpha = 1; }
-    } else if (theme === 'Tundra') {
-      c.fillStyle = '#7c9ab4'; c.fillRect(x, y, TILE, TILE);
-      c.strokeStyle = 'rgba(230,245,255,0.5)'; c.lineWidth = 1;
-      c.beginPath(); c.moveTo(x + 4, y + 10 + (v % 12)); c.lineTo(x + 30, y + 16 + (v % 12)); c.stroke();
-    } else {
-      c.fillStyle = '#1b4260'; c.fillRect(x, y, TILE, TILE);
-      c.strokeStyle = 'rgba(160,220,255,0.35)'; c.lineWidth = 1.2;
-      const o = Math.sin(t * 1.5 + v) * 3;
-      c.beginPath(); c.moveTo(x + 6 + o, y + 14); c.lineTo(x + 18 + o, y + 14); c.moveTo(x + 18 - o, y + 28); c.lineTo(x + 32 - o, y + 28); c.stroke();
-    }
-  }
-
-  /** Trees, rocks, pillars: whatever a region is cluttered with. */
-  private drawObstacle(c: CanvasRenderingContext2D, theme: Theme, look: LocationLook, x: number, y: number, v: number) {
-    const cx = x + TILE / 2, cy = y + TILE / 2;
-    c.fillStyle = 'rgba(0,0,0,0.3)';
-    c.beginPath(); c.ellipse(cx, cy + 12, 16, 6, 0, 0, Math.PI * 2); c.fill();
-    switch (theme) {
-      case 'Forest': case 'Haven': {
-        c.fillStyle = '#3a2a1e'; c.fillRect(cx - 3, cy, 6, 12);
-        c.fillStyle = theme === 'Haven' ? '#24402e' : (v % 2 ? '#1c4a2a' : '#235a30');
-        c.beginPath(); c.arc(cx, cy - 4, 17, 0, Math.PI * 2); c.fill();
-        c.fillStyle = 'rgba(180,255,190,0.12)';
-        c.beginPath(); c.arc(cx - 5, cy - 9, 8, 0, Math.PI * 2); c.fill();
-        break;
-      }
-      case 'Ruins': {
-        c.fillStyle = '#4a4250'; c.fillRect(cx - 12, cy - 16, 24, 30);
-        c.fillStyle = '#5e5566'; c.fillRect(cx - 14, cy - 20, 28, 7);
-        c.fillStyle = this.alpha(look.accent, 0.25); c.fillRect(cx - 12, cy - 4, 24, 2);
-        break;
-      }
-      case 'Desert': {
-        if (v % 2) {
-          c.fillStyle = '#4a7a3a'; c.fillRect(cx - 4, cy - 16, 8, 28);
-          c.fillRect(cx - 12, cy - 6, 8, 4); c.fillRect(cx - 12, cy - 14, 4, 10);
-          c.fillRect(cx + 4, cy - 2, 8, 4); c.fillRect(cx + 8, cy - 10, 4, 10);
-        } else {
-          c.fillStyle = '#7a6040'; c.beginPath(); c.ellipse(cx, cy, 16, 12, 0, 0, Math.PI * 2); c.fill();
-          c.fillStyle = '#9a7a52'; c.beginPath(); c.ellipse(cx - 4, cy - 4, 8, 5, 0, 0, Math.PI * 2); c.fill();
-        }
-        break;
-      }
-      case 'Volcano': {
-        c.fillStyle = '#2a1a16'; c.beginPath(); c.moveTo(cx - 16, cy + 10); c.lineTo(cx - 6, cy - 16); c.lineTo(cx + 10, cy - 12); c.lineTo(cx + 16, cy + 10); c.fill();
-        c.strokeStyle = '#ff6a2a'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(cx - 4, cy - 8); c.lineTo(cx + 2, cy + 2); c.lineTo(cx - 2, cy + 8); c.stroke();
-        break;
-      }
-      case 'Tundra': {
-        c.fillStyle = '#c8dcec'; c.beginPath(); c.ellipse(cx, cy, 17, 13, 0, 0, Math.PI * 2); c.fill();
-        c.fillStyle = '#ffffff'; c.beginPath(); c.ellipse(cx - 4, cy - 5, 9, 5, 0, 0, Math.PI * 2); c.fill();
-        break;
-      }
-      case 'Sky': {
-        c.fillStyle = '#d8e0f4'; c.globalAlpha = 0.9;
-        c.beginPath(); c.arc(cx - 8, cy, 11, 0, Math.PI * 2); c.arc(cx + 7, cy - 2, 13, 0, Math.PI * 2); c.arc(cx, cy - 10, 10, 0, Math.PI * 2); c.fill();
-        c.globalAlpha = 1;
-        break;
-      }
-      case 'Rift': {
-        c.fillStyle = v % 2 ? '#6a2a9a' : '#9a3ac0';
-        c.beginPath(); c.moveTo(cx, cy - 20); c.lineTo(cx + 9, cy + 8); c.lineTo(cx, cy + 12); c.lineTo(cx - 9, cy + 8); c.closePath(); c.fill();
-        c.fillStyle = 'rgba(255,200,255,0.35)'; c.beginPath(); c.moveTo(cx, cy - 20); c.lineTo(cx + 3, cy); c.lineTo(cx, cy + 12); c.fill();
-        break;
-      }
-      default: {  // Coast: a sea-worn boulder
-        c.fillStyle = '#4a5a66'; c.beginPath(); c.ellipse(cx, cy, 16, 13, 0, 0, Math.PI * 2); c.fill();
-        c.fillStyle = '#62747f'; c.beginPath(); c.ellipse(cx - 4, cy - 5, 8, 5, 0, 0, Math.PI * 2); c.fill();
-      }
-    }
-  }
-
-  /** Dungeon entrances, forges, towns and landmarks. */
-  private drawBuilding(c: CanvasRenderingContext2D, g: Game, b: Building) {
-    const loc = locById(b.region);
-    const accent = loc.look.accent;
-    const x = b.tx * TILE, y = b.ty * TILE, w = b.tw * TILE, h = b.th * TILE;
-    c.save();
-    c.fillStyle = 'rgba(0,0,0,0.35)';
-    c.fillRect(x + 6, y + h - 4, w, 10);
-    if (b.kind === 'dungeon') {
-      const cleared = loc.bosses.every((x) => bossDefeated(g.world, x.id));
-      c.fillStyle = '#22242e'; c.fillRect(x, y + 16, w, h - 16);
-      c.fillStyle = '#2c2f3c';
-      for (let k = 0; k < b.tw; k++) c.fillRect(x + k * TILE + 4, y + 4, TILE - 8, 16);     // battlements
-      c.fillStyle = '#1a1c24';
-      for (let r = 0; r < 3; r++) c.fillRect(x, y + 36 + r * 30, w, 2);                    // courses of stone
-      // the doorway
-      const dx = x + w / 2;
-      c.fillStyle = '#05060a';
-      c.beginPath(); c.moveTo(dx - 22, y + h); c.lineTo(dx - 22, y + h - 40); c.arc(dx, y + h - 40, 22, Math.PI, 0); c.lineTo(dx + 22, y + h); c.fill();
-      c.strokeStyle = accent; c.lineWidth = 2;
-      c.globalAlpha = 0.6 + Math.sin(g.time * 2.5) * 0.25;
-      c.beginPath(); c.moveTo(dx - 22, y + h); c.lineTo(dx - 22, y + h - 40); c.arc(dx, y + h - 40, 22, Math.PI, 0); c.lineTo(dx + 22, y + h); c.stroke();
-      c.globalAlpha = 1;
-      this.worldLabel(c, `${b.name}${cleared ? '  ✓' : ''}`, dx, y - 8, accent);
-    } else if (b.kind === 'forge') {
-      c.fillStyle = '#3a2e28'; c.fillRect(x, y + 20, w, h - 20);
-      c.fillStyle = this.mix(accent, '#2a2030', 0.55);
-      c.beginPath(); c.moveTo(x - 8, y + 24); c.lineTo(x + w / 2, y - 12); c.lineTo(x + w + 8, y + 24); c.fill();   // roof
-      c.fillStyle = '#2a2020'; c.fillRect(x + w - 34, y - 14, 12, 26);                                               // chimney
-      for (let k = 0; k < 3; k++) {
-        c.globalAlpha = 0.25; c.fillStyle = '#cfcfcf';
-        const ph = (g.time * 0.6 + k / 3) % 1;
-        c.beginPath(); c.arc(x + w - 28 + Math.sin(ph * 6) * 4, y - 18 - ph * 40, 5 + ph * 6, 0, Math.PI * 2); c.fill();
-      }
-      c.globalAlpha = 1;
-      // the forge's glow through the door (door faces up, onto the road)
-      const fg = c.createRadialGradient(x + w / 2, y + 26, 2, x + w / 2, y + 26, 30);
-      fg.addColorStop(0, accent); fg.addColorStop(1, 'rgba(0,0,0,0)');
-      c.fillStyle = fg; c.globalAlpha = 0.6 + Math.sin(g.time * 7) * 0.15;
-      c.fillRect(x + w / 2 - 30, y, 60, 50);
-      c.globalAlpha = 1;
-      c.fillStyle = '#120c0a'; c.fillRect(x + w / 2 - 14, y + 22, 28, 30);
-      this.worldLabel(c, `⚒ ${b.name}`, x + w / 2, y - 22, accent);
-    } else if (b.kind === 'town') {
-      // a couple of cottages around a campfire
-      for (const [hx, hw] of [[x, w * 0.42], [x + w * 0.55, w * 0.45]] as [number, number][]) {
-        c.fillStyle = '#4a3a30'; c.fillRect(hx, y + 26, hw, h - 26);
-        c.fillStyle = this.mix(accent, '#3a2a2a', 0.65);
-        c.beginPath(); c.moveTo(hx - 6, y + 30); c.lineTo(hx + hw / 2, y + 2); c.lineTo(hx + hw + 6, y + 30); c.fill();
-        c.fillStyle = '#ffd98a'; c.globalAlpha = 0.7; c.fillRect(hx + hw / 2 - 6, y + 46, 12, 10); c.globalAlpha = 1;
-      }
-      const fx = b.doorX, fy = b.doorY - 8;
-      const fl = Math.sin(g.time * 11) * 2;
-      c.fillStyle = '#ff9d4a'; c.beginPath(); c.moveTo(fx - 7, fy + 6); c.quadraticCurveTo(fx, fy - 14 - fl, fx + 7, fy + 6); c.fill();
-      c.fillStyle = '#5a3a24'; c.fillRect(fx - 9, fy + 4, 18, 4);
-      this.worldLabel(c, `⌂ ${b.name}`, x + w / 2, y - 8, accent);
-    } else if (b.kind === 'landmark') {
-      this.drawLandmark(c, g, b, loc);
-    }
-    c.restore();
-  }
-
-  /** Each biome's set piece. Lakes are tiles; this adds the dressing and the name. */
-  private drawLandmark(c: CanvasRenderingContext2D, g: Game, b: Building, loc: WorldLocation) {
-    const x = b.tx * TILE, y = b.ty * TILE, w = b.tw * TILE, h = b.th * TILE;
-    const cx = x + w / 2, cy = y + h / 2;
-    const accent = loc.look.accent;
-    c.save();
-    switch (loc.theme) {
-      case 'Haven': {
-        c.fillStyle = '#3a4058'; c.beginPath(); c.ellipse(cx, cy, w / 2, h / 2, 0, 0, Math.PI * 2); c.fill();
-        c.fillStyle = '#2a5a80'; c.beginPath(); c.ellipse(cx, cy, w / 2 - 12, h / 2 - 10, 0, 0, Math.PI * 2); c.fill();
-        c.fillStyle = '#5a6488'; c.fillRect(cx - 8, cy - 40, 16, 40);
-        c.fillStyle = accent; c.globalAlpha = 0.7 + Math.sin(g.time * 2) * 0.2;
-        c.beginPath(); c.arc(cx, cy - 46, 8, 0, Math.PI * 2); c.fill();
-        break;
-      }
-      case 'Forest': {
-        c.fillStyle = '#3a2a1e'; c.fillRect(cx - 22, cy - 10, 44, h / 2 + 10);
-        c.fillStyle = '#16402a'; c.beginPath(); c.arc(cx, cy - 30, w * 0.62, 0, Math.PI * 2); c.fill();
-        c.fillStyle = '#1f5a34'; c.beginPath(); c.arc(cx - 30, cy - 50, w * 0.36, 0, Math.PI * 2); c.fill();
-        c.fillStyle = 'rgba(200,255,200,0.18)';
-        for (let k = 0; k < 8; k++) { c.beginPath(); c.arc(cx + Math.cos(g.time * 0.5 + k) * 70, cy - 40 + Math.sin(g.time * 0.7 + k * 2) * 40, 3, 0, Math.PI * 2); c.fill(); }
-        break;
-      }
-      case 'Coast': {
-        c.fillStyle = '#4a3222'; c.beginPath(); c.moveTo(x, cy); c.lineTo(x + w * 0.2, y + h); c.lineTo(x + w * 0.9, y + h); c.lineTo(x + w, cy - 10); c.closePath(); c.fill();
-        c.fillStyle = '#5e4230'; c.fillRect(x + w * 0.2, cy - 6, w * 0.7, 8);
-        c.strokeStyle = '#3a2a1e'; c.lineWidth = 6; c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + 20, y - 60); c.stroke();
-        c.fillStyle = 'rgba(220,220,200,0.5)'; c.beginPath(); c.moveTo(cx + 20, y - 56); c.lineTo(cx + 60, y - 30); c.lineTo(cx + 18, y - 10); c.fill();
-        break;
-      }
-      case 'Ruins': {
-        c.fillStyle = '#4a4450';
-        c.beginPath(); c.ellipse(cx, cy + 10, w / 2, h / 3, -0.2, 0, Math.PI * 2); c.fill();
-        c.fillStyle = '#5e5866'; c.beginPath(); c.arc(cx - w / 2 + 20, cy - 4, 30, 0, Math.PI * 2); c.fill();
-        c.fillStyle = accent; c.globalAlpha = 0.6; c.fillRect(cx - w / 2 + 10, cy - 10, 8, 4); c.fillRect(cx - w / 2 + 24, cy - 10, 8, 4);
-        break;
-      }
-      case 'Sky': {
-        for (let k = 0; k < 6; k++) {
-          const a = (k / 6) * Math.PI * 2 + g.time * 0.2;
-          const px = cx + Math.cos(a) * w * 0.45, py = cy + Math.sin(a) * h * 0.4 + Math.sin(g.time + k) * 4;
-          c.fillStyle = '#d8e0f4'; c.fillRect(px - 6, py - 40, 12, 40);
-        }
-        c.fillStyle = accent; c.globalAlpha = 0.5 + Math.sin(g.time * 3) * 0.3;
-        c.beginPath(); c.arc(cx, cy - 20, 12, 0, Math.PI * 2); c.fill();
-        break;
-      }
-      case 'Rift': {
-        c.fillStyle = '#1a0e2a'; c.beginPath(); c.moveTo(cx, y - 90); c.lineTo(cx + 34, y + h); c.lineTo(cx - 34, y + h); c.closePath(); c.fill();
-        c.strokeStyle = accent; c.lineWidth = 2; c.globalAlpha = 0.5 + Math.sin(g.time * 2) * 0.3;
-        c.beginPath(); c.moveTo(cx, y - 80); c.lineTo(cx + 6, y); c.lineTo(cx - 4, y + 40); c.lineTo(cx + 3, y + h - 10); c.stroke();
-        break;
-      }
-      default: break;   // lakes: the water / lava / ice is the landmark
-    }
-    c.restore();
-    this.worldLabel(c, `✶ ${b.name}`, b.tw ? cx : b.doorX, (b.tw ? y : b.doorY) - (loc.theme === 'Rift' ? 100 : 30), accent);
-  }
-
-  private worldLabel(c: CanvasRenderingContext2D, text: string, x: number, y: number, color: string) {
-    c.save();
-    c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
-    c.textAlign = 'center';
-    const w = c.measureText(text).width + 14;
-    c.fillStyle = 'rgba(6,8,14,0.75)';
-    this.roundRect(c, x - w / 2, y - 13, w, 18, 5); c.fill();
-    c.fillStyle = color;
-    c.fillText(text, x, y);
-    c.restore();
-  }
-
-  /* ----------------------------------------------------------- rooms */
-
-  /** A dungeon room: the fixed arena with its walls, door and props. */
-  private drawRoom(c: CanvasRenderingContext2D, g: Game) {
-    const a = g.arena;
-    const look = g.place.look;
-    c.fillStyle = '#07080d';
-    c.fillRect(0, 0, VIEW_W, VIEW_H);
-    // floor
-    c.fillStyle = this.mix(look.floorAlt, '#000000', 0.25);
-    c.fillRect(a.x, a.y, a.w, a.h);
-    c.strokeStyle = look.grid;
-    c.lineWidth = 1;
-    c.beginPath();
-    for (let x = a.x; x <= a.x + a.w + 0.5; x += 60) { c.moveTo(x, a.y); c.lineTo(x, a.y + a.h); }
-    for (let y = a.y; y <= a.y + a.h + 0.5; y += 60) { c.moveTo(a.x, y); c.lineTo(a.x + a.w, y); }
-    c.stroke();
-
-    // walls
-    const wall = '#171922';
-    c.fillStyle = wall;
-    c.fillRect(a.x - 24, a.y - 24, a.w + 48, 24);
-    c.fillRect(a.x - 24, a.y + a.h, a.w + 48, 24);
-    c.fillRect(a.x - 24, a.y, 24, a.h);
-    c.fillRect(a.x + a.w, a.y, 24, a.h);
-    c.strokeStyle = this.alpha(look.accent, 0.35);
-    c.lineWidth = 2;
-    c.strokeRect(a.x, a.y, a.w, a.h);
-
-    if (g.dungeon) {
-      // torches along the top wall
-      for (let k = 0; k < 6; k++) {
-        const tx = a.x + 70 + k * ((a.w - 140) / 5);
-        const fl = Math.sin(g.time * 12 + k * 2) * 2;
-        const tg = c.createRadialGradient(tx, a.y - 8, 1, tx, a.y - 8, 26);
-        tg.addColorStop(0, look.accent); tg.addColorStop(1, 'rgba(0,0,0,0)');
-        c.fillStyle = tg; c.globalAlpha = 0.5; c.fillRect(tx - 26, a.y - 34, 52, 52); c.globalAlpha = 1;
-        c.fillStyle = look.accent; c.beginPath(); c.arc(tx, a.y - 12 + fl * 0.3, 4, 0, Math.PI * 2); c.fill();
-      }
-      this.drawRoomDoor(c, g);
-      for (const pr of g.props) this.drawProp(c, g, pr);
-    }
-  }
-
-  /** The east door: barred while the room is live, open once it is clear. */
-  private drawRoomDoor(c: CanvasRenderingContext2D, g: Game) {
-    const run = g.dungeon!;
-    const a = g.arena;
-    const dy = a.y + a.h / 2 - ROOM_DOOR.h / 2;
-    const dx = a.x + a.w;
-    c.fillStyle = '#020306';
-    c.fillRect(dx, dy, 24, ROOM_DOOR.h);
-    if (!run.doorOpen) {
-      c.fillStyle = '#6a6e7e';
-      for (let k = 0; k < 5; k++) c.fillRect(dx + 2, dy + 6 + k * 19, 20, 5);
-    } else {
-      const exit = g.nextRoom() < 0;
-      c.fillStyle = this.alpha(g.place.look.accent, 0.35 + Math.sin(g.time * 4) * 0.15);
-      c.fillRect(dx, dy, 24, ROOM_DOOR.h);
-      c.save();
-      c.font = '800 11px ui-monospace, Menlo, Consolas, monospace';
-      c.textAlign = 'right';
-      c.fillStyle = g.place.look.accent;
-      c.fillText(exit ? 'EXIT →' : '→', dx - 8, dy + ROOM_DOOR.h / 2 + 4);
-      c.restore();
-    }
-  }
-
-  /** Waystones in the hall; altars in a beaten boss's room. */
-  private drawProp(c: CanvasRenderingContext2D, g: Game, pr: RoomProp) {
-    c.save();
-    const near = dist(g.player.x, g.player.y, pr.x, pr.y) < 60;
-    c.fillStyle = 'rgba(0,0,0,0.35)';
-    c.beginPath(); c.ellipse(pr.x, pr.y + 4, 22, 8, 0, 0, Math.PI * 2); c.fill();
-    if (pr.kind === 'waystone') {
-      c.fillStyle = '#3a3e4e';
-      c.beginPath(); c.moveTo(pr.x - 12, pr.y); c.lineTo(pr.x - 8, pr.y - 50); c.lineTo(pr.x, pr.y - 58); c.lineTo(pr.x + 8, pr.y - 50); c.lineTo(pr.x + 12, pr.y); c.fill();
-      c.fillStyle = pr.color; c.globalAlpha = 0.6 + Math.sin(g.time * 3 + pr.x) * 0.3;
-      c.beginPath(); c.arc(pr.x, pr.y - 32, 5, 0, Math.PI * 2); c.fill();
-    } else {
-      c.fillStyle = '#34303c'; c.fillRect(pr.x - 18, pr.y - 22, 36, 22);
-      c.fillStyle = '#48424f'; c.fillRect(pr.x - 22, pr.y - 28, 44, 8);
-      const fl = Math.sin(g.time * 10 + pr.x) * 2;
-      c.fillStyle = pr.color; c.globalAlpha = 0.85;
-      c.beginPath(); c.moveTo(pr.x - 8, pr.y - 28); c.quadraticCurveTo(pr.x, pr.y - 52 - fl, pr.x + 8, pr.y - 28); c.fill();
-    }
-    c.globalAlpha = 1;
-    c.font = '700 10px ui-monospace, Menlo, Consolas, monospace';
-    c.textAlign = 'center';
-    c.fillStyle = near ? '#ffffff' : pr.color;
-    c.fillText(pr.label, pr.x, pr.y + 20);
-    c.restore();
+  /** A stable pseudo-random number for a grid cell. */
+  private cellHash(x: number, y: number): number {
+    let h = (x * 374761393 + y * 668265263) | 0;
+    h = (h ^ (h >>> 13)) * 1274126177;
+    return (h ^ (h >>> 16)) >>> 0;
   }
 
   private drawShadow(c: CanvasRenderingContext2D, x: number, y: number, r: number, z: number) {
@@ -1226,7 +904,7 @@ class Renderer {
     if (e.boss && !dying) {
       // a slow-pulsing aura so a boss reads at a glance in a crowd
       const ag = c.createRadialGradient(0, -d.height * 0.5, 4, 0, -d.height * 0.5, d.radius * 2.2);
-      ag.addColorStop(0, e.superboss ? 'rgba(255,213,74,0.45)' : this.alpha(d.accent, 0.35));
+      ag.addColorStop(0, this.alpha(d.accent, 0.35));
       ag.addColorStop(1, 'rgba(0,0,0,0)');
       c.fillStyle = ag;
       c.globalAlpha = fade * (0.7 + Math.sin(g.time * 3) * 0.2);
@@ -1242,9 +920,9 @@ class Renderer {
     }
 
     if (e.boss && !dying) {
-      // the crown: three points, gold on an Ascendant
+      // the crown: three points
       const h = d.height + (d.ai === 'grunt' ? 20 : 8);
-      c.fillStyle = e.superboss ? '#ffd54a' : d.accent;
+      c.fillStyle = d.accent;
       c.beginPath();
       c.moveTo(-12, -h); c.lineTo(-12, -h - 10); c.lineTo(-6, -h - 5); c.lineTo(0, -h - 14);
       c.lineTo(6, -h - 5); c.lineTo(12, -h - 10); c.lineTo(12, -h);
@@ -1462,15 +1140,15 @@ class Renderer {
 
   /** The big bar along the bottom while a boss is up. */
   private drawBossBar(c: CanvasRenderingContext2D, g: Game) {
-    const e = g.battle?.bossEnemy;
-    if (!e || !e.alive) return;
+    const e = g.enemies.find((x) => x.alive && x.boss);
+    if (!e) return;
     const b = e.boss!;
     const w = 460, x = (VIEW_W - w) / 2, y = VIEW_H - 40;
     c.save();
     c.textAlign = 'center';
     c.font = '800 14px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = e.superboss ? '#ffd54a' : b.accent;
-    c.fillText((e.superboss ? ascendantName(b) : b.name).toUpperCase() + (e.enraged ? '  —  ENRAGED' : ''), VIEW_W / 2, y - 8);
+    c.fillStyle = b.accent;
+    c.fillText(b.name.toUpperCase() + (e.enraged ? '  —  ENRAGED' : ''), VIEW_W / 2, y - 8);
     this.bar(c, x, y, w, 12, e.hp / e.maxHp, e.enraged ? '#ff5f56' : b.accent, 'rgba(0,0,0,0.6)');
     c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
@@ -1592,14 +1270,15 @@ class Renderer {
     if (g.screen === 'title') { this.drawTitle(c, g); return; }
     const p = g.player;
 
-    // ---- top-left: level, HP, MP
+    // ---- top-left: HP, MP
     const x = 18, y = 18;
     c.save();
     c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
     c.textAlign = 'left';
 
     c.fillStyle = PAL.text;
-    c.fillText(`Lv ${p.level}`, x, y + 10);
+    c.fillText('HP', x, y + 10);
+    c.fillText('MP', x, y + 25);
 
     // HP
     const barW = 210;
@@ -1614,65 +1293,33 @@ class Renderer {
     this.bar(c, x + 52, y + 17, barW * 0.8, 9, mpRatio, p.charging ? PAL.mpCharge : PAL.mp, 'rgba(0,0,0,0.55)');
     c.fillStyle = p.charging ? PAL.mpCharge : PAL.text;
     c.fillText(p.charging ? 'MP CHARGE!' : `MP ${Math.floor(p.mp)}`, x + 58, y + 24.5);
-
-    // EXP
-    const need = expToNext(p.level);
-    const ratio = p.level >= MAX_LEVEL ? 1 : clamp(p.exp / need, 0, 1);
-    this.bar(c, x + 52, y + 31, barW * 0.8, 5, ratio, PAL.exp, 'rgba(0,0,0,0.5)');
-    c.fillStyle = PAL.dim;
-    c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
-    c.fillText(p.level >= MAX_LEVEL ? 'MAX' : `EXP ${p.exp}/${need}`, x + 52 + barW * 0.8 + 8, y + 35.5);
     c.restore();
 
     // ---- top-right: where you are and what is happening
     c.save();
     c.textAlign = 'right';
-    const scene = g.scene();
-    if (g.screen === 'dungeon' && g.dungeon) {
-      const run = g.dungeon;
-      const room = run.rooms[run.index];
-      c.font = '800 16px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = scene.look.accent;
-      c.fillText(`${scene.name.toUpperCase()} DUNGEON`, VIEW_W - 18, 30);
-      c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = PAL.dim;
-      const bossesLeft = scene.bosses.filter((b) => !bossDefeated(g.world, b.id)).length;
-      c.fillText(room.kind === 'hall' ? `entrance hall  ·  ${bossesLeft} boss${bossesLeft === 1 ? '' : 'es'} remain`
-        : `room ${run.index}/${run.rooms.length - 1}  ·  ${room.kind === 'boss' ? 'boss' : `toward ${scene.bosses[room.section].name}`}`, VIEW_W - 18, 48);
-    } else {
-      c.font = '800 18px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = scene.look.accent;
-      c.fillText(scene.name.toUpperCase(), VIEW_W - 18, 30);
-      c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = PAL.dim;
-      c.fillText(scene.tier ? `tier ${scene.tier}  ·  recommended Lv ${recommendedLevel(scene)}` : 'safe ground', VIEW_W - 18, 48);
-      this.drawMinimap(c, g, VIEW_W - 18 - REG_W, 58);
-    }
+    c.font = '800 18px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = '#8fb4ff';
+    c.fillText('TEST FIELD', VIEW_W - 18, 30);
+    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.dim;
+    c.fillText(`groups cleared ${g.groupsCleared}  ·  enemies ${g.enemies.filter((e) => e.alive).length}`, VIEW_W - 18, 48);
     c.restore();
 
     // equipped gear, small, under the bars
     c.save();
     c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText(`${p.weapon.name}  ·  ${p.armor.name}`, 18, 76);
+    c.fillText(`${p.weapon.name}  ·  ${p.armor.name}`, 18, 62);
     if (g.apFree() > 0) {
       c.fillStyle = PAL.mpCharge;
       c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
-      c.fillText(`${g.apFree()} AP unspent — ${IS_TOUCH ? 'MENU' : 'TAB'}`, 18, 92);
+      c.fillText(`${g.apFree()} SP unspent — ${IS_TOUCH ? 'MENU' : 'TAB'}`, 18, 78);
     }
     c.restore();
 
     if (!IS_TOUCH && g.inCombat()) this.drawCommandMenu(c, g);
-    if (g.inRoom() && p.alive) this.drawBackButton(c, g);
-    if (g.screen === 'dungeon') this.drawBossBar(c, g);
-    if (g.prompt && p.alive && !g.menuOpen) this.drawPrompt(c, g);
-    if (g.screen === 'world' && p.alive && !g.menuOpen) {
-      c.save();
-      c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = PAL.mpCharge;
-      c.fillText(this.clip(c, nextObjective(g.world), 300), 18, 110);
-      c.restore();
-    }
+    this.drawBossBar(c, g);
 
     // ---- combo counter
     if (g.comboCount > 1 && g.comboDisplay > 0) {
@@ -1725,96 +1372,6 @@ class Renderer {
     if (!p.alive) this.drawGameOver(c, g);
     if (g.paused) this.drawPause(c);
     if (g.menuOpen) this.drawBigMenu(c, g);
-  }
-
-  private miniCache: Record<string, HTMLCanvasElement> = {};
-
-  /** The region's terrain at one pixel per tile, drawn once and cached. */
-  private regionMini(id: string): HTMLCanvasElement {
-    if (this.miniCache[id]) return this.miniCache[id];
-    const cv = document.createElement('canvas');
-    cv.width = REG_W; cv.height = REG_H;
-    const cx = cv.getContext('2d')!;
-    const img = cx.createImageData(REG_W, REG_H);
-    const { rx, ry } = regionCell(id);
-    const look = locById(id).look;
-    const ground = this.hex(look.floorAlt), path = this.hex(look.motif), liquid = this.hex(look.accent);
-    const solid = [12, 14, 20];
-    for (let y = 0; y < REG_H; y++) for (let x = 0; x < REG_W; x++) {
-      const t = tileAt(rx * REG_W + x, ry * REG_H + y);
-      const col = t === T_PATH ? path.map((v, i) => (v + ground[i]) / 2) : t === T_GROUND ? ground
-        : t === T_LIQUID ? liquid.map((v) => v * 0.45) : t === T_BUILD ? [230, 230, 240] : solid;
-      const o = (y * REG_W + x) * 4;
-      img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
-    }
-    cx.putImageData(img, 0, 0);
-    this.miniCache[id] = cv;
-    return cv;
-  }
-
-  /** The minimap: this region's terrain, its towns, dungeon and chests, and you. */
-  private drawMinimap(c: CanvasRenderingContext2D, g: Game, x: number, y: number) {
-    const id = g.world.currentLocation;
-    const { rx, ry } = regionCell(id);
-    const ox = rx * REG_W * TILE, oy = ry * REG_H * TILE;
-    const sc = 1 / TILE;
-    c.save();
-    c.fillStyle = 'rgba(6,8,14,0.75)';
-    this.roundRect(c, x - 4, y - 4, REG_W + 8, REG_H + 8, 5); c.fill();
-    c.globalAlpha = 0.9;
-    c.drawImage(this.regionMini(id), x, y);
-    c.globalAlpha = 1;
-    for (const ch of WORLD_MAP.chests) {
-      if (ch.region !== id || g.world.openedChests.has(ch.id)) continue;
-      c.fillStyle = PAL.mpCharge;
-      c.fillRect(x + (ch.x - ox) * sc - 1, y + (ch.y - oy) * sc - 1, 2, 2);
-    }
-    for (const b of WORLD_MAP.buildings) {
-      if (b.region !== id || b.kind === 'landmark') continue;
-      c.fillStyle = b.kind === 'dungeon' ? '#ff6b6b' : '#ffffff';
-      c.fillRect(x + (b.doorX - ox) * sc - 2, y + (b.doorY - oy) * sc - 2, 4, 4);
-    }
-    c.fillStyle = '#7fe8ff';
-    c.beginPath(); c.arc(x + (g.player.x - ox) * sc, y + (g.player.y - oy) * sc, 2.5 + Math.sin(g.time * 6) * 0.6, 0, Math.PI * 2); c.fill();
-    c.restore();
-  }
-
-  /** "ENTER: go in" — the thing you are standing at. Tappable on a phone. */
-  private drawPrompt(c: CanvasRenderingContext2D, g: Game) {
-    const pr = g.prompt!;
-    const B = PROMPT_BTN;
-    c.save();
-    c.fillStyle = 'rgba(10,14,28,0.9)';
-    this.roundRect(c, B.x, B.y, B.w, B.h, 8); c.fill();
-    c.strokeStyle = pr.color; c.lineWidth = 1.5;
-    this.roundRect(c, B.x, B.y, B.w, B.h, 8); c.stroke();
-    c.textAlign = 'center';
-    c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = pr.color;
-    c.fillText(this.clip(c, `${IS_TOUCH ? '' : 'ENTER  '}${pr.label}`, B.w - 20), B.x + B.w / 2, B.y + (pr.sub ? 17 : 25));
-    if (pr.sub) {
-      c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = PAL.dim;
-      c.fillText(this.clip(c, pr.sub, B.w - 20), B.x + B.w / 2, B.y + 32);
-    }
-    c.restore();
-  }
-
-  /** B on the keyboard, or this button: leave a dungeon. */
-  private drawBackButton(c: CanvasRenderingContext2D, g: Game) {
-    if (g.battleOver > 0) return;
-    const B = BACK_BTN;
-    c.save();
-    c.fillStyle = 'rgba(20,24,44,0.8)';
-    this.roundRect(c, B.x, B.y, B.w, B.h, 6); c.fill();
-    c.strokeStyle = 'rgba(160,190,255,0.45)';
-    c.lineWidth = 1.2;
-    this.roundRect(c, B.x, B.y, B.w, B.h, 6); c.stroke();
-    c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
-    c.textAlign = 'center';
-    c.fillStyle = '#cfe0ff';
-    c.fillText(`${IS_TOUCH ? '' : 'B  '}LEAVE`, B.x + B.w / 2, B.y + 17);
-    c.restore();
   }
 
   /** Trim a string with an ellipsis so it fits `w` pixels in the current font. */
@@ -1878,11 +1435,10 @@ class Renderer {
       c.fillText('DEFEATED', VIEW_W / 2, VIEW_H / 2 - 20);
       c.font = '700 15px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = PAL.text;
-      const cp = g.world.checkpoint;
-      c.fillText(`Level ${g.player.level}  ·  you will wake at your checkpoint in ${locById(regionAtPx(cp.x, cp.y) || HUB_ID).name}`, VIEW_W / 2, VIEW_H / 2 + 14);
+      c.fillText(`${g.groupsCleared} group${g.groupsCleared === 1 ? '' : 's'} cleared on the test field`, VIEW_W / 2, VIEW_H / 2 + 14);
       c.fillStyle = PAL.dim;
-      c.fillText(IS_TOUCH ? 'Tap to continue — you keep everything.'
-                          : 'Press R to continue — you keep everything.', VIEW_W / 2, VIEW_H / 2 + 40);
+      c.fillText(IS_TOUCH ? 'Tap to try again — gear, talents and materials are kept.'
+                          : 'Press R to try again — gear, talents and materials are kept.', VIEW_W / 2, VIEW_H / 2 + 40);
     }
     c.restore();
   }
@@ -1970,7 +1526,7 @@ class Renderer {
     c.fillStyle = 'rgba(6,8,14,0.975)';
     c.fillRect(0, 0, VIEW_W, VIEW_H);
 
-    const tabs = ['GEAR', g.atStation() ? 'FORGE' : 'RECIPES', 'TALENTS', 'STATUS', 'MAP'];
+    const tabs = ['GEAR', 'FORGE', 'TALENTS', 'STATUS'];
     c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
     for (let i = 0; i < tabs.length; i++) {
       const on = i === g.menuTab;
@@ -1995,28 +1551,25 @@ class Renderer {
     c.fillText('\u2715', VIEW_W - 39, 37);
     c.textAlign = 'left';
 
-    // AP badge
+    // skill point badge, left of the close box
     const ap = g.apFree();
     c.textAlign = 'right';
     c.fillStyle = ap > 0 ? PAL.mpCharge : PAL.dim;
     c.font = '800 14px ui-monospace, Menlo, Consolas, monospace';
-    c.fillText(`AP ${ap}`, VIEW_W - 26, 38);
+    c.fillText(`SP ${ap}`, VIEW_W - 70, 38);
     c.textAlign = 'left';
 
     const top = MENU_LIST.y;
     if (g.menuTab === 0) this.drawGearTab(c, g, top);
     else if (g.menuTab === 1) this.drawSynthTab(c, g, top);
     else if (g.menuTab === 2) this.drawTalentTab(c, g, top);
-    else if (g.menuTab === 3) this.drawStatusTab(c, g, top);
-    else this.drawMapTab(c, g, top);
-    void g.forgeOpen;
+    else this.drawStatusTab(c, g, top);
 
     c.fillStyle = PAL.dim;
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillText(IS_TOUCH
       ? 'tap a tab  ·  tap a row to select, tap again to confirm  ·  \u2715 to close'
-      : g.menuTab === 4 ? '1-5 tabs  ·  arrows pick a waypoint  ·  ENTER warp  ·  TAB or ESC close'
-      : '1-5 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close',
+      : '1-4 tabs  ·  \u2190\u2192 switch  ·  \u2191\u2193 select  ·  ENTER confirm  ·  TAB or ESC close',
       26, VIEW_H - 18);
     void p;
     c.restore();
@@ -2104,13 +1657,8 @@ class Renderer {
     const p = g.player;
     const entries = g.synthEntries();
     const lw = MENU_LIST.w, rowH = SYNTH_ROW_H;
-    const station = g.atStation();
-    const accent = station ? g.place.look.accent : 'rgba(120,150,220,0.28)';
+    const accent = '#ffd54a';
     this.listBox(c, 26, top, lw, VIEW_H - top - 46);
-    if (station) {
-      c.strokeStyle = accent; c.lineWidth = 2;
-      this.roundRect(c, 26, top, lw, VIEW_H - top - 46, 8); c.stroke();
-    }
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
     const stateColor: Record<string, string> = { owned: '#69e29a', ready: '#ffd54a', lack: '#949dbd' };
     const stateLabel: Record<string, string> = { owned: 'FORGED', ready: 'READY', lack: 'MATS' };
@@ -2130,15 +1678,13 @@ class Renderer {
     const dw = VIEW_W - dx - 26;
     this.listBox(c, dx, top, dw, VIEW_H - top - 46);
     let y = top + 24;
-    // the station banner: where you are forging, or that you are not at one
     c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = station ? accent : '#ff9d9d';
-    c.fillText(station ? `\u2692 ${(g.place.stationName || 'Forge').toUpperCase()}  ·  ${g.place.name}`
-      : 'NO FORGE HERE — recipes are read-only', dx + 16, y);
+    c.fillStyle = accent;
+    c.fillText('\u2692 FORGE', dx + 16, y);
     y += 17;
     c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText(this.clip(c, station ? (STATION_FLAVOR[g.place.id] || '') : 'Stations: ' + LOCATION_LIST.filter((l) => l.hasCraftingStation).map((l) => l.name).join(', '), dw - 32), dx + 16, y);
+    c.fillText(this.clip(c, 'Forging works anywhere for now; castles and the gold fee come later.', dw - 32), dx + 16, y);
     y += 26;
     const sel = entries[g.synthIndex];
     if (!sel) return;
@@ -2163,18 +1709,17 @@ class Renderer {
       c.fillStyle = MATS[k].color;
       c.fillRect(dx + 16, y - 8, 8, 8);
       c.fillStyle = PAL.text;
-      c.fillText(MATS[k].name + (BOSS_MATS.includes(k) ? (k === 'star' ? '  (superboss)' : '  (boss)') : ''), dx + 32, y);
+      c.fillText(MATS[k].name + (BOSS_MATS.includes(k) ? '  (rare)' : ''), dx + 32, y);
       c.textAlign = 'right';
       c.fillStyle = has >= need ? '#69e29a' : '#ff6b6b';
       c.fillText(`${has} / ${need}`, dx + dw - 16, y);
       c.textAlign = 'left';
       y += 20;
     }
-    c.fillStyle = sel.state === 'ready' && station ? PAL.mpCharge : PAL.dim;
+    c.fillStyle = sel.state === 'ready' ? PAL.mpCharge : PAL.dim;
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
-    c.fillText(!station ? 'Forge at the Haven or any station on the map'
-      : sel.state === 'ready' ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to forge and equip`
-      : sel.state === 'owned' ? 'Already yours — equip it from GEAR' : 'Keep hunting materials', dx + 16, VIEW_H - 62);
+    c.fillText(sel.state === 'ready' ? `${IS_TOUCH ? 'Tap again' : 'ENTER'} to forge and equip`
+      : sel.state === 'owned' ? 'Already yours — equip it from GEAR' : 'Materials come from battle spoils', dx + 16, VIEW_H - 62);
   }
 
   private drawTalentTab(c: CanvasRenderingContext2D, g: Game, top: number) {
@@ -2226,7 +1771,7 @@ class Renderer {
     const owned = !!p.talents[t.id];
     c.fillStyle = owned ? '#69e29a' : g.apFree() >= t.cost ? PAL.mpCharge : '#ff6b6b';
     c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
-    c.fillText(owned ? 'LEARNED' : `${t.cost} AP  ·  ENTER to learn`, VIEW_W - 42, y + 27);
+    c.fillText(owned ? 'LEARNED' : `${t.cost} SP  ·  ENTER to learn`, VIEW_W - 42, y + 27);
     c.textAlign = 'left';
   }
 
@@ -2239,10 +1784,13 @@ class Renderer {
     let y = top + 26;
     c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.text;
-    c.fillText(`Level ${p.level}`, 42, y);
+    c.fillText('The Knight', 42, y);
     y += 24;
     const s = p.stats;
+    const u = p.upgrades;
     const rows: [string, string][] = [
+      ['Upgrades (V/M/A)', `${u.vitality} / ${u.might} / ${u.arcana}`],
+      ['Skill points', `${g.apFree()} free of ${p.skillPoints}`],
       ['Max HP', String(s.maxHp)],
       ['Max MP', String(s.maxMp)],
       ['Strength', s.str.toFixed(1)],
@@ -2285,118 +1833,9 @@ class Renderer {
     }
     c.fillStyle = PAL.dim;
     c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
-    c.fillText('* boss drops only', mx + 16, my + 4);
+    c.fillText('* rare: paid by castle lords', mx + 16, my + 4);
   }
 
-  private drawMapTab(c: CanvasRenderingContext2D, g: Game, top: number) {
-    const w = g.world;
-    const M = MAP_BOX;
-    this.listBox(c, M.x, M.y, M.w, M.h);
-    void top;
-
-    for (let i = 0; i < REGION_IDS.length; i++) {
-      const id = REGION_IDS[i];
-      const l = locById(id);
-      const r = mapRect(id);
-      const open = w.unlockedAreas.has(id);
-      const known = w.discoveredLocations.has(id);
-      const beaten = l.bosses.filter((b) => bossDefeated(w, b.id)).length;
-      c.save();
-      c.fillStyle = !open ? '#1c1f2c' : this.alpha(l.look.accent, known ? 0.28 : 0.1);
-      this.roundRect(c, r.x, r.y, r.w, r.h, 6); c.fill();
-      const selRegion = WORLD_MAP.buildings[g.mapIndex]?.region === id;
-      c.strokeStyle = selRegion ? '#ffffff' : open ? this.alpha(l.look.accent, 0.6) : 'rgba(90,100,140,0.3)';
-      c.lineWidth = selRegion ? 2.5 : 1.2;
-      if (!open) c.setLineDash([4, 5]);
-      this.roundRect(c, r.x, r.y, r.w, r.h, 6); c.stroke();
-      c.setLineDash([]);
-      c.textAlign = 'center';
-      c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = open ? PAL.text : '#5d6480';
-      c.fillText(this.clip(c, known || open ? l.name : '? ? ?', r.w - 10), r.x + r.w / 2, r.y + r.h / 2 - 6);
-      c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = PAL.dim;
-      const tags = [l.tier ? `T${l.tier}` : 'Haven'];
-      if (l.bosses.length && open) tags.push(`${beaten}/${l.bosses.length}`);
-      if (l.hasCraftingStation) tags.push('⚒');
-      if (!open) tags.push('sealed');
-      c.fillText(tags.join('  '), r.x + r.w / 2, r.y + r.h / 2 + 10);
-      c.restore();
-    }
-    // waypoints you have found; the cursor walks between them
-    w.waypoints.forEach((i) => {
-      const b = WORLD_MAP.buildings[i];
-      const p = mapPointPx(b.doorX, b.doorY);
-      const sel = i === g.mapIndex;
-      c.fillStyle = b.kind === 'dungeon' ? '#ff8b8b' : '#ffffff';
-      c.beginPath();
-      if (b.kind === 'dungeon') { c.moveTo(p.x, p.y - 6); c.lineTo(p.x + 6, p.y + 5); c.lineTo(p.x - 6, p.y + 5); c.closePath(); }
-      else c.rect(p.x - 4, p.y - 4, 8, 8);
-      c.fill();
-      if (sel) { c.strokeStyle = '#ffffff'; c.lineWidth = 2; c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.stroke(); }
-    });
-    // you are here
-    const gx = M.x + 12, gy = M.y + 12, gw = M.w - 24, gh = M.h - 24;
-    const px = gx + (g.player.x / WORLD_PW) * gw, py = gy + (g.player.y / WORLD_PH) * gh;
-    c.fillStyle = '#7fe8ff';
-    c.beginPath(); c.arc(px, py, 4 + Math.sin(g.time * 5), 0, Math.PI * 2); c.fill();
-
-    // detail panel
-    const dx = M.x + M.w + 14;
-    const dw = VIEW_W - dx - 26;
-    this.listBox(c, dx, M.y, dw, M.h);
-    const wp = WORLD_MAP.buildings[g.mapIndex];
-    const l = locById(wp ? wp.region : w.currentLocation);
-    const open = w.unlockedAreas.has(l.id);
-    const known = w.discoveredLocations.has(l.id);
-    let y = M.y + 26;
-    c.font = '800 16px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = open ? l.look.accent : '#5d6480';
-    c.fillText(this.clip(c, known || open ? l.name : 'Unknown region', dw - 32), dx + 16, y);
-    y += 18;
-    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = PAL.dim;
-    c.fillText(l.tier ? `${l.theme}  ·  tier ${l.tier}  ·  Lv ${l.enemyLevelRange[0]}-${l.enemyLevelRange[1]}` : 'Haven  ·  safe', dx + 16, y);
-    y += 22;
-    c.font = '500 11px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = PAL.text;
-    for (const line of this.wrap(c, open ? l.description : lockedAreaText(l.id), dw - 32).slice(0, 4)) {
-      c.fillText(line, dx + 16, y); y += 15;
-    }
-    y += 8;
-    const rows: [string, string][] = [];
-    if (l.tier) rows.push(['Recommended', `Lv ${recommendedLevel(l)}`]);
-    rows.push(['Forge', l.hasCraftingStation ? (l.stationName || 'yes') : '-']);
-    if (l.tier) rows.push(['Foes', l.enemyTypes.map((id) => ENEMIES[id].name).join(', ')]);
-    const chests = WORLD_MAP.chests.filter((x) => x.region === l.id);
-    rows.push(['Chests', `${chests.filter((x) => w.openedChests.has(x.id)).length}/${chests.length} opened`]);
-    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
-    for (const [k, v] of rows) {
-      c.fillStyle = PAL.dim; c.fillText(k, dx + 16, y);
-      c.fillStyle = PAL.text; c.textAlign = 'right';
-      c.fillText(this.clip(c, v, dw - 120), dx + dw - 16, y);
-      c.textAlign = 'left';
-      y += 17;
-    }
-    if (open && l.bosses.length) {
-      y += 6;
-      c.fillStyle = PAL.dim;
-      c.fillText('DUNGEON BOSSES, IN ORDER', dx + 16, y); y += 16;
-      for (const b of l.bosses) {
-        const done = bossDefeated(w, b.id);
-        const sup = superDefeated(w, b.id);
-        c.fillStyle = done ? '#69e29a' : PAL.text;
-        c.fillText(`${done ? '✓' : '·'} ${b.name}${sup ? ' ★' : ''}`, dx + 16, y);
-        y += 15;
-      }
-    }
-    c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = PAL.dim;
-    c.fillStyle = wp ? PAL.mpCharge : PAL.dim;
-    c.fillText(this.clip(c, wp ? `${IS_TOUCH ? 'Tap again' : 'ENTER'}: warp to ${wp.name}` : 'Find towns and dungeons to warp', dw - 32), dx + 16, M.y + M.h - 14);
-  }
-
-  /** Greedy word wrap to `w` pixels in the current font. */
   private wrap(c: CanvasRenderingContext2D, text: string, w: number): string[] {
     const out: string[] = [];
     let line = '';
@@ -2533,7 +1972,7 @@ class Renderer {
     c.textAlign = 'center';
     c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText('an open world  ·  12 dungeons  ·  30 bosses  ·  forges  ·  Lv 1-100', VIEW_W / 2, 198);
+    c.fillText('take back the Verdant Reach  ·  one territory at a time', VIEW_W / 2, 198);
 
     // a thin gold rule under the wordmark
     c.strokeStyle = 'rgba(255,213,74,0.45)';
@@ -2590,7 +2029,7 @@ class Renderer {
     if (g.titleMode === 'options') {
       c.fillText(IS_TOUCH ? 'tap either side of a bar to adjust' : '\u2190 \u2192 to adjust  ·  ESC to go back', VIEW_W / 2, VIEW_H - 46);
     } else if (g.hasSave()) {
-      c.fillText(`Level ${g.player.level}  ·  ${g.place.name}  ·  ${g.world.completedBosses.size}/${ALL_BOSSES.length} bosses  ·  ${g.player.weapon.name} / ${g.player.armor.name}`, VIEW_W / 2, VIEW_H - 62);
+      c.fillText(`${g.player.weapon.name} / ${g.player.armor.name}  ·  ${Object.keys(g.player.talents).length} talents`, VIEW_W / 2, VIEW_H - 62);
       c.fillStyle = '#ff9d9d';
       c.fillText('New Game wipes that progress.', VIEW_W / 2, VIEW_H - 44);
     } else {
@@ -2645,28 +2084,24 @@ class Renderer {
         ['DSH', 'dash with i-frames (learn it in the talent tree first)'],
         ['MAG', 'cast the highlighted spell; tap a chip to change it'],
         ['Lock-on', 'automatic on touch — it picks the nearest enemy'],
-        ['Menu', 'the icon on the right: gear, forge, talents, map'],
-        ['Use / Leave', 'tap the prompt at a door  ·  LEAVE button inside'],
+        ['Menu', 'the icon on the right: gear, forge, talents, status'],
       ]
       : [
         ['Move', 'W A S D'],
         ['Attack / Jump', 'J  ·  K or Space'],
         ['Dash / Lock-on', 'Shift  ·  L'],
         ['Magic', '1 Fire  2 Blizzard  3 Thunder  4 Cure'],
-        ['Menu', 'Tab for gear, forge, talents, status and the world map'],
-        ['Use / Leave', 'ENTER at a door or forge  ·  B leaves a dungeon'],
+        ['Menu', 'Tab for gear, forge, talents and status'],
         ['Potion / Pause', 'Q  ·  P'],
         ['Tuning panel', '` opens every combat constant as a live slider'],
       ];
 
     const rules: string[] = [
-      'Explore the open world. Enemies roam each region and chase you when you get',
-      'close; glowing ELITES hit harder and drop far better loot. Chests hide supplies.',
-      'Each region has a dungeon: rooms lock until cleared, bosses wait in order, and',
-      'the last one breaks the barrier sealing the next region.',
-      'Towns heal you and are checkpoints and waypoints: warp between any you have',
-      'found from the MAP tab. Forge gear in towns with a forge.',
-      'Dying loses nothing. Stand at a door and press ENTER to go in; B leaves.',
+      'The Umbral Dominion holds the Verdant Reach. You are the last knight of the',
+      'Aerial Order. (Early build: the campaign map, armies and generals come later.)',
+      'For now, New Game opens a test battlefield: groups of Shades keep coming, so',
+      'you can try the full moveset. Talents cost skill points (SP); the Status tab',
+      'shows your knight. Dying restarts the field and keeps your gear and talents.',
     ];
 
     c.textAlign = 'left';

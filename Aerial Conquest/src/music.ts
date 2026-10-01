@@ -204,19 +204,6 @@ const TRACKS: Record<string, TrackDef> = {
   },
 };
 
-/** Which theme plays where: [track, transpose in semitones, tempo multiplier]. */
-const ZONE_MUSIC: Record<string, [string, number, number]> = {
-  'hub': ['haven', 0, 1],
-  'forest-1': ['forest', 0, 1], 'forest-2': ['forest', -2, 0.94],
-  'coast-1': ['coast', 0, 1],
-  'ruins-1': ['ruins', 0, 1], 'ruins-2': ['ruins', 2, 1.04],
-  'desert-1': ['desert', 0, 1],
-  'volcano-1': ['volcano', 0, 1], 'volcano-2': ['volcano', 1, 1.06],
-  'tundra-1': ['tundra', 0, 1],
-  'sky-1': ['sky', 0, 1], 'sky-2': ['sky', 2, 1.05],
-  'rift-1': ['rift', 0, 1],
-};
-
 /* ----------------------------------------------------------- compiling */
 
 interface CNote { at: number; len: number; semi: number | null; }      // in eighths

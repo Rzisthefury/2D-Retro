@@ -289,6 +289,25 @@ const ENEMIES: Record<string, EnemyDef> = {
   },
 };
 
+/* ----------------------------------------------------------------- bosses */
+
+// AF's boss AI, kept for castle lords, keep captains, generals and the warlord.
+type BossPattern = 'brute' | 'sorcerer' | 'stalker' | 'skylord';
+type BossMove = 'slam' | 'fan' | 'rush' | 'dive';
+
+interface BossDefinition {
+  id: string;
+  name: string;
+  title: string;                 // one line of flavour under the name
+  tier: number;                  // battle tier
+  stats: { hp: number; attack: number; defense: number };  // tier-1 base values
+  uniqueMaterials: MatId[];      // spoils only this boss pays
+  pattern: BossPattern;
+  moves: BossMove[];             // signature attacks layered on the base AI
+  color: string;
+  accent: string;
+}
+
 /* ----------------------------------------------------------- progression */
 
 interface Stats {
@@ -300,28 +319,45 @@ interface Stats {
   mres: number;
 }
 
-function statsForLevel(level: number): Stats {
-  const l = level - 1;
+/** Gold upgrades for the knight (PLAN 12.1). Each rank is worth `WAR.levelsPerRank` of AF's old level curve. */
+interface KnightUpgrades { vitality: number; might: number; arcana: number; }
+
+function freshUpgrades(): KnightUpgrades { return { vitality: 0, might: 0, arcana: 0 }; }
+
+/** The knight's base stats: AF's level-1 values plus whatever the upgrades buy. */
+function statsForKnight(u: KnightUpgrades): Stats {
+  const v = u.vitality * WAR.levelsPerRank, m = u.might * WAR.levelsPerRank, a = u.arcana * WAR.levelsPerRank;
   return {
-    maxHp: Math.round(100 + l * 13),
-    maxMp: Math.round(40 + l * 4),
-    str: 6 + l * 1.25,
-    def: 4 + l * 0.95,
-    mag: 6 + l * 1.15,
-    mres: 4 + l * 0.85,
+    maxHp: Math.round(100 + v * 13),
+    maxMp: Math.round(40 + a * 4),
+    str: 6 + m * 1.25,
+    def: 4 + m * 0.95,
+    mag: 6 + a * 1.15,
+    mres: 4 + a * 0.85,
   };
 }
 
-function expToNext(level: number): number {
-  return Math.floor(14 * Math.pow(level, 1.72) + 10 * level);
-}
+/* ------------------------------------------------------------- the war */
 
-const MAX_LEVEL = 100;
+// Every new tunable number for the conquest layer lives here (PLAN rule 0.8).
+const WAR = {
+  // knight progression
+  startSkillPoints: 5,       // PLAN 12.2: 5 + castles 2 each + keeps 1 each + capital 3 = 42
+  levelsPerRank: 4,          // knight upgrade rank -> AF level-curve equivalent (rank 10 ~ level 41)
+  upgradeRanks: 10,
+
+  // the Phase 0 test battlefield
+  testField: { w: 1920, h: 1200 },
+  testFieldTier: 1,
+  testFieldLevel: 4,
+  testRespawnDelay: 2.5,     // seconds between a cleared group and the next
+};
 
 /* ------------------------------------------------------ tier scaling */
 
-// Every location has a tier (1-10). Its enemies' stats are multiplied by
-// these, then nudged by their individual level. Superbosses multiply on top.
+// Every battle has a tier. Its enemies' stats are multiplied by these, then
+// nudged by their individual level. (PLAN v2 swaps this for a 1-5 battle-tier
+// curve in Phase 11.)
 const TIER_SCALING = {
   hpMultiplier: (tier: number) => 1 + (tier - 1) * 0.8,
   attackMultiplier: (tier: number) => 1 + (tier - 1) * 0.9,
@@ -358,11 +394,8 @@ const TOUCH_CHIPS = { x: 920, y: 186, dy: 38, r: 16 };
 // Menu geometry lives here because the renderer draws from it and the input
 // layer hit-tests against it — one source of truth or taps land in the wrong row.
 const MENU_TAB = { x: 26, y: 18, w: 116, h: 28, gap: 8 };
-const MENU_TABS = 5;  // gear · synth · talents · status · map
+const MENU_TABS = 4;  // gear · forge · talents · status
 const SYNTH_ROW_H = 20;  // the recipe list is long now, so its rows are tighter
-const MAP_BOX = { x: 26, y: 62, w: 590, h: 432 };      // world map area in the MAP tab
-const BACK_BTN = { x: 405, y: 70, w: 150, h: 26 };      // leave a dungeon
-const PROMPT_BTN = { x: 330, y: 470, w: 300, h: 40 };    // "ENTER: go in" for touch
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
@@ -406,6 +439,5 @@ const PAL = {
   hpLow: '#ff5f56',
   mp: '#4fb8ff',
   mpCharge: '#ffd54a',
-  exp: '#c39bff',
   danger: '#ff5f56',
 };
