@@ -78,7 +78,24 @@ class Renderer {
     }
     if (showPlayer) this.drawShadow(c, g.player.x, g.player.y, g.player.radius, g.player.z);
 
-    for (const d of drawables) d.fn();
+    // Minions: on-screen slots sorted by y, then merged into the y-sorted
+    // drawables, so a crowd and the knight overlap correctly without a closure each.
+    const a = g.army;
+    let n = 0;
+    for (let i = 0; i < a.cap; i++) {
+      if (!a.used[i] || !onScreen(a.x[i], a.y[i])) continue;
+      this.minionOrder[n++] = i;
+    }
+    const order = this.minionOrder.subarray(0, n);
+    order.sort((p, q) => a.y[p] - a.y[q]);
+    this.drawMinionShadows(c, a, order);
+    let m = 0;
+    for (const d of drawables) {
+      while (m < n && a.y[order[m]] <= d.y) this.drawMinion(c, a, order[m++], g);
+      d.fn();
+    }
+    while (m < n) this.drawMinion(c, a, order[m++], g);
+    this.drawArrows(c, a);
 
     this.drawPickups(c, g);
     this.drawWhirlRing(c, g);
@@ -92,6 +109,144 @@ class Renderer {
     this.drawHud(c, g);
   }
 
+  /* --------------------------------------------------------- minions */
+
+  private minionOrder = new Int32Array(WAR.unitCapacity);
+
+  /** One batched path for every minion's ground shadow. */
+  private drawMinionShadows(c: CanvasRenderingContext2D, a: Army, order: Int32Array) {
+    c.fillStyle = 'rgba(0,0,0,0.28)';
+    c.beginPath();
+    for (let k = 0; k < order.length; k++) {
+      const i = order[k];
+      if (!a.alive[i]) continue;
+      const r = a.def(i).radius;
+      c.moveTo(a.x[i] + r, a.y[i] + 1);
+      c.ellipse(a.x[i], a.y[i] + 1, r, r * 0.42, 0, 0, Math.PI * 2);
+    }
+    c.fill();
+  }
+
+  /**
+   * A minion: simple team-coloured figure (PLAN 17 default), by type. Blue
+   * tunics for the player's side, crimson for the Dominion. ~16 px tall.
+   * Drawn directly each frame: cached sprites and a pre-rendered ground were
+   * tried and measured slower in headless Chromium's software canvas (see
+   * README, Phase 2), so they are not used.
+   */
+  private drawMinion(c: CanvasRenderingContext2D, a: Army, i: number, g: Game) {
+    const d = a.def(i);
+    const x = a.x[i], y = a.y[i];
+    const ally = a.team[i] === TEAM_PLAYER;
+    const dead = !a.alive[i];
+    if (dead) {
+      const k = 1 - a.deadT[i] / WAR.unitCorpseTime;
+      if (k <= 0) return;
+      c.globalAlpha = k * 0.8;
+    }
+    const flash = a.flash[i] > 0;
+    const fx = Math.cos(a.facing[i]) >= 0 ? 1 : -1;
+    const moving = Math.abs(a.vx[i]) + Math.abs(a.vy[i]) > 12 && !dead;
+    const step = moving ? Math.sin(a.walk[i]) * 3 : 0;
+    const wind = a.wind[i] > 0 ? 1 - a.wind[i] / d.windup : 0;   // 0..1 through the windup
+    c.translate(x, y);
+    this.paintMinionFigure(c, d, ally, flash, fx, step, wind, a.facing[i]);
+    c.translate(-x, -y);
+    if (dead) { c.globalAlpha = 1; return; }
+    // health, once hurt
+    if (a.hp[i] < a.maxHp[i]) {
+      const w = d.id === 'ram' ? 34 : 16, top = y - (d.id === 'ram' ? 30 : 27);
+      c.fillStyle = 'rgba(0,0,0,0.55)'; c.fillRect(x - w / 2, top, w, 3);
+      c.fillStyle = ally ? PAL.ally : '#ff6b6b'; c.fillRect(x - w / 2, top, w * (a.hp[i] / a.maxHp[i]), 3);
+    }
+    void g;
+  }
+
+  /** One minion figure with its feet at the origin. */
+  private paintMinionFigure(c: CanvasRenderingContext2D, d: UnitDef, ally: boolean, flash: boolean, fx: number, step: number, wind: number, facing: number) {
+    const tunic = flash ? '#ffffff' : ally ? '#3f7fd0' : PAL.dominion;
+    const trim = flash ? '#ffffff' : ally ? '#a8d4ff' : '#3a1f28';
+    const steel = flash ? '#ffffff' : '#b9c0cc';
+    if (d.id === 'ram') {
+      // a capped log on a frame, four crew
+      c.save(); c.rotate(facing);
+      c.fillStyle = flash ? '#ffffff' : '#6b4a2b';
+      c.fillRect(-22, -10, 44, 9);
+      c.fillStyle = steel; c.fillRect(20, -11, 6, 11);
+      c.restore();
+      for (let k = 0; k < 4; k++) {
+        const ox = (k % 2 ? 8 : -8) * fx + (k < 2 ? -6 : 6), oy = (k < 2 ? -9 : 7);
+        c.fillStyle = tunic; c.fillRect(ox - 3, oy - 10 + (k % 2 ? step : -step) * 0.4, 6, 8);
+        c.fillStyle = '#e2c3a0'; c.beginPath(); c.arc(ox, oy - 13, 2.6, 0, Math.PI * 2); c.fill();
+      }
+    } else if (d.id === 'hound') {
+      // a low, thorny beast
+      c.fillStyle = flash ? '#ffffff' : '#5a2f2a';
+      c.beginPath(); c.ellipse(0, -7, 11, 5, 0, 0, Math.PI * 2); c.fill();
+      c.beginPath(); c.ellipse(fx * 10, -10, 5, 4, 0, 0, Math.PI * 2); c.fill();
+      c.strokeStyle = flash ? '#ffffff' : '#9fd36b'; c.lineWidth = 1.5;
+      c.beginPath();
+      for (let k = -1; k <= 1; k++) { c.moveTo(k * 5, -11); c.lineTo(k * 5 - fx * 2, -16); }
+      c.stroke();
+      c.strokeStyle = '#2a1714'; c.lineWidth = 2;
+      c.beginPath();
+      c.moveTo(-6, -4); c.lineTo(-6 + step, 0);
+      c.moveTo(6, -4); c.lineTo(6 - step, 0);
+      c.stroke();
+      c.fillStyle = '#ffd54a'; c.fillRect(fx * 12 - 1, -11, 2, 2);
+    } else {
+      // legs
+      c.strokeStyle = '#2a2a33'; c.lineWidth = 2;
+      c.beginPath();
+      c.moveTo(-2.5, -5); c.lineTo(-2.5 + step, 0);
+      c.moveTo(2.5, -5); c.lineTo(2.5 - step, 0);
+      c.stroke();
+      // tunic and head
+      c.fillStyle = tunic;
+      c.fillRect(-5, -15, 10, 11);
+      c.fillStyle = trim;
+      c.fillRect(-5, -9, 10, 2);
+      c.fillStyle = flash ? '#ffffff' : '#e2c3a0';
+      c.beginPath(); c.arc(0, -18, 3.6, 0, Math.PI * 2); c.fill();
+      c.fillStyle = ally ? trim : steel;
+      c.beginPath(); c.arc(0, -19, 3.8, Math.PI, 0); c.fill();
+      // the weapon, raised through the windup
+      const hx = fx * 5, hy = -11;
+      c.strokeStyle = steel; c.lineWidth = 2;
+      c.beginPath();
+      if (d.id === 'sword') {
+        const ang = -0.9 - wind * 1.4;
+        c.moveTo(hx, hy); c.lineTo(hx + fx * Math.cos(ang) * 11, hy + Math.sin(ang) * 11);
+      } else if (d.id === 'spear') {
+        const lift = wind * 4;
+        c.moveTo(hx - fx * 8, hy + 2 - lift); c.lineTo(hx + fx * 16, hy - 4 - lift);
+      } else if (d.id === 'archer') {
+        c.strokeStyle = flash ? '#ffffff' : '#8a5a2b';
+        c.arc(hx, hy - 2, 7, fx > 0 ? -1.2 : Math.PI - 1.2, fx > 0 ? 1.2 : Math.PI + 1.2);
+      }
+      c.stroke();
+      if (d.id === 'shield') {
+        c.fillStyle = flash ? '#ffffff' : ally ? '#2c5c9c' : '#5a1f26';
+        c.fillRect(fx * 5 - (fx > 0 ? 0 : 5), -16, 5, 13);
+        c.fillStyle = steel; c.fillRect(fx * 5 - (fx > 0 ? 0 : 5) + 1.5, -11, 2, 2);
+      }
+    }
+  }
+
+  /** Arrows in flight: short shafts along their velocity. */
+  private drawArrows(c: CanvasRenderingContext2D, a: Army) {
+    if (!a.arrows) return;
+    c.strokeStyle = '#e8dcc0'; c.lineWidth = 1.5;
+    c.beginPath();
+    for (let k = 0; k < a.arrows; k++) {
+      const sp = Math.hypot(a.avx[k], a.avy[k]) || 1;
+      const ux = a.avx[k] / sp, uy = a.avy[k] / sp;
+      const x = a.ax[k], y = a.ay[k] - 12;
+      c.moveTo(x - ux * 8, y - uy * 8); c.lineTo(x, y);
+    }
+    c.stroke();
+  }
+
   /* ------------------------------------------------------- battlefield */
 
   /**
@@ -101,23 +256,27 @@ class Renderer {
    * Aerial Conquest; nothing here comes from Aerial Finisher's regions.
    */
   private drawField(c: CanvasRenderingContext2D, g: Game, cam: { x: number; y: number }) {
-    const f = g.field;
+    this.paintField(c, g.field, cam, VIEW_W, VIEW_H);
+  }
+
+  /** Paint the field (and the treeline around it) for the view rectangle at `cam`, `vw` x `vh`. */
+  private paintField(c: CanvasRenderingContext2D, f: { x: number; y: number; w: number; h: number }, cam: { x: number; y: number }, vw: number, vh: number) {
     // beyond the field: dark forest
     c.fillStyle = '#16241a';
-    c.fillRect(cam.x - 10, cam.y - 10, VIEW_W + 20, VIEW_H + 20);
+    c.fillRect(cam.x - 10, cam.y - 10, vw + 20, vh + 20);
     // grass, in broad mown bands
     const band = 96;
-    const b0 = Math.max(0, Math.floor((cam.y - f.y) / band)), b1 = Math.ceil((cam.y + VIEW_H - f.y) / band);
+    const b0 = Math.max(0, Math.floor((cam.y - f.y) / band)), b1 = Math.ceil((cam.y + vh - f.y) / band);
     for (let b = b0; b <= b1; b++) {
       const y = f.y + b * band;
       if (y >= f.y + f.h) break;
       c.fillStyle = b % 2 ? '#3f6a3a' : '#43703d';
-      c.fillRect(Math.max(f.x, cam.x - 10), y, Math.min(f.w, VIEW_W + 20), Math.min(band, f.y + f.h - y));
+      c.fillRect(Math.max(f.x, cam.x - 10), y, Math.min(f.w, vw + 20), Math.min(band, f.y + f.h - y));
     }
     // per-cell details
     const cell = 64;
-    const cx0 = Math.max(0, Math.floor((cam.x - f.x) / cell) - 1), cx1 = Math.min(Math.ceil(f.w / cell), Math.ceil((cam.x + VIEW_W - f.x) / cell) + 1);
-    const cy0 = Math.max(0, Math.floor((cam.y - f.y) / cell) - 1), cy1 = Math.min(Math.ceil(f.h / cell), Math.ceil((cam.y + VIEW_H - f.y) / cell) + 1);
+    const cx0 = Math.max(0, Math.floor((cam.x - f.x) / cell) - 1), cx1 = Math.min(Math.ceil(f.w / cell), Math.ceil((cam.x + vw - f.x) / cell) + 1);
+    const cy0 = Math.max(0, Math.floor((cam.y - f.y) / cell) - 1), cy1 = Math.min(Math.ceil(f.h / cell), Math.ceil((cam.y + vh - f.y) / cell) + 1);
     for (let cy = cy0; cy < cy1; cy++) for (let cx = cx0; cx < cx1; cx++) {
       const h = this.cellHash(cx, cy);
       const x = f.x + cx * cell, y = f.y + cy * cell;
@@ -154,7 +313,7 @@ class Renderer {
     c.lineWidth = 3;
     c.strokeRect(f.x, f.y, f.w, f.h);
     const tree = (tx: number, ty: number, s: number) => {
-      if (tx < cam.x - 60 || tx > cam.x + VIEW_W + 60 || ty < cam.y - 60 || ty > cam.y + VIEW_H + 60) return;
+      if (tx < cam.x - 60 || tx > cam.x + vw + 60 || ty < cam.y - 60 || ty > cam.y + vh + 60) return;
       c.fillStyle = 'rgba(0,0,0,0.25)';
       c.beginPath(); c.ellipse(tx + 4, ty + 10, s * 0.9, s * 0.4, 0, 0, Math.PI * 2); c.fill();
       c.fillStyle = '#254a2a';
@@ -1313,7 +1472,7 @@ class Renderer {
     c.fillText('TEST FIELD', VIEW_W - 18, 30);
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    const allies = g.enemies.filter((e) => e.alive && e.team === 'player').length;
+    const allies = g.alliesAlive();
     c.fillText(`groups cleared ${g.groupsCleared}  ·  foes ${g.foesAlive()}  ·  allies ${allies}`, VIEW_W - 18, 48);
     c.restore();
 

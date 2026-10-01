@@ -18,14 +18,109 @@ No dependencies, no bundler, nothing to install.
 
 | file | what lives there |
 |---|---|
-| `src/config.ts` | `TUNING`, attack frame data, spells, `ENEMIES`, boss types, `statsForKnight`, **`WAR`** (all new conquest tunables), menu/touch geometry, palette |
+| `src/config.ts` | `TUNING`, attack frame data, spells, `ENEMIES`, `UNITS` roster, boss types, `statsForKnight`, **`WAR`** (all new conquest tunables), menu/touch geometry, palette |
 | `src/core.ts` | math, buffered input (keyboard, gamepad, touch), WebAudio SFX |
 | `src/items.ts` | materials, weapon/armour tiers, recipes |
 | `src/talents.ts` | Blade / Arcana / Survival talents, bought with skill points |
+| `src/army.ts` | the minion sim: typed-array slots, uniform grid, minion AI, arrows, `MinionRef` |
 | `src/music.ts` | AF's adaptive score |
 | `src/entities.ts` | `Player`, `Enemy` (with boss AI), `Projectile`, `Pickup` |
 | `src/render.ts` | battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `battle`), test field, team-aware damage (`hostilesOf`), menus, save, debug panel |
+
+# Phase 2: mass units
+
+Hundreds of minions on the field (PLAN 11.1–11.2), fighting each other, the
+elites and the knight.
+
+**What changed**
+
+- **`src/army.ts`** (new): the minion sim, struct-of-arrays.
+  - Each minion is a slot in typed arrays: `Float32Array` position, velocity,
+    HP, facing and timers; `Uint8Array` type, team and state.
+  - A uniform 64 px grid is rebuilt every frame. It serves separation,
+    nearest-hostile lookups, the knight's swing arcs and arrow hits.
+  - Each minion re-picks the nearest hostile in sight (`WAR.unitSight` 420)
+    every 10 frames, staggered by slot. With nothing in sight it marches on
+    the enemy side's centre of mass.
+  - One windup → hit per swing; no poise and no frame data.
+  - States are advance / fight / flee. Flee is wired up but unused until rout in Phase 4.
+  - Arrows are lightweight projectiles in the same typed-array style, swap-removed when spent.
+- **Roster** (`UNITS` in `config.ts`): the PLAN 11.2 base stats for
+  swordsman, spearman (×2 vs beasts), archer (arrows, reach 260),
+  shieldbearer (frontal hits −70%), siege ram (ignores units, no knockback,
+  walks on the enemy) and Thornhound (beast). Player-side units are ×0.9
+  (`WAR.playerTroopMult`).
+- **Live caps:** 100 per side on desktop and 60 on phones (`IS_TOUCH`).
+  Spawning past the cap is refused; reserve streaming arrives in Phase 3.
+- **Knight vs minions:** combo hits and the Whirl hit every Dominion minion
+  in the arc (`Game.hitMinions`), and the Tempest pull drags them in. Fire
+  and Thunder hit minions, and Fire aims at the nearest minion when there is
+  no elite to home on. Allied minions are never hit.
+- **Hitstop cap:** non-kill hits on minions give no hitstop. Each knight kill
+  adds 1 frame, capped at 2 frames per sim frame (`WAR.minionHitstopCap`), so
+  a Whirl through a crowd doesn't freeze the game. Hit and death sounds are
+  rate-limited to one every 50 ms.
+- **Elites ↔ minions:**
+  - Elites pick the nearest hostile minion within `WAR.eliteSight` 900
+    (through `MinionRef`, a small handle that acts like any Combatant).
+  - An elite's swing mows through every minion in its arc.
+  - Boss shockwaves and caster bolts hit minions.
+  - Minions target and damage elites and the knight. The knight's 34
+    i-frames after a hit stop a crowd from stun-locking them.
+- **Rendering:** simple team-coloured figures (blue for you, crimson for the
+  Dominion) with walk cycles, windup poses and per-type weapons; the ram is a
+  log with four crew, the hound a thorny beast. On-screen minions are sorted
+  by y and merged into the depth-sorted elites and knight, with no
+  per-minion closures, and all minion shadows are drawn in one batched path.
+- **Frame loop:** the next frame is requested before any work, so an
+  exception in one frame can no longer stop the game. Frame work (sim +
+  draw) and frame gaps go into a ring buffer (`perfWork`, `perfGap`).
+- **Test field:** each group is a Dominion block of minions (in the PLAN 6
+  40/20/25/15 mix, archers at the back) led by up to 3 Shades, against an
+  allied squad topped up to 16. The debug panel has **100 v 100 minions**
+  (`Game.massTest`).
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13, 23/23:
+
+- **Done-when, desktop:** 200 live units (100 v 100, fighting) for 6 s. Frame
+  work averaged 1.37 ms, p99 2.8 ms, max 4.1 ms; 60 fps; no frame over 25 ms.
+- **Done-when, phone:** 120 live units (the 60-per-side phone cap) on the
+  Playwright iPhone 13 profile, which emulates the device but not its CPU.
+  Frame work averaged 1.13 ms, p99 2.3 ms; 60 fps.
+- **Done-when, Whirl:** a Whirl through 20 swordsmen killed all 20. Worst
+  frame 5.3 ms, none over 25 ms. Minion kills added at most 2 hitstop frames
+  per sim frame.
+- **Hitstop cap:** 20 kills in one call add exactly 2 frames; 1 kill adds 1.
+- **Feel target:** over 2,000 simulated swings, the knight's opening slash
+  kills a tier-1 swordsman in 2 hits about 95% of the time and in 1 hit (a
+  high crit) about 5%; it never takes 3. Live, a swordsman died to the
+  opening combo in 2 presses.
+- Minions hurt the knight. Shieldbearer frontal hit: 20 → 6 (−70%), and 20
+  from behind. Spearman vs hound is double his damage vs a swordsman. The
+  ram never targets units, takes no knockback and walks on. Archers' arrows
+  hit.
+- An allied elite targets and kills Dominion minions; a Dominion elite does
+  the same to allied minions; minions damage elites.
+- The knight's combo, Whirl and Thunder never touch allied minions. Fire and
+  Thunder hit Dominion minions.
+- The desktop live cap holds at exactly 100. The grid's nearest-hostile
+  matched a brute-force search in 200 random queries.
+
+**Phone CPU, not verified.** Playwright's iPhone 13 profile doesn't slow the
+CPU, so I also ran it with Chromium's CPU throttling. With 120 units: 2× gave
+about 50–53 fps and 4× about 21–23 fps. At 4×, even an empty field only
+reaches about 36 fps, because headless Chromium draws the canvas in software
+on the throttled thread, while a real phone uses its GPU. Two standard
+optimisations were tried and measured: a pre-rendered ground and cached
+minion sprites. Both were slower in this software canvas (4×: 19 fps with
+120 units, 31 fps empty; at 1.5× cache scale, as low as 8 fps), so neither
+shipped. **A test on a real phone is the real answer here.**
+
+**Bug found and fixed during the phase:** the grid's cell table started as
+zeros instead of "empty" (-1). An elite looking up minions before the first
+grid rebuild walked slot 0 → slot 0 forever, which hung the page. It now
+starts at -1 and is reset on `clear()`.
 
 # Phase 1: teams
 

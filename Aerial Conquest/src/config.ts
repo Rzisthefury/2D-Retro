@@ -289,6 +289,39 @@ const ENEMIES: Record<string, EnemyDef> = {
   },
 };
 
+/* ------------------------------------------------------------ mass units */
+
+// PLAN 11.2 roster: base stats at tier 1. Minions are simple: no poise, no
+// frame data, one windup -> hit. `def` feeds the same damage formula as the
+// knight's hits (low, so a normal swing kills a swordsman in 2). `power` is the
+// unit's weight in the off-screen battle sim (Phase 8).
+type UnitType = 'sword' | 'spear' | 'archer' | 'shield' | 'ram' | 'hound';
+
+interface UnitDef {
+  id: UnitType; name: string;
+  hp: number; dmg: number; speed: number; reach: number; radius: number;
+  def: number;
+  windup: number;          // seconds from the start of a swing to the hit
+  cooldown: number;        // seconds between swings
+  power: number;
+  ranged?: boolean;        // fires arrows instead of swinging
+  beast?: boolean;         // spearmen deal x2 to beasts and chargers
+  vsBeast?: number;        // damage multiplier against beasts
+  frontGuard?: boolean;    // shieldbearer: frontal hits cut by WAR.shieldFrontCut
+  ignoresUnits?: boolean;  // siege ram: walks on, never fights units
+  side?: Team;             // only fielded by this side
+}
+
+const UNITS: Record<UnitType, UnitDef> = {
+  sword:  { id: 'sword',  name: 'Swordsman',    hp: 30,  dmg: 4, speed: 95,  reach: 28,  radius: 9,  def: 2, windup: 0.42, cooldown: 0.9, power: 1 },
+  spear:  { id: 'spear',  name: 'Spearman',     hp: 34,  dmg: 4, speed: 85,  reach: 44,  radius: 9,  def: 2, windup: 0.5,  cooldown: 1.0, power: 1.1, vsBeast: 2 },
+  archer: { id: 'archer', name: 'Archer',       hp: 20,  dmg: 3, speed: 90,  reach: 260, radius: 8,  def: 1, windup: 0.6,  cooldown: 1.6, power: 0.9, ranged: true },
+  shield: { id: 'shield', name: 'Shieldbearer', hp: 60,  dmg: 3, speed: 70,  reach: 26,  radius: 11, def: 4, windup: 0.5,  cooldown: 1.1, power: 1.4, frontGuard: true },
+  ram:    { id: 'ram',    name: 'Siege ram',    hp: 200, dmg: 0, speed: 50,  reach: 30,  radius: 20, def: 8, windup: 1.2,  cooldown: 2.0, power: 3, ignoresUnits: true },
+  hound:  { id: 'hound',  name: 'Thornhound',   hp: 22,  dmg: 5, speed: 160, reach: 26,  radius: 9,  def: 1, windup: 0.3,  cooldown: 0.8, power: 1, beast: true, side: 'enemy' },
+};
+const UNIT_ORDER: UnitType[] = ['sword', 'spear', 'archer', 'shield', 'ram', 'hound'];
+
 /* ----------------------------------------------------------------- bosses */
 
 // AF's boss AI, kept for castle lords, keep captains, generals and the warlord.
@@ -355,12 +388,32 @@ const WAR = {
   unitDamageMult: 1,         // unit-on-unit melee/bolt damage multiplier
   unitPoiseDamage: 10,       // poise damage of a unit's swing on another unit
 
+  // mass units (Phase 2, PLAN 11.1)
+  liveCapDesktop: 100,       // live minions per side
+  liveCapPhone: 60,
+  unitCapacity: 320,         // slots in the minion arrays (both sides, plus corpses fading out)
+  unitSight: 420,            // how far a minion looks for a hostile before marching on the enemy's centre
+  eliteSight: 900,           // how far an elite looks for a hostile minion
+  unitRetargetFrames: 10,    // spec: retarget every 10 frames, staggered across units
+  playerTroopMult: 0.9,      // player-side minions are a little weaker per unit (PLAN 11.2)
+  shieldFrontCut: 0.7,       // shieldbearer: frontal hits -70%
+  shieldFrontArc: 1.2,       // radians either side of facing that count as "frontal"
+  minionHitstopCap: 2,       // knight's minion kills: at most this many hitstop frames per sim frame
+  minionKillHitstop: 1,      // ...and this many per kill
+  unitCorpseTime: 0.45,      // seconds a dead minion fades before its slot frees
+  arrowSpeed: 420,
+  arrowCapacity: 256,
+
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
   testFieldTier: 1,
   testFieldLevel: 4,
   testRespawnDelay: 2.5,     // seconds between a cleared group and the next
   testAllies: 2,             // allied Shades fighting beside the knight on the test field
+  testAllyMinions: 16,       // allied minions topped up with each new group
+  testFoeMinions: 20,        // Dominion minions in the first group...
+  testFoeMinionsPerGroup: 8, // ...and this many more per group after
+  testMix: { sword: 0.4, spear: 0.2, archer: 0.25, shield: 0.15 },   // PLAN 6 default recruit mix
 };
 
 /* ------------------------------------------------------ tier scaling */
@@ -451,4 +504,5 @@ const PAL = {
   mpCharge: '#ffd54a',
   danger: '#ff5f56',
   ally: '#5fb4ff',            // allied units' team colour
+  dominion: '#c0434a',        // Dominion minions' team colour
 };

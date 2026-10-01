@@ -399,6 +399,15 @@ const ENEMIES = {
         guard: false, hover: 74,
     },
 };
+const UNITS = {
+    sword: { id: 'sword', name: 'Swordsman', hp: 30, dmg: 4, speed: 95, reach: 28, radius: 9, def: 2, windup: 0.42, cooldown: 0.9, power: 1 },
+    spear: { id: 'spear', name: 'Spearman', hp: 34, dmg: 4, speed: 85, reach: 44, radius: 9, def: 2, windup: 0.5, cooldown: 1.0, power: 1.1, vsBeast: 2 },
+    archer: { id: 'archer', name: 'Archer', hp: 20, dmg: 3, speed: 90, reach: 260, radius: 8, def: 1, windup: 0.6, cooldown: 1.6, power: 0.9, ranged: true },
+    shield: { id: 'shield', name: 'Shieldbearer', hp: 60, dmg: 3, speed: 70, reach: 26, radius: 11, def: 4, windup: 0.5, cooldown: 1.1, power: 1.4, frontGuard: true },
+    ram: { id: 'ram', name: 'Siege ram', hp: 200, dmg: 0, speed: 50, reach: 30, radius: 20, def: 8, windup: 1.2, cooldown: 2.0, power: 3, ignoresUnits: true },
+    hound: { id: 'hound', name: 'Thornhound', hp: 22, dmg: 5, speed: 160, reach: 26, radius: 9, def: 1, windup: 0.3, cooldown: 0.8, power: 1, beast: true, side: 'enemy' },
+};
+const UNIT_ORDER = ['sword', 'spear', 'archer', 'shield', 'ram', 'hound'];
 function freshUpgrades() { return { vitality: 0, might: 0, arcana: 0 }; }
 /** The knight's base stats: AF's level-1 values plus whatever the upgrades buy. */
 function statsForKnight(u) {
@@ -427,12 +436,31 @@ const WAR = {
     allyCatchUp: 1.1, // ...and when over 2x the follow range behind
     unitDamageMult: 1, // unit-on-unit melee/bolt damage multiplier
     unitPoiseDamage: 10, // poise damage of a unit's swing on another unit
+    // mass units (Phase 2, PLAN 11.1)
+    liveCapDesktop: 100, // live minions per side
+    liveCapPhone: 60,
+    unitCapacity: 320, // slots in the minion arrays (both sides, plus corpses fading out)
+    unitSight: 420, // how far a minion looks for a hostile before marching on the enemy's centre
+    eliteSight: 900, // how far an elite looks for a hostile minion
+    unitRetargetFrames: 10, // spec: retarget every 10 frames, staggered across units
+    playerTroopMult: 0.9, // player-side minions are a little weaker per unit (PLAN 11.2)
+    shieldFrontCut: 0.7, // shieldbearer: frontal hits -70%
+    shieldFrontArc: 1.2, // radians either side of facing that count as "frontal"
+    minionHitstopCap: 2, // knight's minion kills: at most this many hitstop frames per sim frame
+    minionKillHitstop: 1, // ...and this many per kill
+    unitCorpseTime: 0.45, // seconds a dead minion fades before its slot frees
+    arrowSpeed: 420,
+    arrowCapacity: 256,
     // the Phase 0 test battlefield
     testField: { w: 1920, h: 1200 },
     testFieldTier: 1,
     testFieldLevel: 4,
     testRespawnDelay: 2.5, // seconds between a cleared group and the next
     testAllies: 2, // allied Shades fighting beside the knight on the test field
+    testAllyMinions: 16, // allied minions topped up with each new group
+    testFoeMinions: 20, // Dominion minions in the first group...
+    testFoeMinionsPerGroup: 8, // ...and this many more per group after
+    testMix: { sword: 0.4, spear: 0.2, archer: 0.25, shield: 0.15 }, // PLAN 6 default recruit mix
 };
 /* ------------------------------------------------------ tier scaling */
 // Every battle has a tier. Its enemies' stats are multiplied by these, then
@@ -502,6 +530,7 @@ const PAL = {
     mpCharge: '#ffd54a',
     danger: '#ff5f56',
     ally: '#5fb4ff', // allied units' team colour
+    dominion: '#c0434a', // Dominion minions' team colour
 };
 /* =========================================================================
  * core.ts — math helpers, RNG, buffered input, and a tiny WebAudio synth.
@@ -1230,6 +1259,471 @@ function canLearn(set, t, apFree) {
     if (t.needs && !set[t.needs])
         return false;
     return apFree >= t.cost;
+}
+/* =========================================================================
+ * army.ts — the mass-unit sim (PLAN 11.1).
+ *
+ * Minions live in struct-of-arrays slots: Float32Array position, velocity,
+ * HP and timers; Uint8Array type, team and state. A uniform grid (64 px
+ * cells) is rebuilt every frame for neighbour queries: separation, nearest
+ * hostile, the knight's swing arcs, arrows. Each minion re-picks its target
+ * every WAR.unitRetargetFrames frames (staggered by slot), advances, and
+ * fights with one simple windup -> hit. No poise, no frame data.
+ *
+ * Elites (AF `Enemy` entities) and the knight interact with minions through
+ * `MinionRef`, a tiny handle that looks like any other Combatant.
+ * ========================================================================= */
+const TEAM_PLAYER = 0, TEAM_ENEMY = 1;
+const ST_ADVANCE = 0, ST_FIGHT = 1, ST_FLEE = 2;
+function teamIndex(t) { return t === 'player' ? TEAM_PLAYER : TEAM_ENEMY; }
+function teamName(i) { return i === TEAM_PLAYER ? 'player' : 'enemy'; }
+/** A minion seen as a Combatant (x, y, z, radius, alive, team). Stale once its slot is reused. */
+class MinionRef {
+    constructor(army, i, uid) {
+        this.army = army;
+        this.i = i;
+        this.uid = uid;
+    }
+    get x() { return this.army.x[this.i]; }
+    get y() { return this.army.y[this.i]; }
+    get z() { return 0; }
+    get radius() { return UNITS[UNIT_ORDER[this.army.type[this.i]]].radius; }
+    get alive() { return this.army.uid[this.i] === this.uid && this.army.alive[this.i] === 1; }
+    get team() { return teamName(this.army.team[this.i]); }
+}
+class Army {
+    constructor(cap = WAR.unitCapacity, arrowCap = WAR.arrowCapacity) {
+        this.freeList = [];
+        this.nextUid = 1;
+        this.frame = 0;
+        this.liveCount = [0, 0];
+        /** where each side's fighters are massed (knight and elites included), for units with nothing in sight */
+        this.centre = [{ x: 0, y: 0, n: 0 }, { x: 0, y: 0, n: 0 }];
+        // uniform grid
+        this.cell = 64;
+        this.cols = 1;
+        this.rows = 1;
+        this.head = new Int32Array(1).fill(-1); // -1 = empty cell (0 would be a valid slot)
+        this.arrows = 0;
+        this.gx0 = 0;
+        this.gy0 = 0;
+        this.cap = cap;
+        const f = () => new Float32Array(cap), u = () => new Uint8Array(cap);
+        this.x = f();
+        this.y = f();
+        this.vx = f();
+        this.vy = f();
+        this.hp = f();
+        this.maxHp = f();
+        this.facing = f();
+        this.cd = f();
+        this.wind = f();
+        this.flash = f();
+        this.deadT = f();
+        this.atk = f();
+        this.armor = f();
+        this.walk = f();
+        this.type = u();
+        this.team = u();
+        this.state = u();
+        this.alive = u();
+        this.used = u();
+        this.uid = new Uint32Array(cap);
+        this.tgt = new Array(cap).fill(null);
+        this.refs = new Array(cap).fill(null);
+        this.next = new Int32Array(cap);
+        for (let i = cap - 1; i >= 0; i--)
+            this.freeList.push(i);
+        this.arrowCap = arrowCap;
+        const a = () => new Float32Array(arrowCap);
+        this.ax = a();
+        this.ay = a();
+        this.avx = a();
+        this.avy = a();
+        this.alife = a();
+        this.admg = a();
+        this.ateam = new Uint8Array(arrowCap);
+    }
+    /** Live cap per side on this device (PLAN 10.1). */
+    static liveCap() { return IS_TOUCH ? WAR.liveCapPhone : WAR.liveCapDesktop; }
+    clear() {
+        this.freeList.length = 0;
+        for (let i = this.cap - 1; i >= 0; i--) {
+            this.used[i] = 0;
+            this.alive[i] = 0;
+            this.tgt[i] = null;
+            this.refs[i] = null;
+            this.freeList.push(i);
+        }
+        this.liveCount[0] = this.liveCount[1] = 0;
+        this.arrows = 0;
+        this.head.fill(-1);
+    }
+    live(t) { return this.liveCount[teamIndex(t)]; }
+    /** Spawn one minion. Returns its slot, or -1 if the side is at its live cap or the arrays are full. */
+    spawn(kind, side, x, y, tier) {
+        const t = teamIndex(side);
+        if (this.liveCount[t] >= Army.liveCap() || !this.freeList.length)
+            return -1;
+        const i = this.freeList.pop();
+        const d = UNITS[kind];
+        const tm = side === 'player' ? WAR.playerTroopMult : 1;
+        const ts = Math.max(1, tier);
+        this.used[i] = 1;
+        this.alive[i] = 1;
+        this.uid[i] = this.nextUid++;
+        this.type[i] = UNIT_ORDER.indexOf(kind);
+        this.team[i] = t;
+        this.state[i] = ST_ADVANCE;
+        this.x[i] = x;
+        this.y[i] = y;
+        this.vx[i] = 0;
+        this.vy[i] = 0;
+        this.maxHp[i] = this.hp[i] = Math.round(d.hp * TIER_SCALING.hpMultiplier(ts) * tm);
+        this.atk[i] = d.dmg * TIER_SCALING.attackMultiplier(ts) * tm;
+        this.armor[i] = d.def * TIER_SCALING.defenseMultiplier(ts);
+        this.facing[i] = side === 'player' ? 0 : Math.PI;
+        this.cd[i] = rnd(0, d.cooldown);
+        this.wind[i] = 0;
+        this.flash[i] = 0;
+        this.deadT[i] = 0;
+        this.walk[i] = Math.random() * 6.28;
+        this.tgt[i] = null;
+        this.refs[i] = null;
+        this.liveCount[t]++;
+        return i;
+    }
+    def(i) { return UNITS[UNIT_ORDER[this.type[i]]]; }
+    /** A Combatant handle for slot i (cached per spawn). */
+    ref(i) {
+        const r = this.refs[i];
+        if (r && r.uid === this.uid[i])
+            return r;
+        return (this.refs[i] = new MinionRef(this, i, this.uid[i]));
+    }
+    /* ------------------------------------------------------------- the grid */
+    rebuildGrid(f) {
+        const cols = Math.max(1, Math.ceil(f.w / this.cell)), rows = Math.max(1, Math.ceil(f.h / this.cell));
+        if (cols !== this.cols || rows !== this.rows || this.head.length !== cols * rows) {
+            this.cols = cols;
+            this.rows = rows;
+            this.head = new Int32Array(cols * rows);
+        }
+        this.head.fill(-1);
+        for (let i = 0; i < this.cap; i++) {
+            if (!this.alive[i])
+                continue;
+            const c = this.cellOf(this.x[i], this.y[i], f);
+            this.next[i] = this.head[c];
+            this.head[c] = i;
+        }
+    }
+    cellOf(x, y, f) {
+        const cx = clamp(Math.floor((x - f.x) / this.cell), 0, this.cols - 1);
+        const cy = clamp(Math.floor((y - f.y) / this.cell), 0, this.rows - 1);
+        return cy * this.cols + cx;
+    }
+    /** Calls fn(i) for every live minion whose cell overlaps the circle (x, y, r). fn returns true to stop. */
+    query(x, y, r, fn) {
+        const c0 = clamp(Math.floor((x - r - this.gx0) / this.cell), 0, this.cols - 1);
+        const c1 = clamp(Math.floor((x + r - this.gx0) / this.cell), 0, this.cols - 1);
+        const r0 = clamp(Math.floor((y - r - this.gy0) / this.cell), 0, this.rows - 1);
+        const r1 = clamp(Math.floor((y + r - this.gy0) / this.cell), 0, this.rows - 1);
+        for (let cy = r0; cy <= r1; cy++)
+            for (let cx = c0; cx <= c1; cx++) {
+                for (let i = this.head[cy * this.cols + cx]; i !== -1; i = this.next[i]) {
+                    if (this.alive[i] && fn(i))
+                        return;
+                }
+            }
+    }
+    /** Nearest live minion hostile to `side` within r of (x, y), or -1. */
+    nearestHostile(side, x, y, r) {
+        const own = teamIndex(side);
+        let best = -1, bd = r * r;
+        this.query(x, y, r, (j) => {
+            if (this.team[j] === own)
+                return;
+            const dx = this.x[j] - x, dy = this.y[j] - y, d = dx * dx + dy * dy;
+            if (d < bd) {
+                bd = d;
+                best = j;
+            }
+        });
+        return best;
+    }
+    /* --------------------------------------------------------------- update */
+    update(g, dt) {
+        this.frame++;
+        const f = g.field;
+        this.gx0 = f.x;
+        this.gy0 = f.y;
+        this.rebuildGrid(f);
+        this.computeCentres(g);
+        for (let i = 0; i < this.cap; i++) {
+            if (!this.used[i])
+                continue;
+            if (this.flash[i] > 0)
+                this.flash[i] -= dt;
+            if (!this.alive[i]) {
+                this.deadT[i] += dt;
+                if (this.deadT[i] > WAR.unitCorpseTime) {
+                    this.used[i] = 0;
+                    this.tgt[i] = null;
+                    this.freeList.push(i);
+                }
+                continue;
+            }
+            this.think(g, i, dt);
+        }
+        this.separate(g, dt);
+        for (let i = 0; i < this.cap; i++) {
+            if (!this.alive[i])
+                continue;
+            this.x[i] += this.vx[i] * dt;
+            this.y[i] += this.vy[i] * dt;
+            const r = this.def(i).radius;
+            this.x[i] = clamp(this.x[i], f.x + r, f.x + f.w - r);
+            this.y[i] = clamp(this.y[i], f.y + r, f.y + f.h - r);
+        }
+        this.updateArrows(g, dt);
+    }
+    /** Each side's centre of mass, the knight and elites included. */
+    computeCentres(g) {
+        for (const c of this.centre) {
+            c.x = 0;
+            c.y = 0;
+            c.n = 0;
+        }
+        for (let i = 0; i < this.cap; i++) {
+            if (!this.alive[i])
+                continue;
+            const c = this.centre[this.team[i]];
+            c.x += this.x[i];
+            c.y += this.y[i];
+            c.n++;
+        }
+        for (const e of g.enemies) {
+            if (!e.alive)
+                continue;
+            const c = this.centre[teamIndex(e.team)];
+            c.x += e.x;
+            c.y += e.y;
+            c.n++;
+        }
+        if (g.player.alive) {
+            const c = this.centre[TEAM_PLAYER];
+            c.x += g.player.x;
+            c.y += g.player.y;
+            c.n++;
+        }
+        for (const c of this.centre)
+            if (c.n) {
+                c.x /= c.n;
+                c.y /= c.n;
+            }
+    }
+    /** Nearest hostile in sight: minions via the grid, the knight and elites directly. */
+    pick(g, i) {
+        const side = teamName(this.team[i]);
+        const x = this.x[i], y = this.y[i], sight = WAR.unitSight;
+        let best = null, bd = sight * sight;
+        const j = this.nearestHostile(side, x, y, sight);
+        if (j >= 0) {
+            best = this.ref(j);
+            bd = (this.x[j] - x) ** 2 + (this.y[j] - y) ** 2;
+        }
+        for (const e of g.enemies) {
+            if (!e.alive || e.team === side)
+                continue;
+            const d = (e.x - x) ** 2 + (e.y - y) ** 2;
+            if (d < bd) {
+                bd = d;
+                best = e;
+            }
+        }
+        const k = g.player;
+        if (side === 'enemy' && k.alive) {
+            const d = (k.x - x) ** 2 + (k.y - y) ** 2;
+            if (d < bd) {
+                bd = d;
+                best = k;
+            }
+        }
+        return best;
+    }
+    think(g, i, dt) {
+        const d = this.def(i);
+        const own = this.team[i];
+        if (this.cd[i] > 0)
+            this.cd[i] -= dt;
+        // re-pick, staggered so ~1/10th of the units do it each frame
+        let t = this.tgt[i];
+        if (!d.ignoresUnits && ((this.frame + i) % WAR.unitRetargetFrames === 0 || !t || !t.alive)) {
+            t = this.tgt[i] = this.pick(g, i);
+        }
+        const sp = d.speed;
+        const steer = (tx, ty, mult) => {
+            const a = Math.atan2(ty - this.y[i], tx - this.x[i]);
+            const k = clamp(10 * dt, 0, 1);
+            this.vx[i] += (Math.cos(a) * sp * mult - this.vx[i]) * k;
+            this.vy[i] += (Math.sin(a) * sp * mult - this.vy[i]) * k;
+            this.facing[i] = a;
+            this.walk[i] += dt * sp * mult * 0.12;
+        };
+        const halt = () => { this.vx[i] *= 0.7; this.vy[i] *= 0.7; };
+        if (this.state[i] === ST_FLEE) {
+            const c = this.centre[1 - own];
+            steer(this.x[i] * 2 - c.x, this.y[i] * 2 - c.y, 1.1);
+            return;
+        }
+        if (!t || !t.alive) {
+            // nothing in sight: march on the enemy's centre (rams always do)
+            this.wind[i] = 0;
+            this.state[i] = ST_ADVANCE;
+            const c = this.centre[1 - own];
+            if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40)
+                steer(c.x, c.y, 1);
+            else
+                halt();
+            return;
+        }
+        const dx = t.x - this.x[i], dy = t.y - this.y[i];
+        const dd = Math.hypot(dx, dy);
+        const reach = d.reach + d.radius + t.radius;
+        if (this.wind[i] > 0) {
+            // committed to the swing: stop, keep facing, land it at the end of the windup
+            halt();
+            this.facing[i] = Math.atan2(dy, dx);
+            this.wind[i] -= dt;
+            if (this.wind[i] <= 0) {
+                this.wind[i] = 0;
+                this.cd[i] = d.cooldown * rnd(0.85, 1.15);
+                if (d.ranged)
+                    this.fireArrow(i, t);
+                else if (dd <= reach * 1.25)
+                    g.unitStrike(this, i, t);
+            }
+            return;
+        }
+        if (dd > reach) {
+            this.state[i] = ST_ADVANCE;
+            steer(t.x, t.y, 1);
+        }
+        else {
+            this.state[i] = ST_FIGHT;
+            halt();
+            this.facing[i] = Math.atan2(dy, dx);
+            if (this.cd[i] <= 0)
+                this.wind[i] = d.windup;
+        }
+    }
+    /** Push overlapping minions apart, and out of the knight and elites. */
+    separate(g, dt) {
+        const push = 90 * dt * 60;
+        for (let i = 0; i < this.cap; i++) {
+            if (!this.alive[i])
+                continue;
+            const ri = this.def(i).radius;
+            const xi = this.x[i], yi = this.y[i];
+            this.query(xi, yi, ri + 20, (j) => {
+                if (j <= i)
+                    return;
+                const rj = this.def(j).radius;
+                const dx = this.x[j] - xi, dy = this.y[j] - yi;
+                const min = ri + rj;
+                const d2 = dx * dx + dy * dy;
+                if (d2 >= min * min || d2 < 0.0001)
+                    return;
+                const d = Math.sqrt(d2), k = ((min - d) / min) * push * 0.5 / d;
+                this.vx[i] -= dx * k;
+                this.vy[i] -= dy * k;
+                this.vx[j] += dx * k;
+                this.vy[j] += dy * k;
+            });
+        }
+        const bodies = [];
+        if (g.player.alive)
+            bodies.push(g.player);
+        for (const e of g.enemies)
+            if (e.alive)
+                bodies.push(e);
+        for (const b of bodies) {
+            this.query(b.x, b.y, b.radius + 24, (j) => {
+                const dx = this.x[j] - b.x, dy = this.y[j] - b.y;
+                const min = b.radius + this.def(j).radius;
+                const d2 = dx * dx + dy * dy;
+                if (d2 >= min * min || d2 < 0.0001)
+                    return;
+                const d = Math.sqrt(d2), k = ((min - d) / min) * push / d;
+                this.vx[j] += dx * k;
+                this.vy[j] += dy * k;
+            });
+        }
+    }
+    /* --------------------------------------------------------------- damage */
+    /**
+     * Hit minion i. `angle` points from the attacker to the minion. Shieldbearers
+     * cut frontal hits; rams shrug off knockback. Returns true if it died.
+     */
+    hurt(g, i, dmg, angle, knockback, byKnight) {
+        if (!this.alive[i])
+            return false;
+        const d = this.def(i);
+        if (d.frontGuard && Math.abs(angleDiff(this.facing[i], angle + Math.PI)) < WAR.shieldFrontArc) {
+            dmg = Math.max(1, Math.round(dmg * (1 - WAR.shieldFrontCut)));
+        }
+        this.hp[i] -= dmg;
+        this.flash[i] = 0.1;
+        if (!d.ignoresUnits) {
+            this.vx[i] += Math.cos(angle) * knockback;
+            this.vy[i] += Math.sin(angle) * knockback;
+        }
+        if (this.hp[i] > 0)
+            return false;
+        this.hp[i] = 0;
+        this.alive[i] = 0;
+        this.deadT[i] = 0;
+        this.wind[i] = 0;
+        this.liveCount[this.team[i]]--;
+        g.onMinionDeath(this, i, byKnight);
+        return true;
+    }
+    /* --------------------------------------------------------------- arrows */
+    fireArrow(i, t) {
+        if (this.arrows >= this.arrowCap)
+            return;
+        const k = this.arrows++;
+        const a = Math.atan2(t.y - this.y[i], t.x - this.x[i]) + rnd(-0.05, 0.05);
+        this.ax[k] = this.x[i];
+        this.ay[k] = this.y[i];
+        this.avx[k] = Math.cos(a) * WAR.arrowSpeed;
+        this.avy[k] = Math.sin(a) * WAR.arrowSpeed;
+        this.alife[k] = (this.def(i).reach * 1.4) / WAR.arrowSpeed;
+        this.admg[k] = this.atk[i];
+        this.ateam[k] = this.team[i];
+    }
+    updateArrows(g, dt) {
+        let k = 0;
+        while (k < this.arrows) {
+            this.ax[k] += this.avx[k] * dt;
+            this.ay[k] += this.avy[k] * dt;
+            this.alife[k] -= dt;
+            if (this.alife[k] <= 0 || g.arrowHit(this, k)) {
+                // swap-remove
+                const last = --this.arrows;
+                this.ax[k] = this.ax[last];
+                this.ay[k] = this.ay[last];
+                this.avx[k] = this.avx[last];
+                this.avy[k] = this.avy[last];
+                this.alife[k] = this.alife[last];
+                this.admg[k] = this.admg[last];
+                this.ateam[k] = this.ateam[last];
+                continue;
+            }
+            k++;
+        }
+    }
 }
 /* =========================================================================
  * music.ts — the score. An orchestral, melody-first soundtrack in the
@@ -2065,6 +2559,7 @@ class Player {
         this.attackPhase = 'startup';
         this.attackFrame = 0;
         this.attackHits = new Set();
+        this.minionHits = new Set(); // minion uids already hit by this swing / Whirl tick
         this.comboIndex = 0;
         this.comboAir = false;
         this.comboTimer = 0;
@@ -2393,7 +2888,10 @@ class Player {
         this.attackDef = def;
         this.attackPhase = 'startup';
         this.attackFrame = 0;
-        this.attackHits.clear();
+        {
+            this.attackHits.clear();
+            this.minionHits.clear();
+        }
         this.swingT = def.startup + def.active;
         if (def.radial) {
             // A spin has no front — stand your ground and let the ring do the work.
@@ -2479,8 +2977,10 @@ class Player {
             if (def.radial) {
                 const into = this.attackFrame - def.startup;
                 const per = Math.max(1, Math.floor(def.active / Math.max(1, def.ticks)));
-                if ((into - 1) % per === 0)
+                if ((into - 1) % per === 0) {
                     this.attackHits.clear();
+                    this.minionHits.clear();
+                }
                 this.facing += def.spinRate;
                 if (def.pull) {
                     for (const e of g.enemies) {
@@ -2493,6 +2993,7 @@ class Player {
                         e.x += Math.cos(a) * def.pull * dt;
                         e.y += Math.sin(a) * def.pull * dt;
                     }
+                    g.pullMinions(this.x, this.y, this.reach(def) * 1.5, def.pull * dt);
                 }
                 if (this.attackFrame % 3 === 0)
                     g.whirlFx(this, def);
@@ -2557,6 +3058,7 @@ class Player {
             this.attackHits.add(e);
             g.hitEnemy(e, def, this);
         }
+        g.hitMinions(def, this, this.minionHits);
     }
     /* --------------------------------------------------------------- magic */
     pollMagic(g) {
@@ -2842,6 +3344,14 @@ class Enemy {
             if (d < bd) {
                 bd = d;
                 best = c;
+            }
+        }
+        const j = g.army.nearestHostile(this.team, this.x, this.y, WAR.eliteSight);
+        if (j >= 0) {
+            const d = dist(this.x, this.y, g.army.x[j], g.army.y[j]);
+            if (d < bd) {
+                bd = d;
+                best = g.army.ref(j);
             }
         }
         const cur = this.target;
@@ -3335,6 +3845,7 @@ class Projectile {
     constructor(o) {
         this.target = null;
         this.hits = new Set();
+        this.minionHits = new Set();
         this.slowOnHit = false;
         this.mag = 8; // caster strength behind an enemy bolt
         this.trail = 0;
@@ -3486,6 +3997,8 @@ class Renderer {
     constructor(canvas) {
         this.dpr = 1;
         this.bladeStyle = 'longsword';
+        /* --------------------------------------------------------- minions */
+        this.minionOrder = new Int32Array(WAR.unitCapacity);
         this.previewHero = null;
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
@@ -3542,8 +4055,27 @@ class Renderer {
         }
         if (showPlayer)
             this.drawShadow(c, g.player.x, g.player.y, g.player.radius, g.player.z);
-        for (const d of drawables)
+        // Minions: on-screen slots sorted by y, then merged into the y-sorted
+        // drawables, so a crowd and the knight overlap correctly without a closure each.
+        const a = g.army;
+        let n = 0;
+        for (let i = 0; i < a.cap; i++) {
+            if (!a.used[i] || !onScreen(a.x[i], a.y[i]))
+                continue;
+            this.minionOrder[n++] = i;
+        }
+        const order = this.minionOrder.subarray(0, n);
+        order.sort((p, q) => a.y[p] - a.y[q]);
+        this.drawMinionShadows(c, a, order);
+        let m = 0;
+        for (const d of drawables) {
+            while (m < n && a.y[order[m]] <= d.y)
+                this.drawMinion(c, a, order[m++], g);
             d.fn();
+        }
+        while (m < n)
+            this.drawMinion(c, a, order[m++], g);
+        this.drawArrows(c, a);
         this.drawPickups(c, g);
         this.drawWhirlRing(c, g);
         this.drawSlashes(c, g);
@@ -3553,6 +4085,179 @@ class Renderer {
         c.restore();
         this.drawHud(c, g);
     }
+    /** One batched path for every minion's ground shadow. */
+    drawMinionShadows(c, a, order) {
+        c.fillStyle = 'rgba(0,0,0,0.28)';
+        c.beginPath();
+        for (let k = 0; k < order.length; k++) {
+            const i = order[k];
+            if (!a.alive[i])
+                continue;
+            const r = a.def(i).radius;
+            c.moveTo(a.x[i] + r, a.y[i] + 1);
+            c.ellipse(a.x[i], a.y[i] + 1, r, r * 0.42, 0, 0, Math.PI * 2);
+        }
+        c.fill();
+    }
+    /**
+     * A minion: simple team-coloured figure (PLAN 17 default), by type. Blue
+     * tunics for the player's side, crimson for the Dominion. ~16 px tall.
+     * Drawn directly each frame: cached sprites and a pre-rendered ground were
+     * tried and measured slower in headless Chromium's software canvas (see
+     * README, Phase 2), so they are not used.
+     */
+    drawMinion(c, a, i, g) {
+        const d = a.def(i);
+        const x = a.x[i], y = a.y[i];
+        const ally = a.team[i] === TEAM_PLAYER;
+        const dead = !a.alive[i];
+        if (dead) {
+            const k = 1 - a.deadT[i] / WAR.unitCorpseTime;
+            if (k <= 0)
+                return;
+            c.globalAlpha = k * 0.8;
+        }
+        const flash = a.flash[i] > 0;
+        const fx = Math.cos(a.facing[i]) >= 0 ? 1 : -1;
+        const moving = Math.abs(a.vx[i]) + Math.abs(a.vy[i]) > 12 && !dead;
+        const step = moving ? Math.sin(a.walk[i]) * 3 : 0;
+        const wind = a.wind[i] > 0 ? 1 - a.wind[i] / d.windup : 0; // 0..1 through the windup
+        c.translate(x, y);
+        this.paintMinionFigure(c, d, ally, flash, fx, step, wind, a.facing[i]);
+        c.translate(-x, -y);
+        if (dead) {
+            c.globalAlpha = 1;
+            return;
+        }
+        // health, once hurt
+        if (a.hp[i] < a.maxHp[i]) {
+            const w = d.id === 'ram' ? 34 : 16, top = y - (d.id === 'ram' ? 30 : 27);
+            c.fillStyle = 'rgba(0,0,0,0.55)';
+            c.fillRect(x - w / 2, top, w, 3);
+            c.fillStyle = ally ? PAL.ally : '#ff6b6b';
+            c.fillRect(x - w / 2, top, w * (a.hp[i] / a.maxHp[i]), 3);
+        }
+        void g;
+    }
+    /** One minion figure with its feet at the origin. */
+    paintMinionFigure(c, d, ally, flash, fx, step, wind, facing) {
+        const tunic = flash ? '#ffffff' : ally ? '#3f7fd0' : PAL.dominion;
+        const trim = flash ? '#ffffff' : ally ? '#a8d4ff' : '#3a1f28';
+        const steel = flash ? '#ffffff' : '#b9c0cc';
+        if (d.id === 'ram') {
+            // a capped log on a frame, four crew
+            c.save();
+            c.rotate(facing);
+            c.fillStyle = flash ? '#ffffff' : '#6b4a2b';
+            c.fillRect(-22, -10, 44, 9);
+            c.fillStyle = steel;
+            c.fillRect(20, -11, 6, 11);
+            c.restore();
+            for (let k = 0; k < 4; k++) {
+                const ox = (k % 2 ? 8 : -8) * fx + (k < 2 ? -6 : 6), oy = (k < 2 ? -9 : 7);
+                c.fillStyle = tunic;
+                c.fillRect(ox - 3, oy - 10 + (k % 2 ? step : -step) * 0.4, 6, 8);
+                c.fillStyle = '#e2c3a0';
+                c.beginPath();
+                c.arc(ox, oy - 13, 2.6, 0, Math.PI * 2);
+                c.fill();
+            }
+        }
+        else if (d.id === 'hound') {
+            // a low, thorny beast
+            c.fillStyle = flash ? '#ffffff' : '#5a2f2a';
+            c.beginPath();
+            c.ellipse(0, -7, 11, 5, 0, 0, Math.PI * 2);
+            c.fill();
+            c.beginPath();
+            c.ellipse(fx * 10, -10, 5, 4, 0, 0, Math.PI * 2);
+            c.fill();
+            c.strokeStyle = flash ? '#ffffff' : '#9fd36b';
+            c.lineWidth = 1.5;
+            c.beginPath();
+            for (let k = -1; k <= 1; k++) {
+                c.moveTo(k * 5, -11);
+                c.lineTo(k * 5 - fx * 2, -16);
+            }
+            c.stroke();
+            c.strokeStyle = '#2a1714';
+            c.lineWidth = 2;
+            c.beginPath();
+            c.moveTo(-6, -4);
+            c.lineTo(-6 + step, 0);
+            c.moveTo(6, -4);
+            c.lineTo(6 - step, 0);
+            c.stroke();
+            c.fillStyle = '#ffd54a';
+            c.fillRect(fx * 12 - 1, -11, 2, 2);
+        }
+        else {
+            // legs
+            c.strokeStyle = '#2a2a33';
+            c.lineWidth = 2;
+            c.beginPath();
+            c.moveTo(-2.5, -5);
+            c.lineTo(-2.5 + step, 0);
+            c.moveTo(2.5, -5);
+            c.lineTo(2.5 - step, 0);
+            c.stroke();
+            // tunic and head
+            c.fillStyle = tunic;
+            c.fillRect(-5, -15, 10, 11);
+            c.fillStyle = trim;
+            c.fillRect(-5, -9, 10, 2);
+            c.fillStyle = flash ? '#ffffff' : '#e2c3a0';
+            c.beginPath();
+            c.arc(0, -18, 3.6, 0, Math.PI * 2);
+            c.fill();
+            c.fillStyle = ally ? trim : steel;
+            c.beginPath();
+            c.arc(0, -19, 3.8, Math.PI, 0);
+            c.fill();
+            // the weapon, raised through the windup
+            const hx = fx * 5, hy = -11;
+            c.strokeStyle = steel;
+            c.lineWidth = 2;
+            c.beginPath();
+            if (d.id === 'sword') {
+                const ang = -0.9 - wind * 1.4;
+                c.moveTo(hx, hy);
+                c.lineTo(hx + fx * Math.cos(ang) * 11, hy + Math.sin(ang) * 11);
+            }
+            else if (d.id === 'spear') {
+                const lift = wind * 4;
+                c.moveTo(hx - fx * 8, hy + 2 - lift);
+                c.lineTo(hx + fx * 16, hy - 4 - lift);
+            }
+            else if (d.id === 'archer') {
+                c.strokeStyle = flash ? '#ffffff' : '#8a5a2b';
+                c.arc(hx, hy - 2, 7, fx > 0 ? -1.2 : Math.PI - 1.2, fx > 0 ? 1.2 : Math.PI + 1.2);
+            }
+            c.stroke();
+            if (d.id === 'shield') {
+                c.fillStyle = flash ? '#ffffff' : ally ? '#2c5c9c' : '#5a1f26';
+                c.fillRect(fx * 5 - (fx > 0 ? 0 : 5), -16, 5, 13);
+                c.fillStyle = steel;
+                c.fillRect(fx * 5 - (fx > 0 ? 0 : 5) + 1.5, -11, 2, 2);
+            }
+        }
+    }
+    /** Arrows in flight: short shafts along their velocity. */
+    drawArrows(c, a) {
+        if (!a.arrows)
+            return;
+        c.strokeStyle = '#e8dcc0';
+        c.lineWidth = 1.5;
+        c.beginPath();
+        for (let k = 0; k < a.arrows; k++) {
+            const sp = Math.hypot(a.avx[k], a.avy[k]) || 1;
+            const ux = a.avx[k] / sp, uy = a.avy[k] / sp;
+            const x = a.ax[k], y = a.ay[k] - 12;
+            c.moveTo(x - ux * 8, y - uy * 8);
+            c.lineTo(x, y);
+        }
+        c.stroke();
+    }
     /* ------------------------------------------------------- battlefield */
     /**
      * Open ground: a grass base, mown bands, worn dirt patches, tufts and
@@ -3561,24 +4266,27 @@ class Renderer {
      * Aerial Conquest; nothing here comes from Aerial Finisher's regions.
      */
     drawField(c, g, cam) {
-        const f = g.field;
+        this.paintField(c, g.field, cam, VIEW_W, VIEW_H);
+    }
+    /** Paint the field (and the treeline around it) for the view rectangle at `cam`, `vw` x `vh`. */
+    paintField(c, f, cam, vw, vh) {
         // beyond the field: dark forest
         c.fillStyle = '#16241a';
-        c.fillRect(cam.x - 10, cam.y - 10, VIEW_W + 20, VIEW_H + 20);
+        c.fillRect(cam.x - 10, cam.y - 10, vw + 20, vh + 20);
         // grass, in broad mown bands
         const band = 96;
-        const b0 = Math.max(0, Math.floor((cam.y - f.y) / band)), b1 = Math.ceil((cam.y + VIEW_H - f.y) / band);
+        const b0 = Math.max(0, Math.floor((cam.y - f.y) / band)), b1 = Math.ceil((cam.y + vh - f.y) / band);
         for (let b = b0; b <= b1; b++) {
             const y = f.y + b * band;
             if (y >= f.y + f.h)
                 break;
             c.fillStyle = b % 2 ? '#3f6a3a' : '#43703d';
-            c.fillRect(Math.max(f.x, cam.x - 10), y, Math.min(f.w, VIEW_W + 20), Math.min(band, f.y + f.h - y));
+            c.fillRect(Math.max(f.x, cam.x - 10), y, Math.min(f.w, vw + 20), Math.min(band, f.y + f.h - y));
         }
         // per-cell details
         const cell = 64;
-        const cx0 = Math.max(0, Math.floor((cam.x - f.x) / cell) - 1), cx1 = Math.min(Math.ceil(f.w / cell), Math.ceil((cam.x + VIEW_W - f.x) / cell) + 1);
-        const cy0 = Math.max(0, Math.floor((cam.y - f.y) / cell) - 1), cy1 = Math.min(Math.ceil(f.h / cell), Math.ceil((cam.y + VIEW_H - f.y) / cell) + 1);
+        const cx0 = Math.max(0, Math.floor((cam.x - f.x) / cell) - 1), cx1 = Math.min(Math.ceil(f.w / cell), Math.ceil((cam.x + vw - f.x) / cell) + 1);
+        const cy0 = Math.max(0, Math.floor((cam.y - f.y) / cell) - 1), cy1 = Math.min(Math.ceil(f.h / cell), Math.ceil((cam.y + vh - f.y) / cell) + 1);
         for (let cy = cy0; cy < cy1; cy++)
             for (let cx = cx0; cx < cx1; cx++) {
                 const h = this.cellHash(cx, cy);
@@ -3624,7 +4332,7 @@ class Renderer {
         c.lineWidth = 3;
         c.strokeRect(f.x, f.y, f.w, f.h);
         const tree = (tx, ty, s) => {
-            if (tx < cam.x - 60 || tx > cam.x + VIEW_W + 60 || ty < cam.y - 60 || ty > cam.y + VIEW_H + 60)
+            if (tx < cam.x - 60 || tx > cam.x + vw + 60 || ty < cam.y - 60 || ty > cam.y + vh + 60)
                 return;
             c.fillStyle = 'rgba(0,0,0,0.25)';
             c.beginPath();
@@ -5174,7 +5882,7 @@ class Renderer {
         c.fillText('TEST FIELD', VIEW_W - 18, 30);
         c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
-        const allies = g.enemies.filter((e) => e.alive && e.team === 'player').length;
+        const allies = g.alliesAlive();
         c.fillText(`groups cleared ${g.groupsCleared}  ·  foes ${g.foesAlive()}  ·  allies ${allies}`, VIEW_W - 18, 48);
         c.restore();
         // equipped gear, small, under the bars
@@ -6181,6 +6889,12 @@ class Game {
         this.slashes = [];
         this.rings = [];
         this.pickups = [];
+        this.army = new Army();
+        this.minionStop = 0; // hitstop frames minion kills have added this sim frame
+        this.minionSfxT = 0; // rate limit on minion hit/death sounds
+        this.perfWork = new Float32Array(600); // ms of sim + draw per frame (ring buffer)
+        this.perfGap = new Float32Array(600); // ms between frames
+        this.perfIdx = 0;
         /** The playable rectangle of the current battlefield, in world px. */
         this.field = { x: 0, y: 0, w: WAR.testField.w, h: WAR.testField.h };
         this.time = 0;
@@ -6378,6 +7092,9 @@ class Game {
     start() {
         this.lastTs = performance.now();
         const frame = (ts) => {
+            // ask for the next frame first: one bad frame must never stop the loop
+            requestAnimationFrame(frame);
+            const t0 = performance.now();
             const dtReal = Math.min(0.25, (ts - this.lastTs) / 1000);
             this.lastTs = ts;
             this.accumulator += dtReal;
@@ -6387,7 +7104,10 @@ class Game {
                 this.accumulator -= TICK;
             }
             this.renderer.draw(this);
-            requestAnimationFrame(frame);
+            // frame work time (sim + draw), kept for the perf checks and the debug panel
+            this.perfWork[this.perfIdx] = performance.now() - t0;
+            this.perfGap[this.perfIdx] = dtReal * 1000;
+            this.perfIdx = (this.perfIdx + 1) % this.perfWork.length;
         };
         requestAnimationFrame(frame);
     }
@@ -6460,10 +7180,14 @@ class Game {
             this.input.endTick();
             return;
         }
+        this.minionStop = 0;
+        if (this.minionSfxT > 0)
+            this.minionSfxT -= dt;
         if (!this.player.alive) {
             this.deathT += dt;
             for (const e of this.enemies)
                 e.update(this, dt);
+            this.army.update(this, dt);
             this.cull();
             this.input.endTick();
             return;
@@ -6490,6 +7214,7 @@ class Game {
         else {
             for (const e of this.enemies)
                 e.update(this, dt);
+            this.army.update(this, dt);
         }
         for (const p of this.projectiles)
             p.update(this, dt);
@@ -6524,7 +7249,7 @@ class Game {
         this.music.setTrack(id, transpose, tempo);
         this.music.duck(this.menuOpen || this.paused);
         const p = this.player;
-        const fighting = p.alive && this.enemies.some((e) => e.alive && e.aggro && e.team === 'enemy');
+        const fighting = p.alive && (this.army.live('enemy') > 0 || this.enemies.some((e) => e.alive && e.aggro && e.team === 'enemy'));
         this.music.target = fighting ? 3 : 0;
     }
     /** [theme, transpose, tempo] for the current screen. Phase 13 maps the war contexts properly. */
@@ -6577,6 +7302,7 @@ class Game {
         this.enemies.length = 0;
         this.projectiles.length = 0;
         this.pickups.length = 0;
+        this.army.clear();
         p.lock = null;
         this.placePlayer();
         p.refreshStats(true);
@@ -6601,16 +7327,67 @@ class Game {
             this.ring(x, y, 0, 8, 60, PAL.ally);
         }
     }
-    /** The next group of Shades, around the knight but not on top of them, plus allies topped up. */
+    /** `n` unit types in the PLAN 6 recruit mix (40/20/25/15), exact counts, shuffled. */
+    mixOf(n) {
+        const out = [];
+        const m = WAR.testMix;
+        const counts = [['sword', m.sword], ['spear', m.spear], ['archer', m.archer], ['shield', m.shield]];
+        let left = n;
+        for (let k = 0; k < counts.length; k++) {
+            const c = k === counts.length - 1 ? left : Math.round(n * counts[k][1]);
+            for (let q = 0; q < c && left > 0; q++, left--)
+                out.push(counts[k][0]);
+        }
+        for (let k = out.length - 1; k > 0; k--) {
+            const r = rndInt(0, k);
+            [out[k], out[r]] = [out[r], out[k]];
+        }
+        return out;
+    }
+    /** Spawn `kinds` as a block of ranks around (cx, cy); archers at the back. */
+    spawnBlock(kinds, side, cx, cy) {
+        const f = this.field;
+        const sorted = kinds.slice().sort((a, b) => (a === 'archer' ? 1 : 0) - (b === 'archer' ? 1 : 0));
+        const perRank = 8, gap = 26, back = side === 'player' ? -1 : 1;
+        sorted.forEach((k, idx) => {
+            const rank = Math.floor(idx / perRank), file = idx % perRank;
+            const x = clamp(cx + back * rank * gap + rnd(-4, 4), f.x + 30, f.x + f.w - 30);
+            const y = clamp(cy + (file - (perRank - 1) / 2) * gap + rnd(-4, 4), f.y + 30, f.y + f.h - 30);
+            this.army.spawn(k, side, x, y, WAR.testFieldTier);
+        });
+    }
+    /** Debug / perf: clear the field and line up `n` allied minions against `n` Dominion minions. */
+    massTest(n) {
+        const p = this.player, f = this.field;
+        this.enemies.length = 0;
+        this.projectiles.length = 0;
+        this.army.clear();
+        this.respawnT = 999;
+        this.waveIntro = 0;
+        p.lock = null;
+        p.x = f.x + f.w / 2;
+        p.y = f.y + f.h / 2;
+        const n2 = Math.min(n, Army.liveCap());
+        this.spawnBlock(this.mixOf(n2), 'player', p.x - 160, p.y);
+        this.spawnBlock(this.mixOf(n2), 'enemy', p.x + 260, p.y);
+        this.follow(true);
+    }
+    /** The next group: Dominion minions and Shades ahead of the knight; allies (elite + minions) topped up. */
     spawnTestGroup() {
         this.topUpAllies();
-        const ids = this.composition(this.groupsCleared + 1, ['shade', 'caster', 'flyer', 'bruiser']);
         const p = this.player, f = this.field;
+        const haveAllies = this.army.live('player');
+        const addAllies = Math.max(0, WAR.testAllyMinions - haveAllies);
+        if (addAllies)
+            this.spawnBlock(this.mixOf(addAllies), 'player', clamp(p.x - 90, f.x + 60, f.x + f.w - 60), p.y);
+        const foes = Math.min(Army.liveCap(), WAR.testFoeMinions + WAR.testFoeMinionsPerGroup * this.groupsCleared);
+        const fx = p.x + 520 < f.x + f.w - 120 ? p.x + 520 : p.x - 520;
+        this.spawnBlock(this.mixOf(foes), 'enemy', clamp(fx, f.x + 120, f.x + f.w - 120), p.y);
+        const ids = this.composition(this.groupsCleared + 1, ['shade', 'caster', 'flyer', 'bruiser']).slice(0, 3);
         for (let i = 0; i < ids.length; i++) {
-            const ang = (i / ids.length) * Math.PI * 2 + rnd(-0.3, 0.3);
-            const r = rnd(260, 380);
-            const x = clamp(p.x + Math.cos(ang) * r, f.x + 40, f.x + f.w - 40);
-            const y = clamp(p.y + Math.sin(ang) * r * 0.7, f.y + 40, f.y + f.h - 40);
+            // the Shades lead the Dominion block
+            const x = clamp(fx + (fx > p.x ? -70 : 70) + rnd(-20, 20), f.x + 40, f.x + f.w - 40);
+            const y = clamp(p.y + (i - (ids.length - 1) / 2) * 110, f.y + 40, f.y + f.h - 40);
             const e = new Enemy(ENEMIES[ids[i]], x, y, WAR.testFieldLevel, WAR.testFieldTier);
             e.aggro = true;
             this.enemies.push(e);
@@ -6734,7 +7511,7 @@ class Game {
             this.ring(e.x, e.y, e.z + 10, 12, 90, '#ffd54a');
     }
     /* ---------------------------------------------------------------- teams */
-    /** Everything alive that `team` may fight: the knight and allies for the Dominion, the Dominion for allies. */
+    /** The knight and elites `team` may fight (minions are found through `army` queries). */
     hostilesOf(team) {
         const out = [];
         if (team === 'enemy' && this.player.alive)
@@ -6745,7 +7522,9 @@ class Game {
         return out;
     }
     /** Dominion units still standing (allies don't count). */
-    foesAlive() { return this.enemies.filter((e) => e.alive && e.team === 'enemy').length; }
+    foesAlive() { return this.enemies.filter((e) => e.alive && e.team === 'enemy').length + this.army.live('enemy'); }
+    /** Allies standing: elites and minions. */
+    alliesAlive() { return this.enemies.filter((e) => e.alive && e.team === 'player').length + this.army.live('player'); }
     /** A unit's hit on another unit: physical, scaled by the attacker, light poise damage. */
     unitHitsUnit(src, t, mult, angle, knockback) {
         const r = physDamage(src.def.power * mult * WAR.unitDamageMult * (src.str / src.def.str), src.str, t.edef);
@@ -6774,9 +7553,20 @@ class Game {
             const ang = Math.atan2(t.y - e.y, t.x - e.x);
             if (t instanceof Player)
                 this.unitHitsKnight(e, mult, ang, 240, 22);
-            else
+            else if (t instanceof Enemy)
                 this.unitHitsUnit(e, t, mult, ang, 160);
         }
+        // minions in the arc: an elite's swing mows through them
+        const a = this.army, own = teamIndex(e.team);
+        a.query(e.x, e.y, reach + 24, (j) => {
+            if (a.team[j] === own)
+                return;
+            if (!inArc(e.x, e.y, e.z, e.facing, reach, 1.0, a.x[j], a.y[j], 0, a.def(j).radius))
+                return;
+            hit = true;
+            const r = physDamage(e.def.power * mult * WAR.unitDamageMult * (e.str / e.def.str), e.str, a.armor[j]);
+            a.hurt(this, j, r.dmg, Math.atan2(a.y[j] - e.y, a.x[j] - e.x), 160, false);
+        });
         if (hit)
             e.hasHitThisSwing = true;
     }
@@ -6802,9 +7592,16 @@ class Game {
             const ang = Math.atan2(t.y - y, t.x - x);
             if (t instanceof Player)
                 this.unitHitsKnight(e, mult, ang, 320, 26);
-            else
+            else if (t instanceof Enemy)
                 this.unitHitsUnit(e, t, mult, ang, 220);
         }
+        const a = this.army, own = teamIndex(e.team);
+        a.query(x, y, r + 24, (j) => {
+            if (a.team[j] === own || dist(x, y, a.x[j], a.y[j]) > r + a.def(j).radius)
+                return;
+            const res = physDamage(e.def.power * mult * WAR.unitDamageMult * (e.str / e.def.str), e.str, a.armor[j]);
+            a.hurt(this, j, res.dmg, Math.atan2(a.y[j] - y, a.x[j] - x), 220, false);
+        });
     }
     projectileCollide(proj) {
         if (proj.owner === 'player') {
@@ -6832,6 +7629,23 @@ class Game {
                     return;
                 }
             }
+            const a = this.army;
+            a.query(proj.x, proj.y, proj.radius + 24, (j) => {
+                if (a.team[j] !== TEAM_ENEMY || proj.minionHits.has(a.uid[j]))
+                    return;
+                if (dist(proj.x, proj.y, a.x[j], a.y[j]) > a.def(j).radius + proj.radius + 4)
+                    return;
+                proj.minionHits.add(a.uid[j]);
+                const r = magicDamage(proj.power, this.player.stats.mag, a.armor[j]);
+                const killed = a.hurt(this, j, r.dmg, Math.atan2(a.y[j] - proj.y, a.x[j] - proj.x), 60, true);
+                this.registerHit();
+                this.floatText(a.x[j], a.y[j], 30, String(r.dmg), proj.color, killed ? 15 : 12);
+                this.burst(proj.x, proj.y, proj.z, 6, proj.color);
+                if (!proj.pierce) {
+                    proj.dead = true;
+                    return true;
+                }
+            });
             return;
         }
         // a unit's bolt: the first hostile it touches
@@ -6857,11 +7671,135 @@ class Game {
             this.burst(proj.x, proj.y, proj.z, 10, proj.color);
             return;
         }
+        const a = this.army;
+        const j = a.nearestHostile(proj.team, proj.x, proj.y, proj.radius + 16);
+        if (j >= 0 && dist(proj.x, proj.y, a.x[j], a.y[j]) <= a.def(j).radius + proj.radius + 4) {
+            proj.dead = true;
+            const r = magicDamage(proj.power * WAR.unitDamageMult, proj.mag, a.armor[j]);
+            a.hurt(this, j, r.dmg, Math.atan2(a.y[j] - proj.y, a.x[j] - proj.x), 60, false);
+            this.burst(proj.x, proj.y, proj.z, 8, proj.color);
+        }
+    }
+    /* -------------------------------------------------------------- minions */
+    /** Minion i's swing lands on its target (spearmen x2 vs beasts). */
+    unitStrike(a, i, t) {
+        const d = a.def(i);
+        const ang = Math.atan2(t.y - a.y[i], t.x - a.x[i]);
+        const power = a.atk[i];
+        if (t instanceof MinionRef) {
+            if (!t.alive)
+                return;
+            const mult = a.def(t.i).beast && d.vsBeast ? d.vsBeast : 1;
+            const r = physDamage(power * mult, 0, a.armor[t.i]);
+            a.hurt(this, t.i, r.dmg, ang, 40, false);
+        }
+        else if (t instanceof Player) {
+            if (!t.alive)
+                return;
+            if (this.god) {
+                this.floatText(t.x, t.y, t.z + 40, 'GOD', '#7fe8ff', 14);
+                return;
+            }
+            const r = physDamage(power * TUNING.enemyDamageMult, 0, t.stats.def);
+            t.takeHit(this, r.dmg, ang, 110, 10);
+        }
+        else {
+            if (!t.alive)
+                return;
+            const r = physDamage(power * WAR.unitDamageMult, 0, t.edef);
+            t.applyDamage(this, r.dmg, 4, ang, 40, 0);
+        }
+    }
+    /** An arrow at slot k: hits the first hostile it touches. Returns true if it is spent. */
+    arrowHit(a, k) {
+        const x = a.ax[k], y = a.ay[k], side = teamName(a.ateam[k]);
+        const p = this.player;
+        if (side === 'enemy' && p.alive && p.z < 40 && dist(x, y, p.x, p.y) < p.radius + 4) {
+            if (this.god)
+                return false;
+            const r = physDamage(a.admg[k] * TUNING.enemyDamageMult, 0, p.stats.def);
+            p.takeHit(this, r.dmg, Math.atan2(a.avy[k], a.avx[k]), 80, 6);
+            return true;
+        }
+        for (const e of this.enemies) {
+            if (!e.alive || e.team === side || e.z > 60 || dist(x, y, e.x, e.y) > e.radius + 4)
+                continue;
+            const r = physDamage(a.admg[k] * WAR.unitDamageMult, 0, e.edef);
+            e.applyDamage(this, r.dmg, 2, Math.atan2(a.avy[k], a.avx[k]), 20, 0);
+            return true;
+        }
+        const j = a.nearestHostile(side, x, y, 16);
+        if (j >= 0 && dist(x, y, a.x[j], a.y[j]) <= a.def(j).radius + 3) {
+            const r = physDamage(a.admg[k], 0, a.armor[j]);
+            a.hurt(this, j, r.dmg, Math.atan2(a.avy[k], a.avx[k]), 30, false);
+            return true;
+        }
+        return false;
+    }
+    /** The knight's swing (or Whirl tick) against every Dominion minion in its arc. */
+    hitMinions(def, p, hits) {
+        const a = this.army;
+        const reach = p.reach(def);
+        let any = false;
+        a.query(p.x, p.y, reach + 24, (j) => {
+            if (a.team[j] !== TEAM_ENEMY || hits.has(a.uid[j]))
+                return;
+            if (!inArc(p.x, p.y, p.z, p.facing, reach, def.arc, a.x[j], a.y[j], 0, a.def(j).radius))
+                return;
+            hits.add(a.uid[j]);
+            any = true;
+            const edge = p.hasT('edge') ? 1.12 : 1;
+            const r = physDamage(def.power * TUNING.playerDamageMult * p.weapon.powerMult * edge, p.stats.str, a.armor[j]);
+            const killed = a.hurt(this, j, r.dmg, Math.atan2(a.y[j] - p.y, a.x[j] - p.x), def.knockback * 0.6, true);
+            this.registerHit();
+            this.floatText(a.x[j] + rnd(-6, 6), a.y[j], 30, String(r.dmg), r.crit ? '#ffd54a' : '#ffffff', killed ? 15 : 12);
+            if (!killed)
+                this.burst(a.x[j], a.y[j], 14, 3, '#cfe0ff');
+        });
+        if (any) {
+            // light feedback only: no per-hit hitstop on minions (kills add a capped frame each)
+            this.shake(Math.min(3, def.shake * 0.4) * TUNING.shakeScale);
+            if (this.minionSfxT <= 0) {
+                this.sfx.hit(def.finisher);
+                this.minionSfxT = 0.05;
+            }
+        }
+    }
+    /** The Tempest Whirl drags nearby Dominion minions in. */
+    pullMinions(x, y, r, amount) {
+        const a = this.army;
+        a.query(x, y, r, (j) => {
+            if (a.team[j] !== TEAM_ENEMY || a.def(j).ignoresUnits)
+                return;
+            const d = dist(x, y, a.x[j], a.y[j]);
+            if (d > r || d < 12)
+                return;
+            const ang = Math.atan2(y - a.y[j], x - a.x[j]);
+            a.x[j] += Math.cos(ang) * amount;
+            a.y[j] += Math.sin(ang) * amount;
+        });
+    }
+    /** A minion died. A knight kill adds a hitstop frame, capped per sim frame (PLAN 11.1). */
+    onMinionDeath(a, i, byKnight) {
+        const col = a.team[i] === TEAM_PLAYER ? PAL.ally : PAL.dominion;
+        this.burst(a.x[i], a.y[i], 12, 6, col);
+        if (byKnight && this.minionStop < WAR.minionHitstopCap) {
+            const add = Math.min(WAR.minionKillHitstop, WAR.minionHitstopCap - this.minionStop);
+            this.hitstopFrames += add;
+            this.minionStop += add;
+        }
+        if (this.minionSfxT <= 0) {
+            this.sfx.die();
+            this.minionSfxT = 0.05;
+        }
     }
     /* --------------------------------------------------------------- magic */
     fireSpell(s, p) {
         const target = p.lock && p.lock.alive ? p.lock : this.nearestEnemy(p.x, p.y, 500);
-        const ang = target ? Math.atan2(target.y - p.y, target.x - p.x) : p.facing;
+        // no elite to home on: aim at the nearest Dominion minion instead
+        const mj = target ? -1 : this.army.nearestHostile('player', p.x, p.y, 500);
+        const ang = target ? Math.atan2(target.y - p.y, target.x - p.x)
+            : mj >= 0 ? Math.atan2(this.army.y[mj] - p.y, this.army.x[mj] - p.x) : p.facing;
         const fm = p.hasT('focus') ? 1.18 : 1;
         if (s.kind === 'heal') {
             const amount = Math.round(s.power * fm * (1 + p.stats.mag / 10) * TUNING.spellPowerMult);
@@ -6873,18 +7811,29 @@ class Game {
         if (s.kind === 'strike') {
             // Thunder: bolts on up to three nearby enemies.
             const surge = p.hasT('surge');
-            const targets = this.enemies
-                .filter((e) => e.alive && e.team === 'enemy' && dist(e.x, e.y, p.x, p.y) < (surge ? 330 : 260))
-                .sort((a, b) => dist(a.x, a.y, p.x, p.y) - dist(b.x, b.y, p.x, p.y))
-                .slice(0, surge ? 5 : 3);
+            // Thunder picks the nearest Dominion targets, elites and minions alike
+            const range = surge ? 330 : 260;
+            const pool = [];
+            for (const e of this.enemies) {
+                if (!e.alive || e.team !== 'enemy' || dist(e.x, e.y, p.x, p.y) >= range)
+                    continue;
+                pool.push({ x: e.x, y: e.y, z: e.z, h: e.def.height, res: e.mres, hit: (r) => e.applyDamage(this, r.dmg, 26, Math.atan2(e.y - p.y, e.x - p.x), 60, 0) });
+            }
+            const a = this.army;
+            a.query(p.x, p.y, range, (j) => {
+                if (a.team[j] !== TEAM_ENEMY || dist(a.x[j], a.y[j], p.x, p.y) >= range)
+                    return;
+                pool.push({ x: a.x[j], y: a.y[j], z: 0, h: 16, res: a.armor[j], hit: (r) => { a.hurt(this, j, r.dmg, Math.atan2(a.y[j] - p.y, a.x[j] - p.x), 60, true); } });
+            });
+            const targets = pool.sort((m, n) => dist(m.x, m.y, p.x, p.y) - dist(n.x, n.y, p.x, p.y)).slice(0, surge ? 5 : 3);
             if (!targets.length) {
                 this.toast('NO TARGET');
                 return;
             }
             for (const e of targets) {
-                const r = magicDamage(s.power * fm, p.stats.mag, e.mres);
-                e.applyDamage(this, r.dmg, 26, Math.atan2(e.y - p.y, e.x - p.x), 60, 0);
-                this.floatText(e.x, e.y, e.z + e.def.height + 10, String(r.dmg), s.color, 18);
+                const r = magicDamage(s.power * fm, p.stats.mag, e.res);
+                e.hit(r);
+                this.floatText(e.x, e.y, e.z + e.h + 10, String(r.dmg), s.color, 18);
                 this.burst(e.x, e.y, e.z + 10, 16, s.color);
                 this.ring(e.x, e.y, e.z, 6, 70, s.color);
                 // vertical bolt
@@ -7388,6 +8337,7 @@ function buildDebugPanel(g) {
         + '<button data-act="heal">Full heal</button>'
         + '<button data-act="upgrade">+1 rank all upgrades</button>'
         + '<button data-act="kill">Clear enemies</button>'
+        + '<button data-act="mass">100 v 100 minions</button>'
         + '<button data-act="mats">+50 all materials</button>'
         + '<button data-act="sp">+10 SP</button>'
         + '<button data-act="god">God mode: off</button>'
@@ -7433,8 +8383,17 @@ function buildDebugPanel(g) {
                     break;
                 case 'kill':
                     for (const e of g.enemies)
-                        if (e.alive)
+                        if (e.alive && e.team === 'enemy')
                             e.applyDamage(g, 999999, 0, 0, 0, 0);
+                    for (let i = 0; i < g.army.cap; i++)
+                        if (g.army.alive[i] && g.army.team[i] === TEAM_ENEMY)
+                            g.army.hurt(g, i, 999999, 0, 0, false);
+                    break;
+                case 'mass':
+                    if (g.screen === 'battle')
+                        g.massTest(100);
+                    else
+                        g.toast('START A BATTLE FIRST');
                     break;
                 case 'mats':
                     for (const m of MAT_ORDER)

@@ -61,6 +61,7 @@ class Player {
   attackPhase: 'startup' | 'active' | 'recovery' = 'startup';
   attackFrame = 0;
   attackHits = new Set<Enemy>();
+  minionHits = new Set<number>();   // minion uids already hit by this swing / Whirl tick
   comboIndex = 0;
   comboAir = false;
   comboTimer = 0;
@@ -350,7 +351,7 @@ class Player {
     this.attackDef = def;
     this.attackPhase = 'startup';
     this.attackFrame = 0;
-    this.attackHits.clear();
+    { this.attackHits.clear(); this.minionHits.clear(); }
     this.swingT = def.startup + def.active;
 
     if (def.radial) {
@@ -430,7 +431,7 @@ class Player {
       if (def.radial) {
         const into = this.attackFrame - def.startup;
         const per = Math.max(1, Math.floor(def.active / Math.max(1, def.ticks)));
-        if ((into - 1) % per === 0) this.attackHits.clear();
+        if ((into - 1) % per === 0) { this.attackHits.clear(); this.minionHits.clear(); }
         this.facing += def.spinRate;
         if (def.pull) {
           for (const e of g.enemies) {
@@ -441,6 +442,7 @@ class Player {
             e.x += Math.cos(a) * def.pull * dt;
             e.y += Math.sin(a) * def.pull * dt;
           }
+          g.pullMinions(this.x, this.y, this.reach(def) * 1.5, def.pull * dt);
         }
         if (this.attackFrame % 3 === 0) g.whirlFx(this, def);
       }
@@ -491,6 +493,7 @@ class Player {
       this.attackHits.add(e);
       g.hitEnemy(e, def, this);
     }
+    g.hitMinions(def, this, this.minionHits);
   }
 
   /* --------------------------------------------------------------- magic */
@@ -603,8 +606,8 @@ type EState = 'spawn' | 'idle' | 'chase' | 'reposition' | 'telegraph' | 'attack'
 /** Which side a fighter is on. The knight is always 'player'. */
 type Team = 'player' | 'enemy';
 
-/** Anything a unit can fight: the knight or another Enemy entity. */
-type Combatant = Player | Enemy;
+/** Anything a unit can fight: the knight, an Enemy entity (elite), or a minion. */
+type Combatant = Player | Enemy | MinionRef;
 
 class Enemy {
   def: EnemyDef;
@@ -772,6 +775,11 @@ class Enemy {
     for (const c of g.hostilesOf(this.team)) {
       const d = dist(this.x, this.y, c.x, c.y);
       if (d < bd) { bd = d; best = c; }
+    }
+    const j = g.army.nearestHostile(this.team, this.x, this.y, WAR.eliteSight);
+    if (j >= 0) {
+      const d = dist(this.x, this.y, g.army.x[j], g.army.y[j]);
+      if (d < bd) { bd = d; best = g.army.ref(j); }
     }
     const cur = this.target;
     if (cur && cur.alive && best && best !== cur
@@ -1210,6 +1218,7 @@ class Projectile {
   homing: number;
   target: Enemy | null = null;
   hits = new Set<Enemy>();
+  minionHits = new Set<number>();
   slowOnHit = false;
   mag = 8;            // caster strength behind an enemy bolt
   trail = 0;
