@@ -223,8 +223,7 @@ async function phone(browser) {
   await page.goto(URL);
   await wait(800);
   check('phone: touch mode', await page.evaluate(() => IS_TOUCH));
-  const r = await canvasPoint(page, 336 + 144, 258 + 20);
-  await page.touchscreen.tap(r.x, r.y); await wait(500); await page.evaluate(() => { if (GAME.screen === 'campaign') GAME.startBattle(testSpec()); }); await wait(300);
+  await titleTapStart(page); await wait(300); await page.evaluate(() => { if (GAME.screen === 'campaign') GAME.startBattle(testSpec()); }); await wait(300);
   check('phone: tap Start -> battlefield', (await page.evaluate(() => GAME.screen)) === 'battle');
   const h0 = await dummy(page, 'shade');
   const atk = await canvasPoint(page, 866, 448);
