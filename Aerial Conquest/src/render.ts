@@ -237,19 +237,33 @@ class Renderer {
   /** Battle HUD (PLAN 13): the objective, a progress bar, and an exit marker on your edge. */
   private drawObjective(c: CanvasRenderingContext2D, g: Game) {
     const b = g.battle;
-    const w = 300, x = (VIEW_W - w) / 2, y = 14;
+    const text = b.objective.toUpperCase();
     c.save();
+    // as wide as the line needs, between the HP bars and the battle name (measured, never guessed: PLAN 16)
+    let size = 12;
+    c.font = `800 ${size}px ui-monospace, Menlo, Consolas, monospace`;
+    while (size > 9 && c.measureText(text).width > 352) { size--; c.font = `800 ${size}px ui-monospace, Menlo, Consolas, monospace`; }
+    const w = clamp(c.measureText(text).width + 28, 300, 380), x = (VIEW_W - w) / 2, y = 14;
     c.fillStyle = 'rgba(10,14,28,0.72)';
     this.roundRect(c, x, y, w, 36, 8); c.fill();
     c.textAlign = 'center';
-    c.font = '800 12px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = '#ffd54a';
-    c.fillText(b.objective.toUpperCase(), VIEW_W / 2, y + 15);
+    c.fillText(text, VIEW_W / 2, y + 15);
     this.bar(c, x + 14, y + 22, w - 28, 6, b.progress(g), '#ff9d4a', 'rgba(0,0,0,0.55)');
     c.restore();
     // the way out: your own edge, while you are near it
-    const p = g.player, sx0 = g.field.x - g.camX;
-    if (sx0 > -40 && p.x - g.field.x < 400) {
+    const p = g.player, sx0 = g.field.x - g.camX, sy0 = g.field.y - g.camY;
+    if (b.exitSide === 'top') {
+      if (sy0 > -40 && p.y - g.field.y < 300) {
+        c.save();
+        c.globalAlpha = 0.55 + Math.sin(g.time * 4) * 0.2;
+        c.fillStyle = '#8fb4ff';
+        c.font = '800 11px ui-monospace, Menlo, Consolas, monospace';
+        c.textAlign = 'center';
+        c.fillText('\u25B2 LEAVE', clamp(p.x - g.camX, 120, VIEW_W - 120), Math.max(70, sy0 + 66));
+        c.restore();
+      }
+    } else if (sx0 > -40 && p.x - g.field.x < 400) {
       c.save();
       c.globalAlpha = 0.55 + Math.sin(g.time * 4) * 0.2;
       c.fillStyle = '#8fb4ff';
@@ -276,24 +290,24 @@ class Renderer {
     c.fillText(title, VIEW_W / 2, 92);
     c.font = '700 14px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.text;
-    const sub = b.result === 'win'
-      ? (b.spec.kind === 'village' ? `${b.spec.name} burned — the node is yours (ownership arrives with the map)` : b.routed ? 'The Dominion army routed' : 'The Dominion army is destroyed')
-      : b.result === 'lose' ? 'You fell. Back to camp — the warband is lost, the node unchanged.' : 'You left the field. The attack is abandoned.';
-    c.fillText(sub, VIEW_W / 2, 120);
+    c.fillText(b.outcome, VIEW_W / 2, 120);
+    c.fillStyle = '#c7b8ff';
+    c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+    b.notes.forEach((n, k) => c.fillText(n, VIEW_W / 2, 140 + k * 16));
 
     const left = VIEW_W / 2 - 250, right = VIEW_W / 2 + 30;
     const row = (x: number, y: number, k: string, v: string, vc = PAL.text) => {
       c.textAlign = 'left'; c.fillStyle = PAL.dim; c.font = '600 13px ui-monospace, Menlo, Consolas, monospace'; c.fillText(k, x, y);
       c.textAlign = 'right'; c.fillStyle = vc; c.font = '700 13px ui-monospace, Menlo, Consolas, monospace'; c.fillText(v, x + 220, y);
     };
-    let y = 170;
+    let y = 170 + b.notes.length * 12;
     row(left, y, 'Time', fmtTime(b.time)); y += 22;
     row(left, y, 'Killed by you', String(b.kills.byKnight)); y += 22;
     row(left, y, 'Killed by your army', String(b.kills.byArmy)); y += 22;
     row(left, y, 'Elites felled', String(b.kills.elites)); y += 22;
     row(left, y, 'Dominion routed', String(g.army.routedCount[TEAM_ENEMY])); y += 22;
     row(left, y, 'Your troops lost', String(b.losses.troops), b.losses.troops ? '#ff9d9d' : PAL.text); y += 22;
-    y = 170;
+    y = 170 + b.notes.length * 12;
     c.textAlign = 'left'; c.fillStyle = '#ffd54a'; c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
     c.fillText('SPOILS', right, y); y += 22;
     if (b.result === 'win') {
@@ -327,20 +341,20 @@ class Renderer {
     c.fillText(`treasury ${g.player.gold} gold  ·  warband ${g.warbandCap()}`, VIEW_W / 2, 140);
     const rows = g.campaignRows();
     for (let i = 0; i < rows.length; i++) {
-      const y = CAMP_ROW.y0 + i * (CAMP_ROW.h + CAMP_ROW.gap);
+      const { x, y } = g.campRowAt(i);
       const on = i === g.campIndex;
       c.fillStyle = on ? 'rgba(80,140,255,0.26)' : 'rgba(19,23,40,0.75)';
-      this.roundRect(c, CAMP_ROW.x, y, CAMP_ROW.w, CAMP_ROW.h, 8); c.fill();
+      this.roundRect(c, x, y, CAMP_ROW.w, CAMP_ROW.h, 8); c.fill();
       c.strokeStyle = on ? '#6f9bff' : 'rgba(120,150,220,0.22)'; c.lineWidth = on ? 2 : 1.4;
-      this.roundRect(c, CAMP_ROW.x, y, CAMP_ROW.w, CAMP_ROW.h, 8); c.stroke();
+      this.roundRect(c, x, y, CAMP_ROW.w, CAMP_ROW.h, 8); c.stroke();
       c.textAlign = 'left';
-      c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
+      c.font = '800 14px ui-monospace, Menlo, Consolas, monospace';
       c.fillStyle = on ? '#ffffff' : PAL.text;
-      c.fillText(rows[i].label, CAMP_ROW.x + 18, y + (rows[i].sub ? 22 : 31));
+      c.fillText(rows[i].label, x + 16, y + (rows[i].sub ? 21 : 30));
       if (rows[i].sub) {
         c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
-        c.fillText(rows[i].sub, CAMP_ROW.x + 18, y + 40);
+        c.fillText(rows[i].sub, x + 16, y + 39);
       }
     }
     c.textAlign = 'center';
@@ -402,6 +416,7 @@ class Renderer {
     this.pal = SCENERY[g.battle.spec.scenery];
     this.paintField(c, g.field, cam, VIEW_W, VIEW_H);
     this.drawDecor(c, g, cam);
+    this.drawGroundRings(c, g);
   }
 
   private pal = SCENERY.forest;
@@ -493,6 +508,33 @@ class Renderer {
         continue;
       }
       if (!vis(d)) continue;
+      if (d.kind === 'stone') {
+        // paving inside walls: flagstones, only the part on screen
+        const x0 = Math.max(d.x - d.w / 2, cam.x - 10), x1 = Math.min(d.x + d.w / 2, cam.x + VIEW_W + 10);
+        const y0 = Math.max(d.y - d.h / 2, cam.y - 10), y1 = Math.min(d.y + d.h / 2, cam.y + VIEW_H + 10);
+        c.fillStyle = '#6e6a63'; c.fillRect(x0, y0, x1 - x0, y1 - y0);
+        c.strokeStyle = 'rgba(40,38,34,0.35)'; c.lineWidth = 1;
+        c.beginPath();
+        const gy0 = d.y - d.h / 2, gx0 = d.x - d.w / 2;
+        for (let yy = gy0 + Math.ceil((y0 - gy0) / 32) * 32; yy < y1; yy += 32) { c.moveTo(x0, yy); c.lineTo(x1, yy); }
+        for (let yy = gy0 + Math.floor((y0 - gy0) / 32) * 32; yy < y1; yy += 32) {
+          const off = (Math.round((yy - gy0) / 32) % 2) * 24;
+          for (let xx = gx0 + off + Math.floor((x0 - gx0 - off) / 48) * 48; xx < x1; xx += 48) { c.moveTo(xx, Math.max(yy, y0)); c.lineTo(xx, Math.min(yy + 32, y1)); }
+        }
+        c.stroke();
+        continue;
+      }
+      if (d.kind === 'rise') {
+        c.fillStyle = 'rgba(255,255,220,0.07)';
+        c.beginPath(); c.ellipse(d.x, d.y, d.w / 2, d.h / 2, 0, 0, Math.PI * 2); c.fill();
+        c.beginPath(); c.ellipse(d.x + 10, d.y - 8, d.w * 0.38, d.h * 0.36, 0, 0, Math.PI * 2); c.fill();
+        continue;
+      }
+      if (d.kind === 'carpet') {
+        c.fillStyle = '#6e1f2a'; c.fillRect(d.x - d.w / 2, d.y - d.h / 2, d.w, d.h);
+        c.strokeStyle = '#d4a73a'; c.lineWidth = 3; c.strokeRect(d.x - d.w / 2 + 5, d.y - d.h / 2 + 5, d.w - 10, d.h - 10);
+        continue;
+      }
       if (d.kind === 'crops') {
         c.fillStyle = '#6b5a33';
         c.fillRect(d.x - d.w / 2, d.y - d.h / 2, d.w, d.h);
@@ -522,11 +564,179 @@ class Renderer {
     }
   }
 
-  /** A house (timber and thatch), smoking when hurt, a burned shell when destroyed. */
+  /** Structures: houses, walls and towers, gates, the throne, wagons, the rescue cell (rings are ground marks). */
   private drawStructure(c: CanvasRenderingContext2D, s: Structure, g: Game) {
+    switch (s.kind) {
+      case 'building': this.drawHouse(c, s, g); return;
+      case 'wall': if (s.look === 'tower') this.drawTower(c, s); else this.drawWall(c, s); return;
+      case 'gate': this.drawGate(c, s, g); return;
+      case 'throne': this.drawThrone(c, s, g); return;
+      case 'wagon': this.drawWagon(c, s, g); return;
+      case 'cell': this.drawCell(c, s); return;
+      default: return;
+    }
+  }
+
+  /** An HP bar over a hurt structure. */
+  private structureBar(c: CanvasRenderingContext2D, s: Structure, top: number, col = '#ff9d4a') {
+    if (!s.alive || s.hp >= s.maxHp) return;
+    const w = Math.max(60, Math.min(110, s.w));
+    c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(s.x - w / 2, top - 12, w, 6);
+    c.fillStyle = col; c.fillRect(s.x - w / 2, top - 12, w * (s.hp / s.maxHp), 6);
+  }
+
+  /** Stone wall: a footprint seen from above, its south face showing. */
+  private drawWall(c: CanvasRenderingContext2D, s: Structure) {
+    const H = 24, x0 = s.x - s.w / 2, y0 = s.y - s.h;
+    c.fillStyle = '#5b5a60';
+    c.fillRect(x0, s.y - H, s.w, H);                       // south face
+    c.fillStyle = '#8d8b92';
+    c.fillRect(x0, y0 - H, s.w, s.h);                      // top
+    c.strokeStyle = 'rgba(40,40,46,0.6)'; c.lineWidth = 1;
+    c.beginPath();
+    for (let yy = s.y - H + 8; yy < s.y; yy += 8) { c.moveTo(x0, yy); c.lineTo(x0 + s.w, yy); }
+    c.stroke();
+    // crenellations along the top
+    c.fillStyle = '#a7a5ad';
+    if (s.w > s.h) for (let xx = x0 + 4; xx < x0 + s.w - 8; xx += 18) c.fillRect(xx, y0 - H - 5, 9, 6);
+    else for (let yy = y0 - H + 4; yy < s.y - H - 8; yy += 18) c.fillRect(x0 + s.w / 2 - 4, yy, 8, 9);
+    c.strokeStyle = '#3d3c42'; c.lineWidth = 2;
+    c.strokeRect(x0, y0 - H, s.w, s.h + H);
+  }
+
+  /** The outpost's watchtower: a round stone tower with a banner. */
+  private drawTower(c: CanvasRenderingContext2D, s: Structure) {
+    const r = s.w / 2, cy = s.y - s.h / 2, H = 70;
+    c.fillStyle = 'rgba(0,0,0,0.3)'; c.beginPath(); c.ellipse(s.x + 8, cy + 6, r + 6, r * 0.7, 0, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#5b5a60'; c.fillRect(s.x - r, cy - H, r * 2, H);
+    c.beginPath(); c.ellipse(s.x, cy, r, r * 0.55, 0, 0, Math.PI); c.fill();
+    c.fillStyle = '#8d8b92'; c.beginPath(); c.ellipse(s.x, cy - H, r, r * 0.55, 0, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#3d3c42'; c.beginPath(); c.ellipse(s.x, cy - H, r - 8, r * 0.4, 0, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#1b1a20'; c.fillRect(s.x - 6, cy - H * 0.6, 12, 18);
+    c.strokeStyle = '#6b4a2b'; c.lineWidth = 3;
+    c.beginPath(); c.moveTo(s.x, cy - H); c.lineTo(s.x, cy - H - 46); c.stroke();
+    c.fillStyle = PAL.dominion; c.beginPath(); c.moveTo(s.x, cy - H - 46); c.lineTo(s.x + 30, cy - H - 38); c.lineTo(s.x, cy - H - 30); c.fill();
+  }
+
+  /** A gate: banded timber doors in the wall's gap (iron-bound for a castle whose keep still stands). */
+  private drawGate(c: CanvasRenderingContext2D, s: Structure, g: Game) {
+    const H = 24, x0 = s.x - s.w / 2, y0 = s.y - s.h;
+    if (!s.alive) {
+      c.fillStyle = '#4a3420';
+      for (let k = 0; k < 5; k++) c.fillRect(x0 - 10 + ((k * 23) % 40), y0 + 10 + k * (s.h - 20) / 5, 26, 7);
+      return;
+    }
+    const iron = g.battle.spec.ironGate;
+    c.fillStyle = s.flash > 0 ? '#ffffff' : '#7a5230';
+    c.fillRect(x0, y0 - H, s.w, s.h + H);
+    c.strokeStyle = iron ? '#9aa3ad' : '#3b2614'; c.lineWidth = iron ? 4 : 3;
+    c.beginPath();
+    for (let yy = y0 - H + 12; yy < s.y; yy += 22) { c.moveTo(x0, yy); c.lineTo(x0 + s.w, yy); }
+    c.stroke();
+    c.strokeStyle = '#2a1a0e'; c.lineWidth = 2; c.strokeRect(x0, y0 - H, s.w, s.h + H);
+    // cracks as it weakens
+    const hurt = 1 - s.hp / s.maxHp;
+    if (hurt > 0.3) {
+      c.strokeStyle = '#1a0f06'; c.lineWidth = 2;
+      c.beginPath(); c.moveTo(x0 + 4, y0 + s.h * 0.3); c.lineTo(x0 + s.w - 6, y0 + s.h * 0.45); c.lineTo(x0 + 6, y0 + s.h * 0.6); c.stroke();
+    }
+    this.structureBar(c, s, y0 - H, iron ? '#c7d0da' : '#ff9d4a');
+  }
+
+  /** The castle throne on its dais. */
+  private drawThrone(c: CanvasRenderingContext2D, s: Structure, g: Game) {
+    const x0 = s.x - s.w / 2;
+    c.fillStyle = '#4d4652'; c.fillRect(x0 - 14, s.y - 10, s.w + 28, 14);   // dais
+    if (!s.alive) {
+      c.fillStyle = '#3b2c22';
+      for (let k = 0; k < 6; k++) c.fillRect(x0 + (k * 17) % s.w, s.y - 18 - (k % 3) * 6, 14, 6);
+      return;
+    }
+    const flash = s.flash > 0;
+    c.fillStyle = flash ? '#ffffff' : '#6a2c8a';
+    c.fillRect(x0 + 6, s.y - s.h - 26, s.w - 12, s.h + 16);                // back
+    c.fillStyle = flash ? '#ffffff' : '#d4a73a';
+    c.fillRect(x0, s.y - s.h * 0.55, s.w, 10);                             // arms
+    c.fillRect(x0 + 6, s.y - s.h - 32, s.w - 12, 7);
+    c.beginPath(); c.moveTo(s.x - 10, s.y - s.h - 32); c.lineTo(s.x, s.y - s.h - 48); c.lineTo(s.x + 10, s.y - s.h - 32); c.fill();
+    c.fillStyle = '#8a3a9e'; c.fillRect(x0 + 12, s.y - s.h * 0.5, s.w - 24, s.h * 0.4);   // seat
+    void g;
+    this.structureBar(c, s, s.y - s.h - 50, '#c79bff');
+  }
+
+  /** A covered supply wagon with the Dominion's red cloth; wrecked when destroyed. */
+  private drawWagon(c: CanvasRenderingContext2D, s: Structure, g: Game) {
+    if (s.escaped) return;
+    const x0 = s.x - s.w / 2;
+    c.fillStyle = 'rgba(0,0,0,0.3)'; c.fillRect(x0 + 4, s.y - 4, s.w, 9);
+    if (!s.alive) {
+      c.fillStyle = '#3a2a1c'; c.fillRect(x0, s.y - 16, s.w * 0.7, 14);
+      c.strokeStyle = '#1e140c'; c.lineWidth = 3;
+      c.beginPath(); c.arc(x0 + s.w - 10, s.y - 6, 9, 0, Math.PI * 2); c.stroke();
+      return;
+    }
+    const roll = (g.battle.time * s.speed) / 10;
+    c.fillStyle = s.flash > 0 ? '#ffffff' : '#7a5230';
+    c.fillRect(x0, s.y - 26, s.w, 18);
+    c.fillStyle = s.flash > 0 ? '#ffffff' : '#c9c2ae';
+    c.beginPath(); c.moveTo(x0 + 4, s.y - 26); c.quadraticCurveTo(s.x, s.y - s.h - 16, x0 + s.w - 4, s.y - 26); c.fill();
+    c.fillStyle = PAL.dominion; c.fillRect(s.x - 8, s.y - s.h - 4, 16, 14);
+    c.strokeStyle = '#2a1a0e'; c.lineWidth = 3;
+    for (const wx of [x0 + 12, x0 + s.w - 12]) {
+      c.beginPath(); c.arc(wx, s.y - 6, 9, 0, Math.PI * 2); c.stroke();
+      c.beginPath(); c.moveTo(wx + Math.cos(roll) * 9, s.y - 6 + Math.sin(roll) * 9); c.lineTo(wx - Math.cos(roll) * 9, s.y - 6 - Math.sin(roll) * 9); c.stroke();
+    }
+    c.fillStyle = '#ffd54a'; c.beginPath(); c.arc(s.x + 14, s.y - 30, 4, 0, Math.PI * 2); c.fill();
+    this.structureBar(c, s, s.y - s.h - 18);
+  }
+
+  /** The rescue cell: an iron cage, open once the general is out. */
+  private drawCell(c: CanvasRenderingContext2D, s: Structure) {
+    const x0 = s.x - s.w / 2, top = s.y - s.h - 20;
+    c.fillStyle = '#2b2a30'; c.fillRect(x0, s.y - 8, s.w, 8);
+    c.strokeStyle = '#9aa3ad'; c.lineWidth = 3;
+    c.beginPath();
+    const open = s.hp <= 0;
+    for (let k = 0; k <= 6; k++) {
+      const xx = x0 + (s.w * k) / 6;
+      if (open && k >= 2 && k <= 4) continue;
+      c.moveTo(xx, s.y - 4); c.lineTo(xx, top);
+    }
+    c.moveTo(x0, top); c.lineTo(x0 + s.w, top);
+    c.stroke();
+    if (!open) {
+      // someone inside
+      c.fillStyle = '#2d4f7a'; c.beginPath(); c.arc(s.x, s.y - 22, 9, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#f1d3b0'; c.beginPath(); c.arc(s.x, s.y - 36, 6, 0, Math.PI * 2); c.fill();
+    }
+  }
+
+  /** Capture rings and the cell's ring: ground marks with a progress arc. */
+  private drawGroundRings(c: CanvasRenderingContext2D, g: Game) {
+    for (const s of g.battle.structures) {
+      if (s.kind !== 'captureRing' && s.kind !== 'cell') continue;
+      if (s.kind === 'cell' && s.hp <= 0) continue;
+      const cx = s.x, cy = s.y;
+      const k = s.need ? clamp(s.progress / s.need, 0, 1) : 0;
+      c.save();
+      c.fillStyle = s.contested ? 'rgba(255,90,90,0.12)' : 'rgba(255,213,74,0.10)';
+      c.beginPath(); c.ellipse(cx, cy, s.ringR, s.ringR, 0, 0, Math.PI * 2); c.fill();
+      c.setLineDash([10, 8]); c.lineDashOffset = -g.time * 20;
+      c.strokeStyle = s.contested ? '#ff6b6b' : '#ffd54a'; c.lineWidth = 2;
+      c.beginPath(); c.ellipse(cx, cy, s.ringR, s.ringR, 0, 0, Math.PI * 2); c.stroke();
+      c.setLineDash([]);
+      if (k > 0) {
+        c.strokeStyle = '#4fe08a'; c.lineWidth = 5;
+        c.beginPath(); c.ellipse(cx, cy, s.ringR, s.ringR, 0, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2); c.stroke();
+      }
+      c.restore();
+    }
+  }
+
+  /** A house (timber and thatch), smoking when hurt, a burned shell when destroyed. */
+  private drawHouse(c: CanvasRenderingContext2D, s: Structure, g: Game) {
     const x0 = s.x - s.w / 2, y1 = s.y, wallH = s.h * 0.55;
     const flash = s.flash > 0;
-    if (s.kind !== 'building') return;   // gates, thrones, wagons, rings and cells are drawn in Phase 5
     c.fillStyle = 'rgba(0,0,0,0.3)';
     c.fillRect(x0 + 6, y1 - 4, s.w, 10);
     if (!s.alive) {
@@ -1567,7 +1777,7 @@ class Renderer {
 
   /** The big bar along the bottom while a boss is up. */
   private drawBossBar(c: CanvasRenderingContext2D, g: Game) {
-    const e = g.enemies.find((x) => x.alive && x.boss);
+    const e = g.enemies.find((x) => x.alive && x.boss && x.aggro && !x.fleeing);
     if (!e) return;
     const b = e.boss!;
     const w = 460, x = (VIEW_W - w) / 2, y = VIEW_H - 40;

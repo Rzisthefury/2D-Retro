@@ -649,6 +649,7 @@ class Enemy {
   target: Combatant | null = null;   // the hostile this unit is fighting
   leader = false;                    // the Dominion side's commander: while alive, the side cannot rout
   fleeing = false;                   // routed: runs for its own edge and leaves the field
+  escort = false;                    // sticks with the knight: only fights what comes near them (a freed general)
   private retargetT = 0;
 
   // an un-aggro'd enemy idles near home until you come close (garrisons later)
@@ -730,10 +731,12 @@ class Enemy {
       // routed: run for the side's edge, gone once there
       const ex = this.team === 'enemy' ? g.field.x + g.field.w : g.field.x;
       this.state = 'chase';
+      const cut = !g.battle.via(this.x, this.y, ex, this.y);
       this.moveToward(ex, this.y, dt, 1.4);
       this.facing = angleLerp(this.facing, Math.atan2(this.vy, this.vx), clamp(8 * dt, 0, 1));
       this.physics(g, dt);
-      if (Math.abs(this.x - ex) < this.radius + 6) { this.state = 'dead'; this.deathT = 1; this.hp = 0; }
+      // gone once at the edge (cut off behind a shut gate: slips away where it stands)
+      if (cut || Math.abs(this.x - ex) < this.radius + 6) { this.state = 'dead'; this.deathT = 1; this.hp = 0; }
       return;
     }
 
@@ -793,14 +796,17 @@ class Enemy {
       if (ft) { this.target = ft; return; }
     }
     let best: Combatant | null = null, bd = Infinity;
+    const bt = g.battle, k = g.player;
+    const ok = (x: number, y: number) => bt.reachable(this.x, this.y, x, y)
+      && (!this.escort || dist(x, y, k.x, k.y) < WAR.allyFollowRange + 60);
     for (const c of g.hostilesOf(this.team)) {
       const d = dist(this.x, this.y, c.x, c.y);
-      if (d < bd) { bd = d; best = c; }
+      if (d < bd && ok(c.x, c.y)) { bd = d; best = c; }
     }
-    const j = g.army.nearestHostile(this.team, this.x, this.y, WAR.eliteSight);
+    const j = g.army.nearestHostile(this.team, this.x, this.y, this.escort ? WAR.allyFollowRange * 2 : WAR.eliteSight);
     if (j >= 0) {
       const d = dist(this.x, this.y, g.army.x[j], g.army.y[j]);
-      if (d < bd) { bd = d; best = g.army.ref(j); }
+      if (d < bd && ok(g.army.x[j], g.army.y[j])) { bd = d; best = g.army.ref(j); }
     }
     const cur = this.target;
     if (cur && cur.alive && best && best !== cur
@@ -827,6 +833,10 @@ class Enemy {
   }
 
   private moveToward(tx: number, ty: number, dt: number, mult = 1) {
+    // behind walls: through the next open door (no way through: stand)
+    const w = GAME ? GAME.battle.via(this.x, this.y, tx, ty) : { x: tx, y: ty };
+    if (!w) { this.vx *= 0.8; this.vy *= 0.8; return; }
+    tx = w.x; ty = w.y;
     const ang = Math.atan2(ty - this.y, tx - this.x);
     const sp = this.speed * TUNING.enemySpeedMult * mult * (this.slow > 0 ? 0.5 : 1);
     this.vx = lerp(this.vx, Math.cos(ang) * sp, clamp(9 * dt, 0, 1));

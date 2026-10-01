@@ -317,7 +317,7 @@ const UNITS: Record<UnitType, UnitDef> = {
   spear:  { id: 'spear',  name: 'Spearman',     hp: 34,  dmg: 4, speed: 85,  reach: 44,  radius: 9,  def: 2, windup: 0.5,  cooldown: 1.0, power: 1.1, vsBeast: 2 },
   archer: { id: 'archer', name: 'Archer',       hp: 20,  dmg: 3, speed: 90,  reach: 260, radius: 8,  def: 1, windup: 0.6,  cooldown: 1.6, power: 0.9, ranged: true },
   shield: { id: 'shield', name: 'Shieldbearer', hp: 60,  dmg: 3, speed: 70,  reach: 26,  radius: 11, def: 4, windup: 0.5,  cooldown: 1.1, power: 1.4, frontGuard: true },
-  ram:    { id: 'ram',    name: 'Siege ram',    hp: 200, dmg: 0, speed: 50,  reach: 30,  radius: 20, def: 8, windup: 1.2,  cooldown: 2.0, power: 3, ignoresUnits: true },
+  ram:    { id: 'ram',    name: 'Siege ram',    hp: 200, dmg: 20, speed: 50,  reach: 30,  radius: 20, def: 8, windup: 1.2,  cooldown: 2.0, power: 3, ignoresUnits: true },
   hound:  { id: 'hound',  name: 'Thornhound',   hp: 22,  dmg: 5, speed: 160, reach: 26,  radius: 9,  def: 1, windup: 0.3,  cooldown: 0.8, power: 1, beast: true, side: 'enemy' },
 };
 const UNIT_ORDER: UnitType[] = ['sword', 'spear', 'archer', 'shield', 'ram', 'hound'];
@@ -424,10 +424,28 @@ const WAR = {
   routCheckEvery: 0.5,       // seconds between rout checks
   fadeTime: 0.6,             // battle entry fade
   deathToResults: 1.6,       // seconds after the knight falls before the results screen
-  spoilGold: { field: 120, village: 90, test: 0 } as Record<string, number>,   // x tier, on a win
+  spoilGold: { field: 120, village: 90, outpost: 90, keep: 150, castle: 220, convoy: 40, defense: 100, rescue: 120, test: 0 } as Record<string, number>,   // x tier, on a win
   spoilGoldPerKill: 1,       // plus this per Dominion unit killed
   spoilMats: [1, 3] as [number, number],   // common materials won (PLAN 12.3), x tier
   exitPushTime: 0.35,        // seconds pushing into your own edge before you leave the field
+
+  // the other battle types (Phase 5, PLAN 10.2)
+  ringRadius: 110,           // outpost capture ring
+  outpostHold: 10,           // seconds in the ring with no enemy inside (pauses, never resets)
+  gateHp: 1500,              // gate HP at tier 1 (x tier HP scale); knights do x0.3, rams x4
+  keepGateMult: 1.6,         // keep gates against the base
+  ironGateMult: 1.6,         // a castle whose keep is still the Dominion's (PLAN 10.2)
+  throneHp: 2200,            // castle throne at tier 1 (knights and units x0.3, rams can't)
+  cellRingRadius: 70,        // rescue: stand this close to the cell...
+  rescueHold: 8,             // ...for this long to free the general
+  wagonHp: 700,              // convoy wagon at tier 1
+  wagonSpeed: 30,            // px/s along the road (3600 px: about 2 min to get away)
+  wagonGap: 700,             // px between wagons in the column (the last ones enter late)
+  convoyCargo: 90,           // gold aboard per wagon, x tier: stolen on a win
+  defenseHold: 180,          // defense: hold this long with a house standing
+  captainStats: { hp: 700, attack: 14, defense: 8 },   // keep Captain (boss data, tier 1; scaled like AF bosses)
+  lordStats: { hp: 640, attack: 15, defense: 10 },     // castle Lord
+  commanderMult: 1.6,        // field / defense commander
 
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
@@ -486,7 +504,7 @@ const MENU_TABS = 4;  // gear · forge · talents · status
 const SYNTH_ROW_H = 20;  // the recipe list is long now, so its rows are tighter
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
-const CAMP_ROW = { x: 250, y0: 190, w: 460, h: 52, gap: 10 };   // the campaign stub's battle list
+const CAMP_ROW = { x: 70, y0: 170, w: 400, h: 50, gap: 8, colGap: 20, perCol: 5 };   // the campaign stub's battle list: two columns
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
 
 /* ------------------------------------------------------ hero and blade */

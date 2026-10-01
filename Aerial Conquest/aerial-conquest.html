@@ -405,7 +405,7 @@ const UNITS = {
     spear: { id: 'spear', name: 'Spearman', hp: 34, dmg: 4, speed: 85, reach: 44, radius: 9, def: 2, windup: 0.5, cooldown: 1.0, power: 1.1, vsBeast: 2 },
     archer: { id: 'archer', name: 'Archer', hp: 20, dmg: 3, speed: 90, reach: 260, radius: 8, def: 1, windup: 0.6, cooldown: 1.6, power: 0.9, ranged: true },
     shield: { id: 'shield', name: 'Shieldbearer', hp: 60, dmg: 3, speed: 70, reach: 26, radius: 11, def: 4, windup: 0.5, cooldown: 1.1, power: 1.4, frontGuard: true },
-    ram: { id: 'ram', name: 'Siege ram', hp: 200, dmg: 0, speed: 50, reach: 30, radius: 20, def: 8, windup: 1.2, cooldown: 2.0, power: 3, ignoresUnits: true },
+    ram: { id: 'ram', name: 'Siege ram', hp: 200, dmg: 20, speed: 50, reach: 30, radius: 20, def: 8, windup: 1.2, cooldown: 2.0, power: 3, ignoresUnits: true },
     hound: { id: 'hound', name: 'Thornhound', hp: 22, dmg: 5, speed: 160, reach: 26, radius: 9, def: 1, windup: 0.3, cooldown: 0.8, power: 1, beast: true, side: 'enemy' },
 };
 const UNIT_ORDER = ['sword', 'spear', 'archer', 'shield', 'ram', 'hound'];
@@ -470,10 +470,27 @@ const WAR = {
     routCheckEvery: 0.5, // seconds between rout checks
     fadeTime: 0.6, // battle entry fade
     deathToResults: 1.6, // seconds after the knight falls before the results screen
-    spoilGold: { field: 120, village: 90, test: 0 }, // x tier, on a win
+    spoilGold: { field: 120, village: 90, outpost: 90, keep: 150, castle: 220, convoy: 40, defense: 100, rescue: 120, test: 0 }, // x tier, on a win
     spoilGoldPerKill: 1, // plus this per Dominion unit killed
     spoilMats: [1, 3], // common materials won (PLAN 12.3), x tier
     exitPushTime: 0.35, // seconds pushing into your own edge before you leave the field
+    // the other battle types (Phase 5, PLAN 10.2)
+    ringRadius: 110, // outpost capture ring
+    outpostHold: 10, // seconds in the ring with no enemy inside (pauses, never resets)
+    gateHp: 1500, // gate HP at tier 1 (x tier HP scale); knights do x0.3, rams x4
+    keepGateMult: 1.6, // keep gates against the base
+    ironGateMult: 1.6, // a castle whose keep is still the Dominion's (PLAN 10.2)
+    throneHp: 2200, // castle throne at tier 1 (knights and units x0.3, rams can't)
+    cellRingRadius: 70, // rescue: stand this close to the cell...
+    rescueHold: 8, // ...for this long to free the general
+    wagonHp: 700, // convoy wagon at tier 1
+    wagonSpeed: 30, // px/s along the road (3600 px: about 2 min to get away)
+    wagonGap: 700, // px between wagons in the column (the last ones enter late)
+    convoyCargo: 90, // gold aboard per wagon, x tier: stolen on a win
+    defenseHold: 180, // defense: hold this long with a house standing
+    captainStats: { hp: 700, attack: 14, defense: 8 }, // keep Captain (boss data, tier 1; scaled like AF bosses)
+    lordStats: { hp: 640, attack: 15, defense: 10 }, // castle Lord
+    commanderMult: 1.6, // field / defense commander
     // the Phase 0 test battlefield
     testField: { w: 1920, h: 1200 },
     testFieldTier: 1,
@@ -518,7 +535,7 @@ const MENU_TABS = 4; // gear · forge · talents · status
 const SYNTH_ROW_H = 20; // the recipe list is long now, so its rows are tighter
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
-const CAMP_ROW = { x: 250, y0: 190, w: 460, h: 52, gap: 10 }; // the campaign stub's battle list
+const CAMP_ROW = { x: 70, y0: 170, w: 400, h: 50, gap: 8, colGap: 20, perCol: 5 }; // the campaign stub's battle list: two columns
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
 // How the hero and the sword are drawn. Colours still come from the
 // equipped armour and weapon tier; these pick the silhouette.
@@ -654,6 +671,8 @@ class InputState {
         this.radial = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
         /** Set on release of the touch radial: the final offset from where it opened. Game consumes it. */
         this.radialRelease = null;
+        /** Debug autopilot's stick (Game.botDrive), when it is driving. */
+        this.bot = null;
     }
     attach(target) {
         window.addEventListener('keydown', (e) => {
@@ -889,6 +908,8 @@ class InputState {
     moveVector() {
         if (this.suppressMove)
             return { x: 0, y: 0 };
+        if (this.bot)
+            return this.bot;
         if (this.stick.active && (this.stick.x || this.stick.y)) {
             return { x: this.stick.x, y: this.stick.y };
         }
@@ -1736,6 +1757,8 @@ class Army {
     pickIn(g, i, cx, cy, r) {
         const side = teamName(this.team[i]), own = this.team[i];
         const x = this.x[i], y = this.y[i], r2 = r * r;
+        // behind walls only what can be walked to counts (a garrison behind a shut gate waits)
+        const bt = g.battle, walled = bt.doors.length > 0;
         let best = null, bd = Infinity;
         this.query(cx, cy, r, (j) => {
             if (this.team[j] === own)
@@ -1743,7 +1766,7 @@ class Army {
             if ((this.x[j] - cx) ** 2 + (this.y[j] - cy) ** 2 > r2)
                 return;
             const d = (this.x[j] - x) ** 2 + (this.y[j] - y) ** 2;
-            if (d < bd) {
+            if (d < bd && (!walled || bt.reachable(x, y, this.x[j], this.y[j]))) {
                 bd = d;
                 best = this.ref(j);
             }
@@ -1752,13 +1775,13 @@ class Army {
             if (!e.alive || e.team === side || (e.x - cx) ** 2 + (e.y - cy) ** 2 > r2)
                 continue;
             const d = (e.x - x) ** 2 + (e.y - y) ** 2;
-            if (d < bd) {
+            if (d < bd && (!walled || bt.reachable(x, y, e.x, e.y))) {
                 bd = d;
                 best = e;
             }
         }
         const k = g.player;
-        if (side === 'enemy' && k.alive && (k.x - cx) ** 2 + (k.y - cy) ** 2 <= r2) {
+        if (side === 'enemy' && k.alive && (k.x - cx) ** 2 + (k.y - cy) ** 2 <= r2 && (!walled || bt.reachable(x, y, k.x, k.y))) {
             const d = (k.x - x) ** 2 + (k.y - y) ** 2;
             if (d < bd) {
                 bd = d;
@@ -1811,11 +1834,22 @@ class Army {
             this.walk[i] += dt * sp * mult * 0.12;
         };
         const halt = () => { this.vx[i] *= 0.7; this.vy[i] *= 0.7; };
+        /** Walk toward (tx, ty) through whatever doors lie between; false (and stand) if there is no way. */
+        const go = (tx, ty, mult) => {
+            const w = g.battle.via(this.x[i], this.y[i], tx, ty);
+            if (!w) {
+                halt();
+                return false;
+            }
+            steer(w.x, w.y, mult);
+            return true;
+        };
         if (this.state[i] === ST_FLEE) {
-            // routed: run for the side's own edge and leave the field there
+            // routed: run for the side's own edge and leave the field there (cut off: slip away where it stands)
             const e = this.edge[own];
-            steer(e.x, this.y[i], 1.2);
-            if (Math.abs(this.x[i] - e.x) < d.radius + 8)
+            const top = e.spread <= 40 && e.y < 80; // a top edge (convoy) rather than a side
+            const ex = top ? this.x[i] : e.x, ey = top ? e.y : this.y[i];
+            if (!go(ex, ey, 1.2) || Math.abs(this.x[i] - ex) + Math.abs(this.y[i] - ey) < d.radius + 8)
                 this.despawn(i);
             return;
         }
@@ -1827,30 +1861,31 @@ class Army {
                 const k = g.player, s = this.formationSpot(i, k.x, k.y);
                 const far = dist(this.x[i], this.y[i], s.x, s.y);
                 if (far > 18)
-                    steer(s.x, s.y, far > 120 ? Math.max(1, (TUNING.moveSpeed * 1.05) / sp) : 1);
+                    go(s.x, s.y, far > 120 ? Math.max(1, (TUNING.moveSpeed * 1.05) / sp) : 1);
                 else
                     halt();
                 return;
             }
             if (order === 'hold' && !d.ignoresUnits) {
                 if (dist(this.x[i], this.y[i], this.anchorX[i], this.anchorY[i]) > 10)
-                    steer(this.anchorX[i], this.anchorY[i], 1);
+                    go(this.anchorX[i], this.anchorY[i], 1);
                 else
                     halt();
                 return;
             }
-            // Charge with no unit in sight: go for the objective (PLAN 11.4), if there is one
-            if (own === TEAM_PLAYER && (order === 'charge' || order === 'focus' || d.ignoresUnits)) {
-                const st = g.battle.nearestStructure('player', this.x[i], this.y[i]);
+            // Charge with no unit in sight: go for the objective (PLAN 11.4), if there is one.
+            // Rams always do; so does the Dominion (in a defense: your houses).
+            if ((own === TEAM_PLAYER && (order === 'charge' || order === 'focus')) || d.ignoresUnits || own === TEAM_ENEMY) {
+                const st = g.battle.nearestStructure(teamName(own), this.x[i], this.y[i], !!d.ignoresUnits);
                 if (st) {
                     this.tgt[i] = st;
                     return;
                 }
             }
-            // otherwise march on the enemy's centre (rams always do)
+            // otherwise march on the enemy's centre (behind a shut gate: stand)
             const c = this.centre[1 - own];
             if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40)
-                steer(c.x, c.y, 1);
+                go(c.x, c.y, 1);
             else
                 halt();
             return;
@@ -1875,7 +1910,7 @@ class Army {
         }
         if (dd > reach) {
             this.state[i] = ST_ADVANCE;
-            steer(t.x, t.y, 1);
+            go(t.x, t.y, 1);
         }
         else {
             this.state[i] = ST_FIGHT;
@@ -1997,9 +2032,9 @@ class Army {
  *
  * A Battle is one fight on its own scrolling field: its layout (seeded, so
  * the same node always looks the same), the structures on it, both sides'
- * armies, and the objective that decides it. Phase 4 builds two types:
- * Field battle (rout or destroy the army) and Village raid (burn every
- * house). The test field from Phase 0 is kept as kind 'test'.
+ * armies, and the objective that decides it. The eight PLAN 10.2 types:
+ * village raid, outpost capture, keep assault, castle siege, convoy ambush,
+ * field battle, defense and rescue raid. The Phase 0 test field is kind 'test'.
  * ========================================================================= */
 /** Ground colours per territory scenery (PLAN 10.1: the look comes from the territory). */
 const SCENERY = {
@@ -2020,20 +2055,33 @@ class Structure {
         this.flash = 0;
         this.burnT = 0; // seconds since destroyed (for the ruin's embers)
         this.z = 0;
+        // capture rings and cells: seconds held, out of `need`
+        this.progress = 0;
+        this.need = 0;
+        this.ringR = 0;
+        this.contested = false; // outpost: an enemy is in the ring (progress paused)
+        // wagons: travel along the road, x-ward, until they leave
+        this.speed = 0;
+        this.escaped = false;
+        this.look = ''; // drawing variant ('tower', 'throne-room' ...)
         this.x = x;
         this.y = y;
         this.w = w;
         this.h = h;
         this.hp = this.maxHp = hp;
     }
-    get alive() { return this.hp > 0; }
+    get alive() { return this.hp > 0 && !this.escaped; }
     /** Hit radius for swing arcs and shots. */
     get radius() { return Math.max(this.w, this.h) * 0.5; }
-    get solid() { return this.alive && (this.kind === 'building' || this.kind === 'gate' || this.kind === 'wagon'); }
+    get solid() { return this.alive && (this.kind === 'building' || this.kind === 'gate' || this.kind === 'wagon' || this.kind === 'wall' || this.kind === 'throne'); }
+    /** Can units, Charge and Focus aim at it? (walls, rings and cells are not attacked) */
+    get targetable() { return this.alive && this.kind !== 'wall' && this.kind !== 'captureRing' && this.kind !== 'cell'; }
     /** Damage multiplier for a hit from `src` (PLAN 10.1). */
     mult(src) {
+        if (this.kind === 'wall' || this.kind === 'captureRing' || this.kind === 'cell')
+            return 0;
         if (this.kind === 'building')
-            return src === 'fire' ? 2 : src === 'ram' ? 1 : 1;
+            return src === 'fire' ? 2 : 1;
         if (this.kind === 'gate')
             return src === 'ram' ? 4 : 0.3;
         if (this.kind === 'throne')
@@ -2042,13 +2090,15 @@ class Structure {
     }
     /** Apply damage. Returns true if this hit destroyed it. */
     damage(g, amount) {
-        if (!this.alive || amount <= 0)
+        if (!this.alive || amount <= 0 || !this.targetable)
             return false;
         this.hp -= amount;
         this.flash = 0.12;
         if (this.hp > 0)
             return false;
         this.hp = 0;
+        if (this.kind === 'gate')
+            g.battle.navCache.clear(); // a new way through
         g.onStructureDestroyed(this);
         return true;
     }
@@ -2083,6 +2133,8 @@ class Structure {
     contains(x, y, pad = 0) {
         return x > this.x - this.w / 2 - pad && x < this.x + this.w / 2 + pad && y > this.y - this.h - pad && y < this.y + pad;
     }
+    /** The footprint's centre (aim point). */
+    get cy() { return this.y - this.h / 2; }
 }
 /** A small seeded RNG (mulberry32) so a node always lays out the same way. */
 function seededRng(seed) {
@@ -2109,47 +2161,225 @@ class Battle {
         this.startFoes = 0; // Dominion strength at the start (units + reserve + elites)
         this.startAllies = 0;
         this.spoils = { gold: 0, mats: {} };
-        this.leader = null; // the Dominion commander (field battle), or null
+        this.outcome = ''; // the results screen's line under VICTORY / DEFEAT
+        this.notes = []; // extra results lines (Lord recruitable, cargo taken ...)
+        this.leader = null; // the side's leader: commander (field / defense), captain (keep), lord (castle)
+        // per-type state
+        this.lord = null; // castle / rescue
+        this.lordFled = false; // castle: the throne fell while the Lord lived (not recruitable)
+        this.lordBeatenFirst = false; // castle: the Lord fell before the throne (recruitable, Phase 10)
+        this.captain = null; // keep
+        this.general = null; // rescue: the freed general, once out of the cell
+        this.cargo = 0; // convoy: gold aboard the wagons
+        /** Which edge is the knight's: where they start and where they leave. */
+        this.exitSide = 'left';
+        /** Where the knight starts. */
+        this.start = { x: 110, y: 0 };
+        /** Where the Dominion's units come on from. */
+        this.foeEdge = { x: 0, y: 0, spread: 0 };
+        /**
+         * Walled layouts: the enclosed areas (zone 0 is outside, zone k is rooms[k-1])
+         * and the openings between them. A door is open once its gate is down
+         * (a breach has none). Units go zone to zone through open doors; that is
+         * all the pathfinding there is.
+         */
+        this.rooms = [];
+        this.doors = [];
+        /** firstDoor results by zone pair, cleared when a gate falls. */
+        this.navCache = new Map();
         this.spec = spec;
         const size = BATTLE_SIZE[spec.kind];
         this.w = size.w;
         this.h = size.h;
+        this.start = { x: 110, y: this.h / 2 };
+        this.foeEdge = { x: this.w - 40, y: this.h / 2, spread: this.h * 0.3 };
         const rng = seededRng(spec.seed);
-        if (spec.kind === 'village')
-            this.layVillage(rng);
-        else if (spec.kind === 'field')
-            this.layField(rng);
+        switch (spec.kind) {
+            case 'village':
+                this.layVillage(rng, 'enemy');
+                break;
+            case 'defense':
+                this.layVillage(rng, 'player');
+                break;
+            case 'field':
+                this.scatter(rng, 22);
+                break;
+            case 'outpost':
+                this.layOutpost(rng);
+                break;
+            case 'keep':
+                this.layKeep(rng);
+                break;
+            case 'castle':
+                this.layCastle(rng, false);
+                break;
+            case 'rescue':
+                this.layCastle(rng, true);
+                break;
+            case 'convoy':
+                this.layConvoy(rng);
+                break;
+        }
     }
+    of(kind) { return this.structures.filter((s) => s.kind === kind); }
+    get houses() { return this.of('building'); }
+    get gates() { return this.of('gate'); }
+    get throne() { return this.of('throne')[0] || null; }
+    get ring() { return this.of('captureRing')[0] || null; }
+    get cell() { return this.of('cell')[0] || null; }
+    get wagons() { return this.of('wagon'); }
+    /** The objective line for the HUD; sieges change it as gates fall. */
     get objective() {
-        if (this.spec.kind === 'village')
-            return 'Burn every house';
-        if (this.spec.kind === 'field')
-            return 'Rout or destroy the Dominion army';
-        return 'Test field';
+        switch (this.spec.kind) {
+            case 'village': return 'Burn every house';
+            case 'field': return 'Rout or destroy the Dominion army';
+            case 'outpost': return 'Hold the ring 10 s with no enemy inside';
+            case 'keep': return this.gates.some((s) => s.alive) ? 'Break the keep gate' : `Defeat ${this.spec.captainName || 'the Captain'}`;
+            case 'castle': {
+                const [outer, inner] = this.gates;
+                if (outer && outer.alive)
+                    return 'Break the outer gate';
+                if (inner && inner.alive)
+                    return 'Break the inner gate';
+                return this.lord && this.lord.alive ? `Destroy the throne  ·  or beat ${this.spec.lordName || 'the Lord'} first to recruit` : 'Destroy the throne';
+            }
+            case 'convoy': return 'Destroy the wagons before they leave';
+            case 'defense': return 'Rout the attackers, or hold 3:00 with a house standing';
+            case 'rescue': return this.general ? `Bring ${this.spec.generalName || 'the general'} to your edge` : `Free ${this.spec.generalName || 'the general'}: hold the cell 8 s`;
+            default: return 'Test field';
+        }
     }
     /** 0..1 progress toward the objective, for the HUD bar. */
     progress(g) {
-        if (this.spec.kind === 'village') {
-            const hs = this.structures.filter((s) => s.kind === 'building');
-            return hs.length ? hs.filter((s) => !s.alive).length / hs.length : 0;
+        const frac = (xs) => xs.length ? xs.filter((s) => !s.alive).length / xs.length : 0;
+        switch (this.spec.kind) {
+            case 'village': return frac(this.houses);
+            case 'field': return this.startFoes ? clamp(1 - g.foeStrength() / this.startFoes, 0, 1) : 0;
+            case 'outpost': {
+                const r = this.ring;
+                return r ? clamp(r.progress / r.need, 0, 1) : 0;
+            }
+            case 'keep': {
+                const gt = this.gates[0];
+                return (gt && !gt.alive ? 0.5 : gt ? 0.5 * (1 - gt.hp / gt.maxHp) : 0) + (this.captain && !this.captain.alive ? 0.5 : 0);
+            }
+            case 'castle': {
+                const gs = this.gates, t = this.throne;
+                const gp = gs.reduce((s, x) => s + (1 - x.hp / x.maxHp), 0) / Math.max(1, gs.length);
+                return clamp(gp * 0.6 + (t ? (1 - t.hp / t.maxHp) * 0.4 : 0), 0, 1);
+            }
+            case 'convoy': return frac(this.wagons);
+            case 'defense': return clamp(this.time / WAR.defenseHold, 0, 1);
+            case 'rescue': {
+                const c = this.cell;
+                return this.general ? 0.5 + 0.5 * clamp(1 - (g.player.x - g.field.x) / Math.max(1, (c ? c.x : this.w) - g.field.x), 0, 1) : c ? 0.5 * clamp(c.progress / c.need, 0, 1) : 0;
+            }
+            default: return 0;
         }
-        if (this.spec.kind === 'field')
-            return this.startFoes ? clamp(1 - g.foeStrength() / this.startFoes, 0, 1) : 0;
+    }
+    /* ---------------------------------------------------------- navigation */
+    /** Which zone a point is in (0 = outside every wall). */
+    zone(x, y) {
+        for (let k = 0; k < this.rooms.length; k++) {
+            const r = this.rooms[k];
+            if (x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1)
+                return k + 1;
+        }
         return 0;
     }
-    /** Village raid: houses in the far half, a road through them, crops and fences. */
-    layVillage(rng) {
+    /** The first open door on the way from zone a to zone b, or null if b can't be reached. */
+    firstDoor(a, b) {
+        if (a === b)
+            return null;
+        const key = a * 64 + b;
+        let d = this.navCache.get(key);
+        if (d === undefined) {
+            d = this.searchDoor(a, b);
+            this.navCache.set(key, d);
+        }
+        return d;
+    }
+    searchDoor(a, b) {
+        const prev = new Map();
+        const seen = new Set([a]);
+        const queue = [a];
+        while (queue.length) {
+            const z = queue.shift();
+            for (const d of this.doors) {
+                if (d.gate && d.gate.alive)
+                    continue;
+                const o = d.za === z ? d.zb : d.zb === z ? d.za : -1;
+                if (o < 0 || seen.has(o))
+                    continue;
+                seen.add(o);
+                prev.set(o, d);
+                queue.push(o);
+                if (o === b) {
+                    // walk back to the door leaving zone a
+                    let cur = b, door = d;
+                    while (true) {
+                        door = prev.get(cur);
+                        const from = door.za === cur ? door.zb : door.za;
+                        if (from === a)
+                            return door;
+                        cur = from;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+    /** Can something at (fx, fy) walk to (tx, ty)? */
+    reachable(fx, fy, tx, ty) {
+        if (!this.doors.length)
+            return true;
+        const a = this.zone(fx, fy), b = this.zone(tx, ty);
+        return a === b || this.firstDoor(a, b) !== null;
+    }
+    /** Can something at (fx, fy) get at this combatant? Gates are hit from either side. */
+    canReach(fx, fy, c) {
+        if (c instanceof Structure && c.kind === 'gate')
+            return true;
+        return this.reachable(fx, fy, c.x, c.y);
+    }
+    /**
+     * Where to walk next on the way from (fx, fy) to (tx, ty): the target itself
+     * in the same zone, else the near side of the next open door, then its far
+     * side. Null if there is no way through.
+     */
+    via(fx, fy, tx, ty) {
+        if (!this.doors.length)
+            return { x: tx, y: ty };
+        const a = this.zone(fx, fy), b = this.zone(tx, ty);
+        if (a === b)
+            return { x: tx, y: ty };
+        // a target in a doorway (a gate) is reached from either side
+        for (const dr of this.doors) {
+            if ((dr.za === a || dr.zb === a) && tx >= Math.min(dr.a.x, dr.b.x) && tx <= Math.max(dr.a.x, dr.b.x) && Math.abs(ty - dr.a.y) <= dr.halfGap + 24)
+                return { x: tx, y: ty };
+        }
+        const d = this.firstDoor(a, b);
+        if (!d)
+            return null;
+        const near = d.za === a ? d.a : d.b, far = d.za === a ? d.b : d.a;
+        // in the doorway (or on its near step): through to the far side
+        const onStep = (fx - near.x) ** 2 + (fy - near.y) ** 2 < 28 * 28;
+        const inGap = fx > Math.min(near.x, far.x) && fx < Math.max(near.x, far.x) && Math.abs(fy - near.y) < d.halfGap;
+        return onStep || inGap ? far : near;
+    }
+    /* -------------------------------------------------------------- layouts */
+    /** Village raid / defense: houses in the far half (defense: the middle), a road through them, crops and fences. */
+    layVillage(rng, owner) {
         const n = this.spec.houses ?? 4;
         const cy = this.h / 2;
         this.decor.push({ kind: 'road', x: 0, y: cy - 22, w: this.w, h: 44 });
-        // houses on both sides of the road, in the right ~45% of the field
-        const x0 = this.w * 0.52, x1 = this.w * 0.88;
+        const x0 = owner === 'enemy' ? this.w * 0.52 : this.w * 0.3, x1 = owner === 'enemy' ? this.w * 0.88 : this.w * 0.62;
         for (let k = 0; k < n; k++) {
             const x = x0 + (x1 - x0) * ((k + 0.5) / n) + (rng() - 0.5) * 60;
             const above = k % 2 === 0;
             const y = above ? cy - 70 - rng() * 120 : cy + 150 + rng() * 120;
             const hp = Math.round(WAR.houseHp * TIER_SCALING.hpMultiplier(this.spec.tier));
-            this.structures.push(new Structure('building', 'enemy', x, y, 112, 78, hp, `House ${k + 1}`));
+            this.structures.push(new Structure('building', owner, x, y, 112, 78, hp, `House ${k + 1}`));
         }
         this.decor.push({ kind: 'well', x: (x0 + x1) / 2 + 40, y: cy - 34, w: 30, h: 30 });
         for (let k = 0; k < 4; k++) {
@@ -2159,27 +2389,127 @@ class Battle {
         for (let k = 0; k < 6; k++) {
             this.decor.push({ kind: 'fence', x: x0 - 60 + rng() * (x1 - x0 + 80), y: cy + (k % 2 ? 1 : -1) * (40 + rng() * 260), w: 90 + rng() * 60, h: 6 });
         }
+        if (owner === 'player')
+            this.start = { x: (x0 + x1) / 2, y: cy };
         this.scatter(rng, 14);
     }
-    /** Field battle: open ground, a few rocks and bushes. */
-    layField(rng) { this.scatter(rng, 22); }
-    scatter(rng, n) {
+    /** Outpost: a watchtower on a rise, its capture ring beside it. */
+    layOutpost(rng) {
+        const tx = this.w * 0.68, ty = this.h / 2;
+        this.decor.push({ kind: 'rise', x: tx, y: ty, w: 520, h: 360 });
+        const tower = new Structure('wall', 'enemy', tx + 90, ty - 30, 70, 70, 1e9, 'Tower');
+        tower.look = 'tower';
+        this.structures.push(tower);
+        const ring = new Structure('captureRing', 'enemy', tx - 60, ty + 60, 10, 10, 1, 'Capture ring');
+        ring.ringR = WAR.ringRadius;
+        ring.need = WAR.outpostHold;
+        this.structures.push(ring);
+        this.scatter(rng, 18);
+    }
+    /** Keep: a square fort of walls with one gate on the west side; the Captain inside. */
+    layKeep(rng) {
+        const x0 = this.w * 0.5, x1 = this.w * 0.82, y0 = this.h * 0.28, y1 = this.h * 0.72, t = 26, gap = 110;
+        const cy = (y0 + y1) / 2;
+        this.decor.push({ kind: 'stone', x: (x0 + x1) / 2, y: cy, w: x1 - x0, h: y1 - y0 });
+        this.wallV(x0, y0, cy - gap / 2, t);
+        this.wallV(x0, cy + gap / 2, y1, t);
+        this.wallV(x1, y0, y1, t);
+        this.wallH(x0, x1, y0, t);
+        this.wallH(x0, x1, y1, t);
+        const gateHp = Math.round(WAR.gateHp * WAR.keepGateMult * TIER_SCALING.hpMultiplier(this.spec.tier));
+        this.foeEdge = { x: x1 - 60, y: cy, spread: 60 }; // the barracks: reinforcements come from inside
+        const gate = new Structure('gate', 'enemy', x0, cy + gap / 2, t + 8, gap, gateHp, 'Keep gate');
+        this.structures.push(gate);
+        this.rooms.push({ x0, y0, x1, y1 });
+        this.doors.push({ a: { x: x0 - 60, y: cy }, b: { x: x0 + 60, y: cy }, za: 0, zb: 1, gate, halfGap: gap / 2 - 14 });
+        this.decor.push({ kind: 'road', x: 0, y: cy - 22, w: x0, h: 44 });
+        this.scatter(rng, 12);
+    }
+    /**
+     * Castle (PLAN 10.2): outer gate -> courtyard -> inner gate -> throne room.
+     * Rescue raids use the same castle with a cell in the throne room's north
+     * wing and a breach in each wall's north end (the way in without taking it).
+     */
+    layCastle(rng, rescue) {
+        const t = 30, gap = 130, cy = this.h / 2;
+        const ox = this.w * 0.3, ix = this.w * 0.62, top = 60, bot = this.h - 60;
+        const breach = rescue ? 150 : 0; // a gap at each wall's north end
+        this.decor.push({ kind: 'stone', x: (ox + this.w) / 2, y: cy, w: this.w - ox, h: bot - top });
+        this.decor.push({ kind: 'carpet', x: (ix + this.w) / 2 + 60, y: cy, w: this.w - ix - 200, h: 70 });
+        this.wallV(ox, top + breach, cy - gap / 2, t);
+        this.wallV(ox, cy + gap / 2, bot, t);
+        this.wallV(ix, top + breach, cy - gap / 2, t);
+        this.wallV(ix, cy + gap / 2, bot, t);
+        this.wallH(ox, this.w, top, t);
+        this.wallH(ox, this.w, bot, t);
+        const iron = this.spec.ironGate ? WAR.ironGateMult : 1;
+        const gateHp = Math.round(WAR.gateHp * iron * TIER_SCALING.hpMultiplier(this.spec.tier));
+        const outer = new Structure('gate', 'enemy', ox, cy + gap / 2, t + 8, gap, gateHp, 'Outer gate');
+        const inner = new Structure('gate', 'enemy', ix, cy + gap / 2, t + 8, gap, gateHp, 'Inner gate');
+        this.structures.push(outer, inner);
+        this.rooms.push({ x0: ox, y0: top, x1: ix, y1: bot }, { x0: ix, y0: top, x1: this.w, y1: bot });
+        this.doors.push({ a: { x: ox - 60, y: cy }, b: { x: ox + 60, y: cy }, za: 0, zb: 1, gate: outer, halfGap: gap / 2 - 14 });
+        this.doors.push({ a: { x: ix - 60, y: cy }, b: { x: ix + 60, y: cy }, za: 1, zb: 2, gate: inner, halfGap: gap / 2 - 14 });
+        const thr = new Structure('throne', 'enemy', this.w - 220, cy + 30, 70, 60, Math.round(WAR.throneHp * TIER_SCALING.hpMultiplier(this.spec.tier)), 'Throne');
+        this.structures.push(thr);
+        this.decor.push({ kind: 'road', x: 0, y: cy - 22, w: ox, h: 44 });
+        if (rescue) {
+            // the cell sits in the throne room's north wing
+            const cell = new Structure('cell', 'enemy', ix + 260, top + 150, 60, 50, 1, 'Cell');
+            cell.ringR = WAR.cellRingRadius;
+            cell.need = WAR.rescueHold;
+            this.structures.push(cell);
+            // in through the breaches, back out the same way
+            const by = top + t / 2 + (breach - t / 2) / 2;
+            this.doors.push({ a: { x: ox - 60, y: by }, b: { x: ox + 60, y: by }, za: 0, zb: 1, gate: null, halfGap: (breach - t / 2) / 2 - 14 });
+            this.doors.push({ a: { x: ix - 60, y: by }, b: { x: ix + 60, y: by }, za: 1, zb: 2, gate: null, halfGap: (breach - t / 2) / 2 - 14 });
+        }
+        this.scatter(rng, 10, ox - 40);
+    }
+    /** Convoy: a long road; wagons start at the west end heading east; you wait on the north verge. */
+    layConvoy(rng) {
+        const ry = this.h * 0.55;
+        this.decor.push({ kind: 'road', x: 0, y: ry - 30, w: this.w, h: 60 });
+        const n = this.spec.wagons ?? 2;
+        const hp = Math.round(WAR.wagonHp * TIER_SCALING.hpMultiplier(this.spec.tier));
         for (let k = 0; k < n; k++) {
-            const x = 120 + rng() * (this.w - 240), y = 80 + rng() * (this.h - 160);
-            if (Math.abs(y - this.h / 2) < 60 && this.spec.kind === 'village')
+            // a column: the later wagons roll onto the field one after another
+            const wg = new Structure('wagon', 'enemy', 260 - k * WAR.wagonGap, ry + 20, 74, 44, hp, `Wagon ${k + 1}`);
+            wg.speed = WAR.wagonSpeed;
+            this.structures.push(wg);
+        }
+        this.cargo = WAR.convoyCargo * this.spec.tier * n;
+        this.exitSide = 'top';
+        this.start = { x: this.w * 0.3, y: 70 };
+        this.foeEdge = { x: 60, y: ry, spread: 120 };
+        this.scatter(rng, 26);
+    }
+    wallV(x, y0, y1, t) {
+        if (y1 - y0 < 4)
+            return;
+        this.structures.push(new Structure('wall', 'enemy', x, y1, t, y1 - y0, 1e9, 'Wall'));
+    }
+    wallH(x0, x1, y, t) {
+        this.structures.push(new Structure('wall', 'enemy', (x0 + x1) / 2, y + t / 2, x1 - x0, t, 1e9, 'Wall'));
+    }
+    scatter(rng, n, maxX = this.w) {
+        for (let k = 0; k < n; k++) {
+            const x = 120 + rng() * (Math.min(this.w, maxX) - 240), y = 80 + rng() * (this.h - 160);
+            if (Math.abs(y - this.h / 2) < 60 && (this.spec.kind === 'village' || this.spec.kind === 'defense'))
                 continue; // keep the road clear
-            if (this.structures.some((s) => Math.abs(s.x - x) < s.w && Math.abs(s.y - s.h / 2 - y) < s.h))
+            if (this.structures.some((s) => Math.abs(s.x - x) < s.w / 2 + 30 && y > s.y - s.h - 30 && y < s.y + 30))
                 continue;
             this.decor.push({ kind: rng() < 0.5 ? 'rock' : 'bush', x, y, w: 16 + rng() * 18, h: 10 + rng() * 10 });
         }
     }
-    /** The nearest live structure hostile to `side`, or null. */
-    nearestStructure(side, x, y) {
+    /* --------------------------------------------------------------- queries */
+    /** The nearest live structure hostile to `side` that units may attack and can get at, or null. */
+    nearestStructure(side, x, y, ram = false) {
         let best = null, bd = Infinity;
         for (const s of this.structures) {
-            if (!s.alive || s.team === side || s.kind === 'captureRing')
+            if (!s.targetable || s.team === side || !this.canReach(x, y, s) || (ram && s.mult('ram') <= 0))
                 continue;
-            const d = (s.x - x) ** 2 + (s.y - s.h / 2 - y) ** 2;
+            const d = (s.x - x) ** 2 + (s.cy - y) ** 2;
             if (d < bd) {
                 bd = d;
                 best = s;
@@ -2199,9 +2529,15 @@ const BATTLE_SIZE = {
     test: { w: 1920, h: 1200 },
     field: { w: 2800, h: 1400 },
     village: { w: 2400, h: 1400 },
+    outpost: { w: 2000, h: 1200 },
+    keep: { w: 2000, h: 1600 },
+    castle: { w: 3200, h: 1800 },
+    convoy: { w: 3600, h: 1000 },
+    defense: { w: 2400, h: 1400 }, // the node's own layout: the village, roles reversed
+    rescue: { w: 3200, h: 1800 }, // the castle layout
 };
 /* ------------------------------------------------- battles on the stub map */
-// Until the campaign map exists (Phase 6), the stub offers these. Tier 1.
+// Until the campaign map exists (Phase 6), the stub offers one of each type.
 function testSpec() {
     return { kind: 'test', name: 'Test field', tier: WAR.testFieldTier, scenery: 'forest', seed: 1, foes: {}, foeElites: [], commander: null, allies: {} };
 }
@@ -2218,6 +2554,57 @@ function fieldSpec() {
         kind: 'field', name: 'Dominion column', tier: 1, scenery: 'coast', seed: 1337 + 23,
         foes: { sword: 28, spear: 14, archer: 18, shield: 10 }, foeElites: ['shade', 'flyer'], commander: 'bruiser',
         allies: { sword: 10, spear: 6, archer: 6, shield: 4 },
+    };
+}
+/** Outpost capture: a watchtower and its garrison. */
+function outpostSpec() {
+    return {
+        kind: 'outpost', name: 'Greywatch Tower', tier: 1, scenery: 'forest', seed: 1337 + 31,
+        foes: { sword: 20, spear: 10, archer: 12, shield: 8 }, foeElites: ['shade', 'caster'], commander: null, allies: {},
+        reinforce: { sword: 30, spear: 14, archer: 16, shield: 10 }, // the tower's signal brings the column
+    };
+}
+/** Keep assault: a walled fort, one gate, a Captain. */
+function keepSpec() {
+    return {
+        kind: 'keep', name: 'Thornwall Keep', tier: 1, scenery: 'ruins', seed: 1337 + 41, captainName: 'Captain Varn',
+        foes: { sword: 24, spear: 12, archer: 12, shield: 10 }, foeElites: ['caster', 'shade'], commander: null,
+        reinforce: { sword: 20, spear: 10, archer: 10, shield: 8 }, // the keep's barracks
+        allies: { sword: 8, spear: 4, archer: 4, shield: 4, ram: 1 },
+    };
+}
+/** Castle siege: two gates and a throne; the keep still stands, so the gate is iron. */
+function castleSpec() {
+    return {
+        kind: 'castle', name: 'Castle Hollin', tier: 2, scenery: 'forest', seed: 1337 + 51, ironGate: true, lordName: 'Lord Edric Hollin',
+        foes: { sword: 32, spear: 16, archer: 20, shield: 12 }, foeElites: ['shade', 'caster'], commander: null,
+        reinforce: { sword: 16, spear: 8, archer: 10, shield: 6 }, // the throne room's guard
+        allies: { sword: 16, spear: 8, archer: 10, shield: 6, ram: 2 },
+    };
+}
+/** Convoy ambush: two wagons of gold and their escort. */
+function convoySpec() {
+    return {
+        kind: 'convoy', name: 'Dominion convoy', tier: 1, scenery: 'coast', seed: 1337 + 61, wagons: 3,
+        foes: { sword: 12, spear: 6, archer: 6, shield: 4 }, foeElites: ['shade'], commander: null, allies: {},
+        reinforce: { sword: 16, spear: 8, archer: 8, shield: 6 }, // the rearguard, walking behind the wagons
+    };
+}
+/** Defense: the Dominion comes for your village, rams and all. */
+function defenseSpec() {
+    return {
+        kind: 'defense', name: 'Millbrook (held)', tier: 1, scenery: 'forest', seed: 1337 + 71, houses: 3,
+        foes: { sword: 40, spear: 20, archer: 22, shield: 14, ram: 3 }, foeElites: ['shade', 'flyer'], commander: 'bruiser',
+        reinforce: { sword: 50, spear: 25, archer: 25, shield: 16, ram: 2 },
+        allies: { sword: 10, spear: 6, archer: 8, shield: 4 },
+    };
+}
+/** Rescue raid: a general caged in a castle's north wing. */
+function rescueSpec() {
+    return {
+        kind: 'rescue', name: 'Castle Hollin (cells)', tier: 2, scenery: 'forest', seed: 1337 + 81, lordName: 'Lord Edric Hollin', generalName: 'Sir Aldric',
+        foes: { sword: 24, spear: 12, archer: 14, shield: 10 }, foeElites: ['shade', 'caster'], commander: null, allies: {},
+        reinforce: { sword: 20, spear: 10, archer: 10, shield: 8 },
     };
 }
 /** Counts by type -> a shuffled list of unit types. */
@@ -3721,6 +4108,7 @@ class Enemy {
         this.target = null; // the hostile this unit is fighting
         this.leader = false; // the Dominion side's commander: while alive, the side cannot rout
         this.fleeing = false; // routed: runs for its own edge and leaves the field
+        this.escort = false; // sticks with the knight: only fights what comes near them (a freed general)
         this.retargetT = 0;
         // an un-aggro'd enemy idles near home until you come close (garrisons later)
         this.aggro = true;
@@ -3796,10 +4184,12 @@ class Enemy {
             // routed: run for the side's edge, gone once there
             const ex = this.team === 'enemy' ? g.field.x + g.field.w : g.field.x;
             this.state = 'chase';
+            const cut = !g.battle.via(this.x, this.y, ex, this.y);
             this.moveToward(ex, this.y, dt, 1.4);
             this.facing = angleLerp(this.facing, Math.atan2(this.vy, this.vx), clamp(8 * dt, 0, 1));
             this.physics(g, dt);
-            if (Math.abs(this.x - ex) < this.radius + 6) {
+            // gone once at the edge (cut off behind a shut gate: slips away where it stands)
+            if (cut || Math.abs(this.x - ex) < this.radius + 6) {
                 this.state = 'dead';
                 this.deathT = 1;
                 this.hp = 0;
@@ -3875,17 +4265,20 @@ class Enemy {
             }
         }
         let best = null, bd = Infinity;
+        const bt = g.battle, k = g.player;
+        const ok = (x, y) => bt.reachable(this.x, this.y, x, y)
+            && (!this.escort || dist(x, y, k.x, k.y) < WAR.allyFollowRange + 60);
         for (const c of g.hostilesOf(this.team)) {
             const d = dist(this.x, this.y, c.x, c.y);
-            if (d < bd) {
+            if (d < bd && ok(c.x, c.y)) {
                 bd = d;
                 best = c;
             }
         }
-        const j = g.army.nearestHostile(this.team, this.x, this.y, WAR.eliteSight);
+        const j = g.army.nearestHostile(this.team, this.x, this.y, this.escort ? WAR.allyFollowRange * 2 : WAR.eliteSight);
         if (j >= 0) {
             const d = dist(this.x, this.y, g.army.x[j], g.army.y[j]);
-            if (d < bd) {
+            if (d < bd && ok(g.army.x[j], g.army.y[j])) {
                 bd = d;
                 best = g.army.ref(j);
             }
@@ -3919,6 +4312,15 @@ class Enemy {
         this.facing = angleLerp(this.facing, want, clamp(rate * dt, 0, 1));
     }
     moveToward(tx, ty, dt, mult = 1) {
+        // behind walls: through the next open door (no way through: stand)
+        const w = GAME ? GAME.battle.via(this.x, this.y, tx, ty) : { x: tx, y: ty };
+        if (!w) {
+            this.vx *= 0.8;
+            this.vy *= 0.8;
+            return;
+        }
+        tx = w.x;
+        ty = w.y;
         const ang = Math.atan2(ty - this.y, tx - this.x);
         const sp = this.speed * TUNING.enemySpeedMult * mult * (this.slow > 0 ? 0.5 : 1);
         this.vx = lerp(this.vx, Math.cos(ang) * sp, clamp(9 * dt, 0, 1));
@@ -4786,20 +5188,38 @@ class Renderer {
     /** Battle HUD (PLAN 13): the objective, a progress bar, and an exit marker on your edge. */
     drawObjective(c, g) {
         const b = g.battle;
-        const w = 300, x = (VIEW_W - w) / 2, y = 14;
+        const text = b.objective.toUpperCase();
         c.save();
+        // as wide as the line needs, between the HP bars and the battle name (measured, never guessed: PLAN 16)
+        let size = 12;
+        c.font = `800 ${size}px ui-monospace, Menlo, Consolas, monospace`;
+        while (size > 9 && c.measureText(text).width > 352) {
+            size--;
+            c.font = `800 ${size}px ui-monospace, Menlo, Consolas, monospace`;
+        }
+        const w = clamp(c.measureText(text).width + 28, 300, 380), x = (VIEW_W - w) / 2, y = 14;
         c.fillStyle = 'rgba(10,14,28,0.72)';
         this.roundRect(c, x, y, w, 36, 8);
         c.fill();
         c.textAlign = 'center';
-        c.font = '800 12px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = '#ffd54a';
-        c.fillText(b.objective.toUpperCase(), VIEW_W / 2, y + 15);
+        c.fillText(text, VIEW_W / 2, y + 15);
         this.bar(c, x + 14, y + 22, w - 28, 6, b.progress(g), '#ff9d4a', 'rgba(0,0,0,0.55)');
         c.restore();
         // the way out: your own edge, while you are near it
-        const p = g.player, sx0 = g.field.x - g.camX;
-        if (sx0 > -40 && p.x - g.field.x < 400) {
+        const p = g.player, sx0 = g.field.x - g.camX, sy0 = g.field.y - g.camY;
+        if (b.exitSide === 'top') {
+            if (sy0 > -40 && p.y - g.field.y < 300) {
+                c.save();
+                c.globalAlpha = 0.55 + Math.sin(g.time * 4) * 0.2;
+                c.fillStyle = '#8fb4ff';
+                c.font = '800 11px ui-monospace, Menlo, Consolas, monospace';
+                c.textAlign = 'center';
+                c.fillText('\u25B2 LEAVE', clamp(p.x - g.camX, 120, VIEW_W - 120), Math.max(70, sy0 + 66));
+                c.restore();
+            }
+        }
+        else if (sx0 > -40 && p.x - g.field.x < 400) {
             c.save();
             c.globalAlpha = 0.55 + Math.sin(g.time * 4) * 0.2;
             c.fillStyle = '#8fb4ff';
@@ -4825,10 +5245,10 @@ class Renderer {
         c.fillText(title, VIEW_W / 2, 92);
         c.font = '700 14px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.text;
-        const sub = b.result === 'win'
-            ? (b.spec.kind === 'village' ? `${b.spec.name} burned — the node is yours (ownership arrives with the map)` : b.routed ? 'The Dominion army routed' : 'The Dominion army is destroyed')
-            : b.result === 'lose' ? 'You fell. Back to camp — the warband is lost, the node unchanged.' : 'You left the field. The attack is abandoned.';
-        c.fillText(sub, VIEW_W / 2, 120);
+        c.fillText(b.outcome, VIEW_W / 2, 120);
+        c.fillStyle = '#c7b8ff';
+        c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+        b.notes.forEach((n, k) => c.fillText(n, VIEW_W / 2, 140 + k * 16));
         const left = VIEW_W / 2 - 250, right = VIEW_W / 2 + 30;
         const row = (x, y, k, v, vc = PAL.text) => {
             c.textAlign = 'left';
@@ -4840,7 +5260,7 @@ class Renderer {
             c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
             c.fillText(v, x + 220, y);
         };
-        let y = 170;
+        let y = 170 + b.notes.length * 12;
         row(left, y, 'Time', fmtTime(b.time));
         y += 22;
         row(left, y, 'Killed by you', String(b.kills.byKnight));
@@ -4853,7 +5273,7 @@ class Renderer {
         y += 22;
         row(left, y, 'Your troops lost', String(b.losses.troops), b.losses.troops ? '#ff9d9d' : PAL.text);
         y += 22;
-        y = 170;
+        y = 170 + b.notes.length * 12;
         c.textAlign = 'left';
         c.fillStyle = '#ffd54a';
         c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
@@ -4897,23 +5317,23 @@ class Renderer {
         c.fillText(`treasury ${g.player.gold} gold  ·  warband ${g.warbandCap()}`, VIEW_W / 2, 140);
         const rows = g.campaignRows();
         for (let i = 0; i < rows.length; i++) {
-            const y = CAMP_ROW.y0 + i * (CAMP_ROW.h + CAMP_ROW.gap);
+            const { x, y } = g.campRowAt(i);
             const on = i === g.campIndex;
             c.fillStyle = on ? 'rgba(80,140,255,0.26)' : 'rgba(19,23,40,0.75)';
-            this.roundRect(c, CAMP_ROW.x, y, CAMP_ROW.w, CAMP_ROW.h, 8);
+            this.roundRect(c, x, y, CAMP_ROW.w, CAMP_ROW.h, 8);
             c.fill();
             c.strokeStyle = on ? '#6f9bff' : 'rgba(120,150,220,0.22)';
             c.lineWidth = on ? 2 : 1.4;
-            this.roundRect(c, CAMP_ROW.x, y, CAMP_ROW.w, CAMP_ROW.h, 8);
+            this.roundRect(c, x, y, CAMP_ROW.w, CAMP_ROW.h, 8);
             c.stroke();
             c.textAlign = 'left';
-            c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
+            c.font = '800 14px ui-monospace, Menlo, Consolas, monospace';
             c.fillStyle = on ? '#ffffff' : PAL.text;
-            c.fillText(rows[i].label, CAMP_ROW.x + 18, y + (rows[i].sub ? 22 : 31));
+            c.fillText(rows[i].label, x + 16, y + (rows[i].sub ? 21 : 30));
             if (rows[i].sub) {
                 c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
                 c.fillStyle = PAL.dim;
-                c.fillText(rows[i].sub, CAMP_ROW.x + 18, y + 40);
+                c.fillText(rows[i].sub, x + 16, y + 39);
             }
         }
         c.textAlign = 'center';
@@ -4974,6 +5394,7 @@ class Renderer {
         this.pal = SCENERY[g.battle.spec.scenery];
         this.paintField(c, g.field, cam, VIEW_W, VIEW_H);
         this.drawDecor(c, g, cam);
+        this.drawGroundRings(c, g);
     }
     /** Paint the field (and the treeline around it) for the view rectangle at `cam`, `vw` x `vh`. */
     paintField(c, f, cam, vw, vh) {
@@ -5079,6 +5500,48 @@ class Renderer {
             }
             if (!vis(d))
                 continue;
+            if (d.kind === 'stone') {
+                // paving inside walls: flagstones, only the part on screen
+                const x0 = Math.max(d.x - d.w / 2, cam.x - 10), x1 = Math.min(d.x + d.w / 2, cam.x + VIEW_W + 10);
+                const y0 = Math.max(d.y - d.h / 2, cam.y - 10), y1 = Math.min(d.y + d.h / 2, cam.y + VIEW_H + 10);
+                c.fillStyle = '#6e6a63';
+                c.fillRect(x0, y0, x1 - x0, y1 - y0);
+                c.strokeStyle = 'rgba(40,38,34,0.35)';
+                c.lineWidth = 1;
+                c.beginPath();
+                const gy0 = d.y - d.h / 2, gx0 = d.x - d.w / 2;
+                for (let yy = gy0 + Math.ceil((y0 - gy0) / 32) * 32; yy < y1; yy += 32) {
+                    c.moveTo(x0, yy);
+                    c.lineTo(x1, yy);
+                }
+                for (let yy = gy0 + Math.floor((y0 - gy0) / 32) * 32; yy < y1; yy += 32) {
+                    const off = (Math.round((yy - gy0) / 32) % 2) * 24;
+                    for (let xx = gx0 + off + Math.floor((x0 - gx0 - off) / 48) * 48; xx < x1; xx += 48) {
+                        c.moveTo(xx, Math.max(yy, y0));
+                        c.lineTo(xx, Math.min(yy + 32, y1));
+                    }
+                }
+                c.stroke();
+                continue;
+            }
+            if (d.kind === 'rise') {
+                c.fillStyle = 'rgba(255,255,220,0.07)';
+                c.beginPath();
+                c.ellipse(d.x, d.y, d.w / 2, d.h / 2, 0, 0, Math.PI * 2);
+                c.fill();
+                c.beginPath();
+                c.ellipse(d.x + 10, d.y - 8, d.w * 0.38, d.h * 0.36, 0, 0, Math.PI * 2);
+                c.fill();
+                continue;
+            }
+            if (d.kind === 'carpet') {
+                c.fillStyle = '#6e1f2a';
+                c.fillRect(d.x - d.w / 2, d.y - d.h / 2, d.w, d.h);
+                c.strokeStyle = '#d4a73a';
+                c.lineWidth = 3;
+                c.strokeRect(d.x - d.w / 2 + 5, d.y - d.h / 2 + 5, d.w - 10, d.h - 10);
+                continue;
+            }
             if (d.kind === 'crops') {
                 c.fillStyle = '#6b5a33';
                 c.fillRect(d.x - d.w / 2, d.y - d.h / 2, d.w, d.h);
@@ -5145,12 +5608,279 @@ class Renderer {
             }
         }
     }
-    /** A house (timber and thatch), smoking when hurt, a burned shell when destroyed. */
+    /** Structures: houses, walls and towers, gates, the throne, wagons, the rescue cell (rings are ground marks). */
     drawStructure(c, s, g) {
+        switch (s.kind) {
+            case 'building':
+                this.drawHouse(c, s, g);
+                return;
+            case 'wall':
+                if (s.look === 'tower')
+                    this.drawTower(c, s);
+                else
+                    this.drawWall(c, s);
+                return;
+            case 'gate':
+                this.drawGate(c, s, g);
+                return;
+            case 'throne':
+                this.drawThrone(c, s, g);
+                return;
+            case 'wagon':
+                this.drawWagon(c, s, g);
+                return;
+            case 'cell':
+                this.drawCell(c, s);
+                return;
+            default: return;
+        }
+    }
+    /** An HP bar over a hurt structure. */
+    structureBar(c, s, top, col = '#ff9d4a') {
+        if (!s.alive || s.hp >= s.maxHp)
+            return;
+        const w = Math.max(60, Math.min(110, s.w));
+        c.fillStyle = 'rgba(0,0,0,0.6)';
+        c.fillRect(s.x - w / 2, top - 12, w, 6);
+        c.fillStyle = col;
+        c.fillRect(s.x - w / 2, top - 12, w * (s.hp / s.maxHp), 6);
+    }
+    /** Stone wall: a footprint seen from above, its south face showing. */
+    drawWall(c, s) {
+        const H = 24, x0 = s.x - s.w / 2, y0 = s.y - s.h;
+        c.fillStyle = '#5b5a60';
+        c.fillRect(x0, s.y - H, s.w, H); // south face
+        c.fillStyle = '#8d8b92';
+        c.fillRect(x0, y0 - H, s.w, s.h); // top
+        c.strokeStyle = 'rgba(40,40,46,0.6)';
+        c.lineWidth = 1;
+        c.beginPath();
+        for (let yy = s.y - H + 8; yy < s.y; yy += 8) {
+            c.moveTo(x0, yy);
+            c.lineTo(x0 + s.w, yy);
+        }
+        c.stroke();
+        // crenellations along the top
+        c.fillStyle = '#a7a5ad';
+        if (s.w > s.h)
+            for (let xx = x0 + 4; xx < x0 + s.w - 8; xx += 18)
+                c.fillRect(xx, y0 - H - 5, 9, 6);
+        else
+            for (let yy = y0 - H + 4; yy < s.y - H - 8; yy += 18)
+                c.fillRect(x0 + s.w / 2 - 4, yy, 8, 9);
+        c.strokeStyle = '#3d3c42';
+        c.lineWidth = 2;
+        c.strokeRect(x0, y0 - H, s.w, s.h + H);
+    }
+    /** The outpost's watchtower: a round stone tower with a banner. */
+    drawTower(c, s) {
+        const r = s.w / 2, cy = s.y - s.h / 2, H = 70;
+        c.fillStyle = 'rgba(0,0,0,0.3)';
+        c.beginPath();
+        c.ellipse(s.x + 8, cy + 6, r + 6, r * 0.7, 0, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = '#5b5a60';
+        c.fillRect(s.x - r, cy - H, r * 2, H);
+        c.beginPath();
+        c.ellipse(s.x, cy, r, r * 0.55, 0, 0, Math.PI);
+        c.fill();
+        c.fillStyle = '#8d8b92';
+        c.beginPath();
+        c.ellipse(s.x, cy - H, r, r * 0.55, 0, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = '#3d3c42';
+        c.beginPath();
+        c.ellipse(s.x, cy - H, r - 8, r * 0.4, 0, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = '#1b1a20';
+        c.fillRect(s.x - 6, cy - H * 0.6, 12, 18);
+        c.strokeStyle = '#6b4a2b';
+        c.lineWidth = 3;
+        c.beginPath();
+        c.moveTo(s.x, cy - H);
+        c.lineTo(s.x, cy - H - 46);
+        c.stroke();
+        c.fillStyle = PAL.dominion;
+        c.beginPath();
+        c.moveTo(s.x, cy - H - 46);
+        c.lineTo(s.x + 30, cy - H - 38);
+        c.lineTo(s.x, cy - H - 30);
+        c.fill();
+    }
+    /** A gate: banded timber doors in the wall's gap (iron-bound for a castle whose keep still stands). */
+    drawGate(c, s, g) {
+        const H = 24, x0 = s.x - s.w / 2, y0 = s.y - s.h;
+        if (!s.alive) {
+            c.fillStyle = '#4a3420';
+            for (let k = 0; k < 5; k++)
+                c.fillRect(x0 - 10 + ((k * 23) % 40), y0 + 10 + k * (s.h - 20) / 5, 26, 7);
+            return;
+        }
+        const iron = g.battle.spec.ironGate;
+        c.fillStyle = s.flash > 0 ? '#ffffff' : '#7a5230';
+        c.fillRect(x0, y0 - H, s.w, s.h + H);
+        c.strokeStyle = iron ? '#9aa3ad' : '#3b2614';
+        c.lineWidth = iron ? 4 : 3;
+        c.beginPath();
+        for (let yy = y0 - H + 12; yy < s.y; yy += 22) {
+            c.moveTo(x0, yy);
+            c.lineTo(x0 + s.w, yy);
+        }
+        c.stroke();
+        c.strokeStyle = '#2a1a0e';
+        c.lineWidth = 2;
+        c.strokeRect(x0, y0 - H, s.w, s.h + H);
+        // cracks as it weakens
+        const hurt = 1 - s.hp / s.maxHp;
+        if (hurt > 0.3) {
+            c.strokeStyle = '#1a0f06';
+            c.lineWidth = 2;
+            c.beginPath();
+            c.moveTo(x0 + 4, y0 + s.h * 0.3);
+            c.lineTo(x0 + s.w - 6, y0 + s.h * 0.45);
+            c.lineTo(x0 + 6, y0 + s.h * 0.6);
+            c.stroke();
+        }
+        this.structureBar(c, s, y0 - H, iron ? '#c7d0da' : '#ff9d4a');
+    }
+    /** The castle throne on its dais. */
+    drawThrone(c, s, g) {
+        const x0 = s.x - s.w / 2;
+        c.fillStyle = '#4d4652';
+        c.fillRect(x0 - 14, s.y - 10, s.w + 28, 14); // dais
+        if (!s.alive) {
+            c.fillStyle = '#3b2c22';
+            for (let k = 0; k < 6; k++)
+                c.fillRect(x0 + (k * 17) % s.w, s.y - 18 - (k % 3) * 6, 14, 6);
+            return;
+        }
+        const flash = s.flash > 0;
+        c.fillStyle = flash ? '#ffffff' : '#6a2c8a';
+        c.fillRect(x0 + 6, s.y - s.h - 26, s.w - 12, s.h + 16); // back
+        c.fillStyle = flash ? '#ffffff' : '#d4a73a';
+        c.fillRect(x0, s.y - s.h * 0.55, s.w, 10); // arms
+        c.fillRect(x0 + 6, s.y - s.h - 32, s.w - 12, 7);
+        c.beginPath();
+        c.moveTo(s.x - 10, s.y - s.h - 32);
+        c.lineTo(s.x, s.y - s.h - 48);
+        c.lineTo(s.x + 10, s.y - s.h - 32);
+        c.fill();
+        c.fillStyle = '#8a3a9e';
+        c.fillRect(x0 + 12, s.y - s.h * 0.5, s.w - 24, s.h * 0.4); // seat
+        void g;
+        this.structureBar(c, s, s.y - s.h - 50, '#c79bff');
+    }
+    /** A covered supply wagon with the Dominion's red cloth; wrecked when destroyed. */
+    drawWagon(c, s, g) {
+        if (s.escaped)
+            return;
+        const x0 = s.x - s.w / 2;
+        c.fillStyle = 'rgba(0,0,0,0.3)';
+        c.fillRect(x0 + 4, s.y - 4, s.w, 9);
+        if (!s.alive) {
+            c.fillStyle = '#3a2a1c';
+            c.fillRect(x0, s.y - 16, s.w * 0.7, 14);
+            c.strokeStyle = '#1e140c';
+            c.lineWidth = 3;
+            c.beginPath();
+            c.arc(x0 + s.w - 10, s.y - 6, 9, 0, Math.PI * 2);
+            c.stroke();
+            return;
+        }
+        const roll = (g.battle.time * s.speed) / 10;
+        c.fillStyle = s.flash > 0 ? '#ffffff' : '#7a5230';
+        c.fillRect(x0, s.y - 26, s.w, 18);
+        c.fillStyle = s.flash > 0 ? '#ffffff' : '#c9c2ae';
+        c.beginPath();
+        c.moveTo(x0 + 4, s.y - 26);
+        c.quadraticCurveTo(s.x, s.y - s.h - 16, x0 + s.w - 4, s.y - 26);
+        c.fill();
+        c.fillStyle = PAL.dominion;
+        c.fillRect(s.x - 8, s.y - s.h - 4, 16, 14);
+        c.strokeStyle = '#2a1a0e';
+        c.lineWidth = 3;
+        for (const wx of [x0 + 12, x0 + s.w - 12]) {
+            c.beginPath();
+            c.arc(wx, s.y - 6, 9, 0, Math.PI * 2);
+            c.stroke();
+            c.beginPath();
+            c.moveTo(wx + Math.cos(roll) * 9, s.y - 6 + Math.sin(roll) * 9);
+            c.lineTo(wx - Math.cos(roll) * 9, s.y - 6 - Math.sin(roll) * 9);
+            c.stroke();
+        }
+        c.fillStyle = '#ffd54a';
+        c.beginPath();
+        c.arc(s.x + 14, s.y - 30, 4, 0, Math.PI * 2);
+        c.fill();
+        this.structureBar(c, s, s.y - s.h - 18);
+    }
+    /** The rescue cell: an iron cage, open once the general is out. */
+    drawCell(c, s) {
+        const x0 = s.x - s.w / 2, top = s.y - s.h - 20;
+        c.fillStyle = '#2b2a30';
+        c.fillRect(x0, s.y - 8, s.w, 8);
+        c.strokeStyle = '#9aa3ad';
+        c.lineWidth = 3;
+        c.beginPath();
+        const open = s.hp <= 0;
+        for (let k = 0; k <= 6; k++) {
+            const xx = x0 + (s.w * k) / 6;
+            if (open && k >= 2 && k <= 4)
+                continue;
+            c.moveTo(xx, s.y - 4);
+            c.lineTo(xx, top);
+        }
+        c.moveTo(x0, top);
+        c.lineTo(x0 + s.w, top);
+        c.stroke();
+        if (!open) {
+            // someone inside
+            c.fillStyle = '#2d4f7a';
+            c.beginPath();
+            c.arc(s.x, s.y - 22, 9, 0, Math.PI * 2);
+            c.fill();
+            c.fillStyle = '#f1d3b0';
+            c.beginPath();
+            c.arc(s.x, s.y - 36, 6, 0, Math.PI * 2);
+            c.fill();
+        }
+    }
+    /** Capture rings and the cell's ring: ground marks with a progress arc. */
+    drawGroundRings(c, g) {
+        for (const s of g.battle.structures) {
+            if (s.kind !== 'captureRing' && s.kind !== 'cell')
+                continue;
+            if (s.kind === 'cell' && s.hp <= 0)
+                continue;
+            const cx = s.x, cy = s.y;
+            const k = s.need ? clamp(s.progress / s.need, 0, 1) : 0;
+            c.save();
+            c.fillStyle = s.contested ? 'rgba(255,90,90,0.12)' : 'rgba(255,213,74,0.10)';
+            c.beginPath();
+            c.ellipse(cx, cy, s.ringR, s.ringR, 0, 0, Math.PI * 2);
+            c.fill();
+            c.setLineDash([10, 8]);
+            c.lineDashOffset = -g.time * 20;
+            c.strokeStyle = s.contested ? '#ff6b6b' : '#ffd54a';
+            c.lineWidth = 2;
+            c.beginPath();
+            c.ellipse(cx, cy, s.ringR, s.ringR, 0, 0, Math.PI * 2);
+            c.stroke();
+            c.setLineDash([]);
+            if (k > 0) {
+                c.strokeStyle = '#4fe08a';
+                c.lineWidth = 5;
+                c.beginPath();
+                c.ellipse(cx, cy, s.ringR, s.ringR, 0, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2);
+                c.stroke();
+            }
+            c.restore();
+        }
+    }
+    /** A house (timber and thatch), smoking when hurt, a burned shell when destroyed. */
+    drawHouse(c, s, g) {
         const x0 = s.x - s.w / 2, y1 = s.y, wallH = s.h * 0.55;
         const flash = s.flash > 0;
-        if (s.kind !== 'building')
-            return; // gates, thrones, wagons, rings and cells are drawn in Phase 5
         c.fillStyle = 'rgba(0,0,0,0.3)';
         c.fillRect(x0 + 6, y1 - 4, s.w, 10);
         if (!s.alive) {
@@ -6612,7 +7342,7 @@ class Renderer {
     }
     /** The big bar along the bottom while a boss is up. */
     drawBossBar(c, g) {
-        const e = g.enemies.find((x) => x.alive && x.boss);
+        const e = g.enemies.find((x) => x.alive && x.boss && x.aggro && !x.fleeing);
         if (!e)
             return;
         const b = e.boss;
@@ -7880,6 +8610,16 @@ class Game {
         this.bannerColor = '#ffd54a';
         this.bannerT = 0;
         this.deathT = 0;
+        /* ------------------------------------------------------------ autopilot */
+        /**
+         * Debug autopilot: plays the knight through a battle with plain intent (walk
+         * to the objective through the gates, hit what's in the way, drink a potion
+         * when low) so the Phase 5 checks can time each type with default troops.
+         * Not a player-facing feature.
+         */
+        this.autopilot = false;
+        /** Castle: go for the Lord before the throne (the recruit route). */
+        this.botLordFirst = true;
         this.orderT = 0;
         this.renderer = new Renderer(canvas);
         this.input.attach(canvas);
@@ -8046,14 +8786,25 @@ class Game {
         this.deathT = 0;
         this.input.clearBuffer();
     }
-    /** The battles on offer until the map exists. */
+    /** The battles on offer until the map exists: one of each type. */
     campaignRows() {
         return [
             { label: 'Village raid — Millbrook', sub: 'tier 1  ·  burn 4 houses  ·  ~2 min', spec: villageSpec() },
-            { label: 'Field battle — Dominion column', sub: 'tier 1  ·  rout or destroy the army  ·  2-3 min', spec: fieldSpec() },
+            { label: 'Outpost — Greywatch Tower', sub: 'tier 1  ·  hold the ring 10 s  ·  ~2 min', spec: outpostSpec() },
+            { label: 'Keep assault — Thornwall', sub: 'tier 1  ·  gate, then the Captain  ·  ~3 min', spec: keepSpec() },
+            { label: 'Castle siege — Hollin', sub: 'tier 2  ·  iron gates, throne, Lord  ·  4-6 min', spec: castleSpec() },
+            { label: 'Convoy ambush', sub: 'tier 1  ·  stop 3 wagons  ·  ~2 min', spec: convoySpec() },
+            { label: 'Field battle — Dominion column', sub: 'tier 1  ·  rout or destroy  ·  2-3 min', spec: fieldSpec() },
+            { label: 'Defense — Millbrook (held)', sub: 'tier 1  ·  rout them or hold 3:00  ·  2-3 min', spec: defenseSpec() },
+            { label: 'Rescue raid — Hollin cells', sub: 'tier 2  ·  free Sir Aldric, get out  ·  ~3 min', spec: rescueSpec() },
             { label: 'Test field', sub: 'endless groups, combat sandbox', spec: testSpec() },
             { label: 'Back to title', sub: '', spec: null, act: () => { this.screen = 'title'; this.titleIndex = 0; } },
         ];
+    }
+    /** Top-left corner of campaign row i (two columns). */
+    campRowAt(i) {
+        const col = Math.floor(i / CAMP_ROW.perCol), r = i % CAMP_ROW.perCol;
+        return { x: CAMP_ROW.x + col * (CAMP_ROW.w + CAMP_ROW.colGap), y: CAMP_ROW.y0 + r * (CAMP_ROW.h + CAMP_ROW.gap) };
     }
     handleCampaign() {
         const inp = this.input;
@@ -8062,8 +8813,8 @@ class Game {
         let activate = false;
         if (tap) {
             for (let i = 0; i < rows.length; i++) {
-                const ry = CAMP_ROW.y0 + i * (CAMP_ROW.h + CAMP_ROW.gap);
-                if (tap.x >= CAMP_ROW.x && tap.x <= CAMP_ROW.x + CAMP_ROW.w && tap.y >= ry && tap.y <= ry + CAMP_ROW.h) {
+                const at = this.campRowAt(i);
+                if (tap.x >= at.x && tap.x <= at.x + CAMP_ROW.w && tap.y >= at.y && tap.y <= at.y + CAMP_ROW.h) {
                     if (this.campIndex === i || IS_TOUCH)
                         activate = true;
                     this.campIndex = i;
@@ -8076,6 +8827,12 @@ class Game {
         }
         if (inp.wasPressed('up')) {
             this.campIndex = (this.campIndex - 1 + rows.length) % rows.length;
+            this.sfx.guard();
+        }
+        if (inp.wasPressed('right') || inp.wasPressed('left')) {
+            this.campIndex = (this.campIndex + CAMP_ROW.perCol) % (CAMP_ROW.perCol * 2);
+            if (this.campIndex >= rows.length)
+                this.campIndex = rows.length - 1;
             this.sfx.guard();
         }
         if (inp.wasPressed('cancel')) {
@@ -8094,7 +8851,8 @@ class Game {
     /* ------------------------------------------------------------- battles */
     /**
      * Lay out and populate a battle: field, structures, the knight at their
-     * edge with the warband, the Dominion at theirs (past the live cap: reserve).
+     * edge with the warband, the Dominion where the type puts them (past the
+     * live cap: reserve, streaming in from their edge).
      */
     startBattle(spec) {
         const p = this.player;
@@ -8125,40 +8883,111 @@ class Game {
             this.fadeT = WAR.fadeTime;
             return;
         }
-        // the knight's edge is the left, the Dominion's the right
-        p.x = 110;
-        p.y = b.h / 2;
+        // the knight's side: their edge, the warband beside them, any sent army behind
+        p.x = b.start.x;
+        p.y = b.start.y;
         p.vx = p.vy = 0;
         p.z = 0;
-        p.facing = 0;
-        this.army.setEdge('player', 40, b.h / 2, b.h * 0.3);
-        this.army.setEdge('enemy', b.w - 40, b.h / 2, b.h * 0.3);
-        this.spawnBlock(this.mixOf(this.warbandCap()), 'player', 190, b.h / 2, spec.tier);
+        const top = b.exitSide === 'top';
+        p.facing = top ? Math.PI / 2 : 0;
+        if (top)
+            this.army.setEdge('player', b.start.x, 40, 20);
+        else
+            this.army.setEdge('player', 40, b.h / 2, b.h * 0.3);
+        this.army.setEdge('enemy', b.foeEdge.x, b.foeEdge.y, b.foeEdge.spread);
+        const fwd = (d) => top ? { x: b.start.x, y: b.start.y + d } : { x: b.start.x + d, y: b.start.y };
+        let at = spec.kind === 'defense' ? { x: b.start.x - 60, y: b.start.y } : fwd(80);
+        this.spawnBlock(this.mixOf(this.warbandCap()), 'player', at.x, at.y, spec.tier);
         const allies = unitList(spec.allies);
+        at = spec.kind === 'defense' ? { x: b.start.x - 160, y: b.start.y + 120 } : fwd(190);
         if (allies.length)
-            this.spawnBlock(allies, 'player', 300, b.h / 2, spec.tier);
+            this.spawnBlock(allies, 'player', at.x, at.y, spec.tier);
+        // the Dominion's side
         const foes = unitList(spec.foes);
-        if (spec.kind === 'village') {
-            // the garrison stands among the houses
-            const hx = b.structures.reduce((s, h) => s + h.x, 0) / Math.max(1, b.structures.length);
-            this.spawnBlock(foes, 'enemy', hx - 120, b.h / 2, spec.tier);
-        }
-        else {
-            this.spawnBlock(foes, 'enemy', b.w * 0.7, b.h / 2, spec.tier);
-        }
-        const ex = spec.kind === 'village' ? b.w * 0.6 : b.w * 0.66;
-        spec.foeElites.forEach((id, k) => {
-            const e = new Enemy(ENEMIES[id], ex, b.h / 2 + (k - (spec.foeElites.length - 1) / 2) * 120, WAR.testFieldLevel, spec.tier);
+        const cy = b.h / 2;
+        const elite = (id, x, y, extra = 1, level = WAR.testFieldLevel) => {
+            const e = new Enemy(ENEMIES[id], x, y, level, spec.tier, extra);
+            e.homeX = x;
+            e.homeY = y;
             this.enemies.push(e);
-        });
-        if (spec.commander) {
-            const c = new Enemy(ENEMIES[spec.commander], b.w * 0.74, b.h / 2, WAR.testFieldLevel + 2, spec.tier, 1.6);
-            c.leader = true;
-            this.enemies.push(c);
-            b.leader = c;
+            return e;
+        };
+        const boss = (name, title, stats, pattern, moves, color, accent, x, y) => {
+            const def = { id: name.toLowerCase().replace(/\W+/g, '-'), name, title, tier: spec.tier, stats, uniqueMaterials: [], pattern, moves, color, accent };
+            const e = new Enemy(bossEnemyDef(def), x, y, WAR.testFieldLevel, spec.tier);
+            e.boss = def;
+            e.leader = true;
+            e.homeX = x;
+            e.homeY = y;
+            this.enemies.push(e);
+            b.leader = e;
+            return e;
+        };
+        const spreadElites = (x, y) => spec.foeElites.forEach((id, k) => elite(id, x, y + (k - (spec.foeElites.length - 1) / 2) * 120));
+        switch (spec.kind) {
+            case 'village': {
+                // the garrison stands among the houses
+                const hx = b.houses.reduce((s, h) => s + h.x, 0) / Math.max(1, b.houses.length);
+                this.spawnBlock(foes, 'enemy', hx - 120, cy, spec.tier);
+                spreadElites(b.w * 0.6, cy);
+                break;
+            }
+            case 'outpost': {
+                const r = b.ring;
+                this.spawnBlock(foes, 'enemy', r.x - 40, r.y, spec.tier);
+                spreadElites(r.x + 60, r.y - 120);
+                break;
+            }
+            case 'keep': {
+                const room = b.rooms[0];
+                const kx = (room.x0 + room.x1) / 2, ky = (room.y0 + room.y1) / 2;
+                this.spawnBlock(foes, 'enemy', kx - 40, ky, spec.tier);
+                spreadElites(kx + 60, ky);
+                // the Captain waits inside until someone comes close
+                b.captain = boss(spec.captainName || 'Captain', 'Keep Captain', WAR.captainStats, 'stalker', ['rush'], '#5a3a2a', '#ffb347', room.x1 - 90, ky);
+                b.captain.aggro = false;
+                break;
+            }
+            case 'castle':
+            case 'rescue': {
+                const [court, hall] = b.rooms;
+                const n = Math.round(foes.length * 0.6);
+                this.spawnBlock(foes.slice(0, n), 'enemy', (court.x0 + court.x1) / 2, cy, spec.tier);
+                this.spawnBlock(foes.slice(n), 'enemy', hall.x0 + 200, cy + 140, spec.tier);
+                spreadElites((court.x0 + court.x1) / 2 + 120, cy);
+                const t = b.throne;
+                b.lord = boss(spec.lordName || 'the Lord', 'Castle Lord', WAR.lordStats, 'brute', ['slam', 'rush'], '#3d2f5c', '#c79bff', t.x - 110, t.y);
+                b.lord.aggro = false;
+                break;
+            }
+            case 'convoy': {
+                // the escort walks with the wagons
+                const ws = b.wagons;
+                const wx = ws.reduce((s, w) => s + w.x, 0) / Math.max(1, ws.length);
+                this.spawnBlock(foes, 'enemy', wx + 60, ws[0].y - 90, spec.tier);
+                spreadElites(wx + 140, ws[0].y + 70);
+                break;
+            }
+            default: {
+                // field and defense: the column marches on from the far side
+                this.spawnBlock(foes, 'enemy', b.w * (spec.kind === 'defense' ? 0.86 : 0.7), cy, spec.tier);
+                spreadElites(b.w * (spec.kind === 'defense' ? 0.84 : 0.66), cy);
+            }
         }
+        if (spec.commander) {
+            const c = elite(spec.commander, b.w * (spec.kind === 'defense' ? 0.95 : 0.74), cy, WAR.commanderMult, WAR.testFieldLevel + 2);
+            c.leader = true;
+            b.leader = c;
+            // a defense's commander leads from the rear: go out to him to break the attack early
+            if (spec.kind === 'defense')
+                c.aggro = false;
+        }
+        for (const k of unitList(spec.reinforce || {}))
+            this.army.addReserve('enemy', k);
         b.startFoes = this.foeStrength();
         b.startAllies = this.army.live('player') + this.army.reserveCount('player');
+        if (spec.kind === 'convoy')
+            b.notes.push(`${b.cargo} gold aboard`);
         this.waveIntro = Math.max(0, TUNING.waveIntro);
         this.fadeT = WAR.fadeTime;
         this.follow(true);
@@ -8169,29 +8998,150 @@ class Game {
         return this.army.live('enemy') + this.army.reserveCount('enemy')
             + this.enemies.filter((e) => e.alive && e.team === 'enemy' && !e.fleeing).length;
     }
+    /** Is anyone of `team` (knight, elites, units) inside the circle? */
+    sideIn(team, x, y, r) {
+        const p = this.player;
+        if (team === 'player' && p.alive && dist(p.x, p.y, x, y) <= r)
+            return true;
+        for (const e of this.enemies)
+            if (e.alive && !e.fleeing && e.team === team && dist(e.x, e.y, x, y) <= r)
+                return true;
+        const a = this.army, t = teamIndex(team);
+        let found = false;
+        a.query(x, y, r, (j) => {
+            if (found || a.team[j] !== t || !a.alive[j])
+                return;
+            if ((a.x[j] - x) ** 2 + (a.y[j] - y) ** 2 <= r * r)
+                found = true;
+        });
+        return found;
+    }
+    /** Is the knight pushing into their own edge? */
+    pushingOut() {
+        const p = this.player, mv = this.input.moveVector();
+        return this.battle.exitSide === 'top'
+            ? mv.y < -0.3 && p.y <= this.field.y + p.radius + 4
+            : mv.x < -0.3 && p.x <= this.field.x + p.radius + 4;
+    }
     /** Win / lose / rout / exit checks for a real battle (not the test field). */
     updateBattleState(dt) {
-        const b = this.battle, p = this.player;
+        const b = this.battle, p = this.player, kind = b.spec.kind;
         if (b.result)
             return;
-        // walking off your own edge leaves the battle
-        const pushingOut = this.input.moveVector().x < -0.3 && p.x <= this.field.x + p.radius + 4;
-        this.exitPushT = pushingOut ? this.exitPushT + dt : 0;
+        // walking off your own edge leaves the battle (a rescue with the general alongside is the win)
+        this.exitPushT = this.pushingOut() ? this.exitPushT + dt : 0;
         if (this.exitPushT >= WAR.exitPushTime) {
-            this.finishBattle('retreat');
+            if (kind === 'rescue' && b.general && b.general.alive) {
+                b.outcome = `${b.spec.generalName || 'The general'} is out — rescued`;
+                this.finishBattle('win');
+            }
+            else
+                this.finishBattle('retreat');
             return;
         }
-        // objectives
-        if (b.spec.kind === 'village') {
-            if (b.structures.filter((s) => s.kind === 'building').every((s) => !s.alive)) {
-                this.finishBattle('win');
-                return;
+        switch (kind) {
+            case 'village':
+                if (b.houses.every((s) => !s.alive)) {
+                    b.outcome = `${b.spec.name} burned — the node is yours (ownership arrives with the map)`;
+                    this.finishBattle('win');
+                    return;
+                }
+                break;
+            case 'field':
+                if (this.foeStrength() === 0) {
+                    b.outcome = 'The Dominion army is destroyed';
+                    this.finishBattle('win');
+                    return;
+                }
+                break;
+            case 'outpost': {
+                // in the ring with no enemy inside: progress; contested: paused, never reset (PLAN 10.2)
+                const r = b.ring;
+                r.contested = this.sideIn('enemy', r.x, r.y, r.ringR);
+                if (!r.contested && this.sideIn('player', r.x, r.y, r.ringR))
+                    r.progress += dt;
+                if (r.progress >= r.need) {
+                    b.outcome = `${b.spec.name} taken`;
+                    this.finishBattle('win');
+                    return;
+                }
+                break;
             }
-        }
-        else if (b.spec.kind === 'field') {
-            if (this.foeStrength() === 0) {
-                this.finishBattle('win');
-                return;
+            case 'keep':
+                if (b.gates.every((s) => !s.alive) && b.captain && !b.captain.alive) {
+                    b.outcome = `${b.spec.name} taken — ${b.spec.captainName || 'the Captain'} defeated`;
+                    this.finishBattle('win');
+                    return;
+                }
+                break;
+            case 'castle': {
+                const t = b.throne;
+                if (!t.alive) {
+                    if (b.lord && b.lord.alive) {
+                        // the throne fell first: the Lord runs and can't be recruited
+                        b.lordFled = true;
+                        b.lord.fleeing = true;
+                        b.lord.leader = false;
+                        b.notes.push(`${b.spec.lordName || 'The Lord'} fled — not recruitable`);
+                    }
+                    else if (b.lordBeatenFirst)
+                        b.notes.push(`${b.spec.lordName || 'The Lord'} beaten first — can be recruited (Phase 10)`);
+                    b.outcome = `${b.spec.name} taken — the throne is destroyed`;
+                    this.finishBattle('win');
+                    return;
+                }
+                break;
+            }
+            case 'convoy': {
+                for (const w of b.wagons) {
+                    if (!w.alive)
+                        continue;
+                    w.x += w.speed * dt;
+                    if (w.x - w.w / 2 > b.w) {
+                        w.escaped = true;
+                        b.outcome = `${w.label} got away with the cargo`;
+                        this.finishBattle('lose');
+                        return;
+                    }
+                }
+                if (b.wagons.every((w) => w.hp <= 0)) {
+                    b.outcome = 'The convoy is broken — the cargo is yours';
+                    this.finishBattle('win');
+                    return;
+                }
+                break;
+            }
+            case 'defense':
+                if (b.houses.every((s) => !s.alive)) {
+                    b.outcome = `${b.spec.name} burned — the village is lost`;
+                    this.finishBattle('lose');
+                    return;
+                }
+                if (this.foeStrength() === 0) {
+                    b.outcome = 'The attackers are destroyed';
+                    this.finishBattle('win');
+                    return;
+                }
+                if (b.time >= WAR.defenseHold) {
+                    b.outcome = `${b.spec.name} held for ${fmtTime(WAR.defenseHold)}`;
+                    this.finishBattle('win');
+                    return;
+                }
+                break;
+            case 'rescue': {
+                const c = b.cell;
+                if (!b.general) {
+                    if (p.alive && dist(p.x, p.y, c.x, c.y) <= c.ringR)
+                        c.progress += dt;
+                    if (c.progress >= c.need)
+                        this.freeGeneral();
+                }
+                else if (!b.general.alive) {
+                    b.outcome = `${b.spec.generalName || 'The general'} fell`;
+                    this.finishBattle('lose');
+                    return;
+                }
+                break;
             }
         }
         // rout (PLAN 10.1): leader down (or none) and under 40% strength -> the side flees
@@ -8205,14 +9155,32 @@ class Game {
                 for (const e of this.enemies)
                     if (e.alive && e.team === 'enemy')
                         e.fleeing = true;
-                this.banner('THE DOMINION ROUTS', b.spec.kind === 'field' ? 'the field is yours' : 'the garrison flees  ·  burn what is left', '#4fe08a');
+                const rest = {
+                    field: 'the field is yours', village: 'the garrison flees  ·  burn what is left', defense: 'the village is safe',
+                    outpost: 'take the ring', keep: 'finish the gate', castle: 'the throne is undefended', convoy: 'the wagons roll on alone', rescue: 'get the general out',
+                };
+                this.banner('THE DOMINION ROUTS', rest[kind] || '', '#4fe08a');
                 this.sfx.wave();
-                if (b.spec.kind === 'field') {
+                if (kind === 'field' || kind === 'defense') {
+                    b.outcome = 'The Dominion army routed';
                     this.finishBattle('win');
                     return;
                 }
             }
         }
+    }
+    /** Rescue: the cell opens; the general joins the knight's side and follows them out. */
+    freeGeneral() {
+        const b = this.battle, c = b.cell;
+        const g = new Enemy(ENEMIES.bruiser, c.x, c.y + 40, WAR.testFieldLevel + 2, b.spec.tier, WAR.commanderMult);
+        g.team = 'player';
+        g.escort = true;
+        g.def = { ...g.def, name: b.spec.generalName || 'General', color: '#2d4f7a', accent: PAL.ally };
+        this.enemies.push(g);
+        b.general = g;
+        c.hp = 0;
+        this.banner(`${(b.spec.generalName || 'the general').toUpperCase()} IS FREE`, 'now get out: your edge, the general alive', '#4fe08a');
+        this.sfx.levelUp();
     }
     /** Decide the battle: tally spoils on a win and show the results screen. */
     finishBattle(result) {
@@ -8223,9 +9191,20 @@ class Game {
         b.resultT = 0;
         this.wheelOpen = false;
         this.input.suppressMove = false;
+        this.input.bot = null;
+        if (!b.outcome)
+            b.outcome = result === 'win' ? 'Victory' : result === 'lose' ? 'You fell. Back to camp — the warband is lost, the node unchanged.' : 'You left the field. The attack is abandoned.';
+        else if (result === 'lose' && !p.alive)
+            b.outcome = 'You fell. Back to camp — the warband is lost, the node unchanged.';
         if (result === 'win') {
             const kills = b.kills.byKnight + b.kills.byArmy + b.kills.elites;
             b.spoils.gold = Math.round((WAR.spoilGold[b.spec.kind] || 0) * b.spec.tier + kills * WAR.spoilGoldPerKill);
+            if (b.spec.kind === 'convoy') {
+                b.spoils.gold += b.cargo;
+                b.notes = [`cargo taken: ${b.cargo} gold`];
+            }
+            if (b.spec.kind === 'rescue')
+                b.notes.push(`${b.spec.generalName || 'The general'} rescued (loyalty +25 with Phase 10)`);
             const commons = ['shard', 'plate', 'sigil', 'ember'];
             const n = rndInt(WAR.spoilMats[0], WAR.spoilMats[1]) * b.spec.tier;
             for (let k = 0; k < n; k++) {
@@ -8239,8 +9218,168 @@ class Game {
             this.save();
         }
         else {
+            if (b.spec.kind === 'convoy')
+                b.notes = [];
             this.sfx.die();
         }
+    }
+    botDrive() {
+        const b = this.battle, p = this.player, inp = this.input;
+        inp.bot = null;
+        if (!this.autopilot || b.spec.kind === 'test' || b.result || !p.alive)
+            return;
+        const kind = b.spec.kind;
+        if (b.time < 0.1 && this.order === 'follow' && kind !== 'outpost' && kind !== 'rescue')
+            this.issueOrder('charge');
+        if (p.hp < p.stats.maxHp * 0.35 && p.potions > 0 && inp.frame % 30 === 0)
+            inp.press('item');
+        // the nearest hostile in the knight's way
+        const near = (r, skip = null) => {
+            let best = null, bd = r;
+            for (const e of this.enemies) {
+                if (!e.alive || e.team === 'player' || e.fleeing || e === skip || !e.aggro)
+                    continue;
+                const d = dist(p.x, p.y, e.x, e.y);
+                if (d < bd && b.reachable(p.x, p.y, e.x, e.y)) {
+                    bd = d;
+                    best = e;
+                }
+            }
+            const j = this.army.nearestHostile('player', p.x, p.y, bd);
+            if (j >= 0 && b.reachable(p.x, p.y, this.army.x[j], this.army.y[j]))
+                best = this.army.ref(j);
+            return best;
+        };
+        const anyFoe = () => {
+            const j = this.army.nearestHostile('player', p.x, p.y, 3000);
+            let best = j >= 0 ? this.army.ref(j) : null, bd = best ? dist(p.x, p.y, best.x, best.y) : Infinity;
+            for (const e of this.enemies) {
+                if (!e.alive || e.team === 'player' || e.fleeing)
+                    continue;
+                const d = dist(p.x, p.y, e.x, e.y);
+                if (d < bd) {
+                    bd = d;
+                    best = e;
+                }
+            }
+            return best;
+        };
+        const nearestOf = (xs) => xs.filter((s) => s.alive).sort((a, c) => dist(p.x, p.y, a.x, a.y) - dist(p.x, p.y, c.x, c.y))[0] || null;
+        // what this battle wants: something to hit, or a place to stand
+        let goal = null;
+        let spot = null;
+        let leave = false;
+        let guard = 90; // fight hostiles this close before walking on
+        let skip = null;
+        switch (kind) {
+            case 'village':
+                goal = nearestOf(b.houses);
+                break;
+            case 'field':
+                goal = b.leader && b.leader.alive ? b.leader : anyFoe();
+                break;
+            case 'outpost': {
+                const r = b.ring;
+                spot = { x: r.x, y: r.y };
+                guard = r.ringR + 20;
+                break;
+            }
+            case 'keep':
+                goal = nearestOf(b.gates) || (b.captain && b.captain.alive ? b.captain : null);
+                break;
+            case 'castle': {
+                const t = b.throne;
+                goal = b.gates.find((s) => s.alive) || null;
+                if (!goal)
+                    goal = this.botLordFirst && b.lord && b.lord.alive ? b.lord : t;
+                if (!this.botLordFirst)
+                    skip = b.lord;
+                break;
+            }
+            case 'convoy':
+                goal = nearestOf(b.wagons);
+                guard = 60;
+                break;
+            case 'defense': {
+                const hs = b.houses.filter((s) => s.alive);
+                const hx = hs.reduce((s, h) => s + h.x, 0) / Math.max(1, hs.length), hy = hs.reduce((s, h) => s + h.y, 0) / Math.max(1, hs.length);
+                // stand with the houses: meet what comes close to them, don't run into the column
+                goal = anyFoe();
+                if (goal && dist(goal.x, goal.y, hx, hy) > 450) {
+                    goal = null;
+                    spot = { x: hx + 150, y: b.h / 2 };
+                }
+                guard = 120;
+                break;
+            }
+            case 'rescue': {
+                const c = b.cell;
+                if (!b.general) {
+                    spot = { x: c.x, y: c.y + 20 };
+                    guard = 70;
+                    skip = b.lord;
+                }
+                else {
+                    leave = true;
+                    guard = 50;
+                    skip = b.lord;
+                }
+                break;
+            }
+        }
+        const threat = near(guard, skip);
+        const target = threat || goal;
+        let tx, ty;
+        if (leave) {
+            // home: the knight's edge, the general in tow
+            const gen = b.general;
+            if (dist(p.x, p.y, gen.x, gen.y) > 260) {
+                tx = gen.x;
+                ty = gen.y;
+            }
+            else {
+                tx = -100;
+                ty = p.y;
+            }
+            if (threat) {
+                tx = threat.x;
+                ty = threat.y;
+            }
+        }
+        else if (target) {
+            tx = target.x;
+            ty = target instanceof Structure ? target.cy : target.y;
+        }
+        else if (spot) {
+            tx = spot.x;
+            ty = spot.y;
+        }
+        else {
+            tx = p.x;
+            ty = p.y;
+        }
+        // walk there through the doors; swing once in reach
+        const w = b.via(p.x, p.y, tx, ty) || { x: tx, y: ty };
+        const dx = w.x - p.x, dy = w.y - p.y, d = Math.hypot(dx, dy);
+        const reach = 46 + (target ? target.radius : 0);
+        const inReach = target && w.x === tx && w.y === ty && dist(p.x, p.y, tx, ty) < reach + (target instanceof Structure ? target.radius * 0.5 : 0);
+        if (inReach) {
+            inp.bot = { x: dx / Math.max(1, d) * 0.3, y: dy / Math.max(1, d) * 0.3 };
+            if (inp.frame % 8 === 0)
+                inp.press('attack');
+        }
+        else if (d > 8)
+            inp.bot = { x: dx / d, y: dy / d };
+    }
+    /** Test hook: run the sim `seconds` ahead as fast as it will go (no drawing). Stops at a result. */
+    simulate(seconds) {
+        let n = Math.round(seconds / TICK), k = 0;
+        for (; k < n; k++) {
+            if (this.screen !== 'battle' || this.battle.result)
+                break;
+            this.tick(TICK);
+        }
+        return k * TICK;
     }
     /* ----------------------------------------------------------- main loop */
     start() {
@@ -8370,6 +9509,7 @@ class Game {
             return;
         }
         this.input.takeTap(); // taps outside the touch controls do nothing on the field
+        this.botDrive();
         this.updateWheel(dt);
         if (this.input.touchChip >= 0) {
             this.touchSpell = this.input.touchChip;
@@ -8757,7 +9897,7 @@ class Game {
     hitStructures(def, p, hits) {
         const reach = p.reach(def);
         for (const s of this.battle.structures) {
-            if (!s.alive || s.team === 'player' || s.kind === 'captureRing' || hits.has(s))
+            if (!s.targetable || s.team === 'player' || hits.has(s))
                 continue;
             if (!inArc(p.x, p.y, p.z, p.facing, reach, def.arc, s.x, s.y - s.h / 2, 0, s.radius * 0.8))
                 continue;
@@ -8782,10 +9922,18 @@ class Game {
         this.ring(s.x, s.y - s.h / 2, 0, 20, s.w, '#ff7a3d');
         this.shake(8 * TUNING.shakeScale);
         this.sfx.die();
+        const b = this.battle;
         if (s.kind === 'building') {
-            const hs = this.battle.structures.filter((x) => x.kind === 'building');
+            const hs = b.houses;
             const burned = hs.filter((x) => !x.alive).length;
-            this.banner(`${s.label.toUpperCase()} BURNED`, `${burned} / ${hs.length}`, '#ff9d4a');
+            this.banner(`${s.label.toUpperCase()} BURNED`, `${burned} / ${hs.length}`, s.team === 'player' ? '#ff6b6b' : '#ff9d4a');
+        }
+        else if (s.kind === 'gate') {
+            this.banner(`${s.label.toUpperCase()} BROKEN`, b.objective, '#ffd54a');
+        }
+        else if (s.kind === 'wagon') {
+            const ws = b.wagons;
+            this.banner(`${s.label.toUpperCase()} WRECKED`, `${ws.filter((x) => x.hp <= 0).length} / ${ws.length}`, '#ffd54a');
         }
     }
     /** The space projectiles may fly in before they are discarded. */
@@ -9056,9 +10204,10 @@ class Game {
         const ang = Math.atan2(t.y - a.y[i], t.x - a.x[i]);
         const power = a.atk[i];
         if (t instanceof Structure) {
-            if (!t.alive || t.team === teamName(a.team[i]))
+            const m = t.mult(d.id === 'ram' ? 'ram' : 'unit');
+            if (!t.alive || t.team === teamName(a.team[i]) || m <= 0)
                 return;
-            t.damage(this, Math.max(1, Math.round(power * t.mult(d.id === 'ram' ? 'ram' : 'unit'))));
+            t.damage(this, Math.max(1, Math.round(power * m)));
             return;
         }
         if (t instanceof MinionRef) {
@@ -9521,10 +10670,22 @@ class Game {
     /* --------------------------------------------------------- progression */
     /** No EXP and no field drops in v2: spoils are paid on the results screen (Phase 4+). */
     onEnemyDeath(e) {
+        const b = this.battle;
         if (e.team === 'enemy')
-            this.battle.kills.elites++;
+            b.kills.elites++;
         else
-            this.battle.losses.elites++;
+            b.losses.elites++;
+        if (e === b.lord && b.throne && b.throne.alive && !b.result) {
+            // PLAN 10.2: beating the Lord before the throne falls allows recruiting
+            b.lordBeatenFirst = true;
+            this.banner(`${(b.spec.lordName || 'the Lord').toUpperCase()} YIELDS`, b.spec.kind === 'castle' ? 'beaten first: can be recruited  ·  now the throne' : 'the castle is leaderless', '#4fe08a');
+        }
+        else if (e === b.captain && !b.result) {
+            this.banner(`${(b.spec.captainName || 'the Captain').toUpperCase()} FALLS`, b.gates.some((s) => s.alive) ? 'now break the gate' : '', '#4fe08a');
+        }
+        else if (e === b.leader && !b.result) {
+            this.banner('THE COMMANDER FALLS', 'their army can break', '#4fe08a');
+        }
         this.sfx.die();
         this.burst(e.x, e.y, e.z + e.def.height * 0.5, 22, e.def.accent);
         this.ring(e.x, e.y, e.z, 8, 70, e.def.accent);
@@ -9742,6 +10903,7 @@ function buildDebugPanel(g) {
         + '<button data-act="mats">+50 all materials</button>'
         + '<button data-act="sp">+10 SP</button>'
         + '<button data-act="god">God mode: off</button>'
+        + '<button data-act="auto">Autopilot: off</button>'
         + '<button data-act="reset">Reset save</button>'
         + '<button data-act="defaults">Reset tuning</button>'
         + '</div>';
@@ -9810,6 +10972,10 @@ function buildDebugPanel(g) {
                 case 'god':
                     g.god = !g.god;
                     btn.textContent = `God mode: ${g.god ? 'on' : 'off'}`;
+                    break;
+                case 'auto':
+                    g.autopilot = !g.autopilot;
+                    btn.textContent = `Autopilot: ${g.autopilot ? 'on' : 'off'}`;
                     break;
                 case 'reset':
                     g.resetSave();

@@ -112,6 +112,8 @@ class InputState {
   radial = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
   /** Set on release of the touch radial: the final offset from where it opened. Game consumes it. */
   radialRelease: { dx: number; dy: number } | null = null;
+  /** Debug autopilot's stick (Game.botDrive), when it is driving. */
+  bot: { x: number; y: number } | null = null;
 
   attach(target: HTMLElement | Window) {
     window.addEventListener('keydown', (e) => {
@@ -315,6 +317,7 @@ class InputState {
   /** Normalised movement vector from WASD, the pad stick, or a thumb. */
   moveVector(): { x: number; y: number } {
     if (this.suppressMove) return { x: 0, y: 0 };
+    if (this.bot) return this.bot;
     if (this.stick.active && (this.stick.x || this.stick.y)) {
       return { x: this.stick.x, y: this.stick.y };
     }

@@ -353,20 +353,22 @@ class Army {
   private pickIn(g: Game, i: number, cx: number, cy: number, r: number): Combatant | null {
     const side = teamName(this.team[i]), own = this.team[i];
     const x = this.x[i], y = this.y[i], r2 = r * r;
+    // behind walls only what can be walked to counts (a garrison behind a shut gate waits)
+    const bt = g.battle, walled = bt.doors.length > 0;
     let best: Combatant | null = null, bd = Infinity;
     this.query(cx, cy, r, (j) => {
       if (this.team[j] === own) return;
       if ((this.x[j] - cx) ** 2 + (this.y[j] - cy) ** 2 > r2) return;
       const d = (this.x[j] - x) ** 2 + (this.y[j] - y) ** 2;
-      if (d < bd) { bd = d; best = this.ref(j); }
+      if (d < bd && (!walled || bt.reachable(x, y, this.x[j], this.y[j]))) { bd = d; best = this.ref(j); }
     });
     for (const e of g.enemies) {
       if (!e.alive || e.team === side || (e.x - cx) ** 2 + (e.y - cy) ** 2 > r2) continue;
       const d = (e.x - x) ** 2 + (e.y - y) ** 2;
-      if (d < bd) { bd = d; best = e; }
+      if (d < bd && (!walled || bt.reachable(x, y, e.x, e.y))) { bd = d; best = e; }
     }
     const k = g.player;
-    if (side === 'enemy' && k.alive && (k.x - cx) ** 2 + (k.y - cy) ** 2 <= r2) {
+    if (side === 'enemy' && k.alive && (k.x - cx) ** 2 + (k.y - cy) ** 2 <= r2 && (!walled || bt.reachable(x, y, k.x, k.y))) {
       const d = (k.x - x) ** 2 + (k.y - y) ** 2;
       if (d < bd) { bd = d; best = k; }
     }
@@ -415,12 +417,20 @@ class Army {
       this.walk[i] += dt * sp * mult * 0.12;
     };
     const halt = () => { this.vx[i] *= 0.7; this.vy[i] *= 0.7; };
+    /** Walk toward (tx, ty) through whatever doors lie between; false (and stand) if there is no way. */
+    const go = (tx: number, ty: number, mult: number): boolean => {
+      const w = g.battle.via(this.x[i], this.y[i], tx, ty);
+      if (!w) { halt(); return false; }
+      steer(w.x, w.y, mult);
+      return true;
+    };
 
     if (this.state[i] === ST_FLEE) {
-      // routed: run for the side's own edge and leave the field there
+      // routed: run for the side's own edge and leave the field there (cut off: slip away where it stands)
       const e = this.edge[own];
-      steer(e.x, this.y[i], 1.2);
-      if (Math.abs(this.x[i] - e.x) < d.radius + 8) this.despawn(i);
+      const top = e.spread <= 40 && e.y < 80;   // a top edge (convoy) rather than a side
+      const ex = top ? this.x[i] : e.x, ey = top ? e.y : this.y[i];
+      if (!go(ex, ey, 1.2) || Math.abs(this.x[i] - ex) + Math.abs(this.y[i] - ey) < d.radius + 8) this.despawn(i);
       return;
     }
 
@@ -431,21 +441,22 @@ class Army {
         // fall in around the knight, running to keep up when left behind
         const k = g.player, s = this.formationSpot(i, k.x, k.y);
         const far = dist(this.x[i], this.y[i], s.x, s.y);
-        if (far > 18) steer(s.x, s.y, far > 120 ? Math.max(1, (TUNING.moveSpeed * 1.05) / sp) : 1); else halt();
+        if (far > 18) go(s.x, s.y, far > 120 ? Math.max(1, (TUNING.moveSpeed * 1.05) / sp) : 1); else halt();
         return;
       }
       if (order === 'hold' && !d.ignoresUnits) {
-        if (dist(this.x[i], this.y[i], this.anchorX[i], this.anchorY[i]) > 10) steer(this.anchorX[i], this.anchorY[i], 1); else halt();
+        if (dist(this.x[i], this.y[i], this.anchorX[i], this.anchorY[i]) > 10) go(this.anchorX[i], this.anchorY[i], 1); else halt();
         return;
       }
-      // Charge with no unit in sight: go for the objective (PLAN 11.4), if there is one
-      if (own === TEAM_PLAYER && (order === 'charge' || order === 'focus' || d.ignoresUnits)) {
-        const st = g.battle.nearestStructure('player', this.x[i], this.y[i]);
+      // Charge with no unit in sight: go for the objective (PLAN 11.4), if there is one.
+      // Rams always do; so does the Dominion (in a defense: your houses).
+      if ((own === TEAM_PLAYER && (order === 'charge' || order === 'focus')) || d.ignoresUnits || own === TEAM_ENEMY) {
+        const st = g.battle.nearestStructure(teamName(own), this.x[i], this.y[i], !!d.ignoresUnits);
         if (st) { this.tgt[i] = st; return; }
       }
-      // otherwise march on the enemy's centre (rams always do)
+      // otherwise march on the enemy's centre (behind a shut gate: stand)
       const c = this.centre[1 - own];
-      if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40) steer(c.x, c.y, 1); else halt();
+      if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40) go(c.x, c.y, 1); else halt();
       return;
     }
 
@@ -469,7 +480,7 @@ class Army {
 
     if (dd > reach) {
       this.state[i] = ST_ADVANCE;
-      steer(t.x, t.y, 1);
+      go(t.x, t.y, 1);
     } else {
       this.state[i] = ST_FIGHT;
       halt();

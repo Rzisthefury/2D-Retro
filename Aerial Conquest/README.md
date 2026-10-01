@@ -23,11 +23,177 @@ No dependencies, no bundler, nothing to install.
 | `src/items.ts` | materials, weapon/armour tiers, recipes |
 | `src/talents.ts` | Blade / Arcana / Survival talents, bought with skill points |
 | `src/army.ts` | the minion sim: typed-array slots, uniform grid, minion AI, arrows, `MinionRef`, reserves, orders, rout |
-| `src/battle.ts` | battles: spec, seeded layouts, `Structure`, objectives, scenery palettes, the stub's battle list |
+| `src/battle.ts` | battles: spec, seeded layouts for all eight types, `Structure` (houses, walls, gates, throne, wagons, rings, cell), zones and doors for walled layouts, objectives, scenery palettes, the stub's battle list |
 | `src/music.ts` | AF's adaptive score |
 | `src/entities.ts` | `Player`, `Enemy` (with boss AI), `Projectile`, `Pickup` |
 | `src/render.ts` | battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` stub, `battle`), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
+
+# Phase 5: outpost, keep, castle siege, convoy, defense, rescue
+
+**What changed**
+
+- **Six more battle types** (PLAN 10.2), each with its own seeded layout,
+  new top-down art, objective line and progress bar:
+
+  | type | layout | win | lose (besides the knight falling) |
+  |---|---|---|---|
+  | **Outpost** | 2000×1200, stone watchtower on a rise, capture ring (r 110) | 10 s with you or your troops in the ring and **no enemy inside**. Contested = paused (ring turns red), never reset | — |
+  | **Keep** | 2000×1600, square stone fort, one west gate | gate broken **and** Captain defeated | — |
+  | **Castle siege** | 3200×1800: outer gate → courtyard → inner gate → throne room | throne destroyed. Lord beaten first = recruitable; throne first = the Lord flees, not recruitable | — |
+  | **Convoy** | 3600×1000 road, 3 wagons rolling east in a column | every wagon wrecked → their cargo joins the spoils | a wagon reaches the far edge |
+  | **Defense** | the village layout, roles reversed: the houses are yours, you start among them | rout the attackers, destroy them, or hold 3:00 with a house standing | every house burned |
+  | **Rescue raid** | the castle layout, a cell in the throne room's north wing, a breach at the north end of each wall | hold the cell's ring 8 s (frees the general), then reach your edge with them alive | the general dies |
+
+- **Walls** are a new structure kind, `wall`: solid and indestructible.
+  Shots and arrows stop on them.
+- **Getting through walls:**
+  - Walled layouts are split into zones (outside, courtyard, throne room)
+    joined by doors. A gate's door opens when the gate falls; a breach is
+    always open.
+  - Units, elites and generals walk zone to zone through open doors
+    (`Battle.via`) instead of grinding on walls.
+  - They only pick targets they can actually reach, so a garrison behind a
+    shut gate waits and doesn't press against the wall.
+  - Charge and Focus go for the nearest structure they can reach: the next
+    gate first.
+- **Leaders** use AF's boss AI:
+  - Keep Captain: stalker pattern with a rush move (`WAR.captainStats`).
+  - Castle Lord: brute pattern with slam and rush (`WAR.lordStats`).
+  - Both wait by their post until something comes near. Their bar shows
+    once they're fighting.
+  - The defense commander leads from the rear at the Dominion edge.
+- **Reinforcements:** a spec can carry `reinforce` units. They join the
+  Dominion's reserve and stream in from its edge: the column for an
+  outpost, the barracks inside a keep, the throne-room guard of a castle,
+  the rearguard of a convoy.
+- **Rams** now do 20 base (×4 on gates, ×1 on houses). They skip anything
+  they can't hurt, such as the throne. On defense, the Dominion and its
+  rams go for your houses when no defender is in sight.
+- **Convoy** uses the top edge as yours: you start on the north verge and
+  leave through the top (a "▲ LEAVE" marker).
+- **Rescue:** the freed general is an allied elite who sticks with you and
+  only fights what comes close. Leaving through your edge with the general
+  alive is the win; without them it's a withdrawal.
+- **Results screen:** a per-battle outcome line plus notes, such as "Lord
+  … beaten first — can be recruited (Phase 10)", "… fled — not
+  recruitable", "cargo taken: 270 gold" or "Sir Aldric rescued".
+- **Map stub:** two columns, all eight types plus the test field.
+- **Debug:**
+  - An **Autopilot** toggle in the tuning panel plays the knight. It walks
+    to the objective through the gates, hits what's in the way, and drinks
+    a potion when low. It's used to time battles; it isn't a player feature.
+  - `GAME.simulate(seconds)` fast-forwards the sim for tests.
+- New `WAR` keys: `ringRadius`, `outpostHold`, `gateHp`, `keepGateMult`,
+  `ironGateMult`, `throneHp`, `cellRingRadius`, `rescueHold`, `wagonHp`,
+  `wagonSpeed`, `wagonGap`, `convoyCargo`, `defenseHold`, `captainStats`,
+  `lordStats` and `commanderMult`; `spoilGold` covers every type.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13. Phase 5
+suite: 46/46 functional checks.
+
+- Each type starts from its stub row at its PLAN 10.2 size.
+- **Win and lose for every type**, with the outcomes driven directly:
+  - Outpost:
+    - Progress held at 2.93 s while an enemy shieldbearer stood in the ring
+      (ring flagged contested).
+    - It resumed from 2.93 (not reset) once the shieldbearer died, and won
+      at 10 s.
+    - Standing outside the ring took nothing.
+  - Keep: the gate alone didn't win, and the objective switched to the
+    Captain. The Captain alone didn't win either. Gate and Captain both
+    down won.
+  - Castle, Lord first: beating the Lord wasn't the win. The throne then
+    won it with "can be recruited".
+  - Castle, throne first: the throne won it, and the living Lord fled with
+    "not recruitable".
+  - Convoy:
+    - Wagons moved east.
+    - All wrecked = win with the cargo (+270) in the spoils.
+    - A wagon at the far edge = lose ("Wagon 2 got away").
+    - Pushing into the top edge = withdrawal.
+  - Defense:
+    - Holding to 3:00 won ("held for 3:00").
+    - Commander down plus 75% killed = rout = win.
+    - All houses burned = lose.
+    - Left undefended for 60 s, the attackers damaged all 3 houses (and
+      won).
+  - Rescue:
+    - The cell was reachable through the breaches with every gate shut.
+    - At 4 s in its ring the general was still caged; at 9 s they were
+      free (allied, escorting).
+    - Reaching the left edge with the general = win.
+    - The general killed = lose.
+    - Leaving without the general = withdrawal.
+  - Every type: the knight falling = lose.
+- **Structure rules**, measured on the castle:
+  - The iron gate has exactly 1.6× normal gate HP.
+  - The knight's slash does 0.30× to a gate vs a house.
+  - A ram does 4.00× to a gate; a swordsman does 0.28× (rounding).
+  - A ram does 0 to the throne.
+  - A wall took no damage from a 1e6 hit and pushed a body out of its
+    footprint.
+- **Walls and doors:**
+  - With both castle gates shut, nothing outside could reach the courtyard
+    or the throne room. Each broken gate opened the next zone.
+  - With both gates down and Charge ordered, the warband walked through
+    both gateways into the throne room and hit the throne.
+- Results → Enter → map stub. Phone: tap the castle row → siege at the
+  phone's 60 live cap (60 in reserve) → courtyard fight drawn live with the
+  autopilot → won → tap the results → map.
+- Phone frame work during that fight: p50 1.9 ms, p95 4.0 ms
+  (100 units live).
+
+**Not met: the time bands.** Autopilot runs, default troops, the knight
+with modest upgrades (rank 1 at tier 1, rank 3 at tier 2), no god mode,
+2 runs each:
+
+| type | band | measured |
+|---|---|---|
+| Outpost | ~2 min | 28 s, 30 s |
+| Keep | ~3 min | 67 s, 58 s |
+| Castle siege | 4–6 min | 196 s, 168 s |
+| Convoy | ~2 min | 42 s, 52 s |
+| Defense | 2–3 min | 39 s, 53 s |
+| Rescue | ~3 min | 65 s, 61 s |
+| Village raid (Phase 4) | ~2 min | 38 s, 35 s |
+| Field battle (Phase 4) | 2–3 min | 19 s, 20 s |
+
+The knight kills about 3 Dominion units a second while fighting. That's
+the PLAN 11.2 feel target at work: two hits per swordsman, a Whirl clears a
+crowd. So a battle lasts about as long as it takes to cut down its enemies,
+plus the time spent on gates, thrones and wagons. At the PLAN's own garrison
+scale (a level-1 castle holds 40), a fight is over in well under a minute.
+Only the castle comes close (about 3 min vs 4–6), because its gates and
+throne take time. Making the bands means one of these:
+- about 250–350 Dominion units per battle (streaming in past the live cap);
+- minions about 3× tougher, which breaks the feel target;
+- much tougher objectives.
+
+That's Michael's call, so the numbers here are a sensible middle, not tuned
+to the bands.
+
+**Bugs found and fixed while building it:**
+- Units grinding on walls. Solved by the zone and door routing above.
+- The freed general wandered off to duel the Lord and died. Generals now
+  escort.
+- The autopilot charged into the whole defense column. It now holds by the
+  houses.
+- A ram hitting a throne did 1 damage (the floor in the damage formula).
+  Zero-multiplier hits are now skipped.
+
+**Assumed / not checked:**
+- How long a human player takes. The autopilot doesn't dodge or guard and
+  never stops swinging.
+- Lord and Captain stats beyond "they fight and fall".
+- Recruiting a beaten Lord (Phase 10) and the general's loyalty gain
+  (Phase 10). The battle only records them.
+- Rescue's ring doesn't pause when contested. PLAN 10.2 only says "hold
+  its ring 8 s", unlike the outpost.
+
+**Regression runs:** Phase 0 30/30, Phase 1 17/17, Phase 2 23/23 (200
+units desktop at 60 fps, 120 on the phone at 60 fps), Phase 3 24/24,
+Phase 4 24/24. The Phase 4 suite was updated for the stub's new row order.
 
 # Phase 4: battle framework, Field battle, Village raid
 
