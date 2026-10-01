@@ -23,6 +23,7 @@ No dependencies, no bundler, nothing to install.
 | `src/items.ts` | materials, weapon/armour tiers, recipes |
 | `src/talents.ts` | Blade / Arcana / Survival talents, bought with skill points |
 | `src/army.ts` | the minion sim: typed-array slots, uniform grid, minion AI, arrows, `MinionRef`, reserves, orders, rout |
+| `src/generals.ts` | castle Lords and generals: the roster record, Lord generation (pattern, moves, palette, level), command, boss data, their lines |
 | `src/war.ts` | the war on the map: village income and stores, convoys (yours and theirs), castle garrisons and recruiting, node upgrades, the warband, armies, the off-screen sim (fights), join / intercept / ambush / defense specs, the Dominion's campaign AI (war clock, musters, grace, targeting, economy), saves |
 | `src/campaign.ts` | the continent: territories, nodes, roads (data), borders, road paths, ownership, the frontier rule, garrisons and each node's battle spec |
 | `src/battle.ts` | battles: spec, seeded layouts for all eight types, `Structure` (houses, walls, gates, throne, wagons, rings, cell), zones and doors for walled layouts, objectives, scenery palettes, the stub's battle list |
@@ -30,6 +31,143 @@ No dependencies, no bundler, nothing to install.
 | `src/entities.ts` | `Player`, `Enemy` (with boss AI), `Projectile`, `Pickup` |
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
+
+# Phase 10: generals and loyalty
+
+**What changed** (new `src/generals.ts`; the logic is in `war.ts`, PLAN 9):
+
+- **Lords:**
+  - Each of the 10 conquerable castles (everything but yours and the
+    warlord's) has a Lord from the name table.
+  - Each Lord has an AF boss pattern (brute / sorcerer / stalker /
+    skylord) with its signature move (slam+rush / fan / rush / dive) and
+    colours.
+  - Lord level by tier: 4 / 7 / 10 / 13 / 16 (*default*).
+  - A castle siege fields that castle's own Lord. A castle with none
+    left fields "the Castellan"; the capital, the warlord.
+- **Recruit or Release:**
+  - Beat the Lord before the throne falls, and the results screen offers
+    **Recruit** or **Release** (←/→ + Enter, or tap).
+  - Recruit gives a general at the Lord's level, loyalty 50, or 30 if
+    they defected before.
+  - Release pays the spoils twice.
+  - Throne first: the Lord flees and is gone. Castles taken off-screen
+    lose their Lord too.
+- **Using generals:**
+  - Active cap: 1 per castle you hold, max 8; the rest wait in reserve.
+  - Assign one with the castle panel's **General** button (cycles), or
+    pick one in the Send panel to lead an army.
+  - Command = 0.10 + 0.01 × level (max 0.30):
+    - an army with a general fights ×(1 + command), without one ×0.8;
+    - a castle's defenders get ×(1 + command) from your general or their
+      Lord.
+  - Garrisons themselves no longer take the −20%: PLAN 7.3 puts that on
+    armies.
+  - Generals level +1 per victory they're in (max 20).
+- **Live:**
+  - In a joined fight or a defense, your general fights beside you as an
+    allied boss: their pattern, moves and level, obeying Charge and Focus.
+  - Their portrait and HP show under your bars.
+  - At 0 HP they're down, not dead: win and they get back up; lose and
+    they're taken.
+- **Loyalty (PLAN 9.4, every row):**
+  - victory with them present: +6;
+  - fighting beside you live: +12, replacing the +6;
+  - rescued: +25;
+  - defeat: −10;
+  - captured: −15, then −1 per 20 s held;
+  - Warlord's Presence: gains ×1.5. The Command talent arrives in
+    Phase 11; the hook reads it.
+- **The 25 warning:** at 25 or under, the general says their line once,
+  and their row and the top bar's Generals button turn red.
+- **Defection at 0** (checked on the map only, never mid-battle):
+  - from a castle, it and its garrison flip to the Dominion with them as
+    its Lord;
+  - leading an army, the army goes over and heads for their castle;
+  - held captive, they become the Lord of the castle holding them. The
+    newest Lord holds a castle.
+- **Capture and rescue (PLAN 9.3):**
+  - Captives are held at the Dominion castle nearest the defeat (a cage
+    on the map).
+  - Taking that castle frees them.
+  - So does a **Rescue raid** from the castle's panel: the cell holds the
+    real general, out alive is +25, and the castle stays theirs.
+- **Map:**
+  - The top bar's **Generals** button (or G) opens the roster: level,
+    command, where each one is, a loyalty bar, red at 25 or under.
+  - A crown marks a castle with your general.
+  - An army led by a general has a gold trim.
+  - News banners for warnings, captures, rescues and defections, each
+    with the general's line (PLAN 13 templates).
+- Saves carry every general (status, place, level, loyalty, times
+  recruited) and which army they lead.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13. Phase 10
+suite 28/28.
+
+- **Lords:**
+  - 10 Lords, all four patterns, levels 4 / 7 / 10 / 13 by tier; none at
+    the Last Camp or the capital.
+  - Millbrook Castle's siege fielded Lord Maud (sorcerer, fan, level 4).
+- **Recruit:**
+  - Lord first → Enter → Recruit: loyalty 50, level 4, in reserve,
+    "JOINS YOU".
+  - Release by tap: gold 441 → 882, spoils shown ×2, the Lord gone.
+  - Throne first: no offer, the Lord gone.
+- **Cap:** with one castle, a second general couldn't lead an army while
+  the first held it. With two castles, two were active.
+- **Command:**
+  - L10 = +20%: army ×1.08 with a general vs ×0.72 without (both ×0.9
+    yours). Max 0.30.
+  - A general in your castle multiplied its defense by exactly
+    1 + command.
+- **Every PLAN 9.4 row:**
+  - sim victory: +6 and a level;
+  - sim defeat: −10 −15, held at the nearest Dominion castle;
+  - 60 s captive: −3;
+  - rescued: +25;
+  - Presence: +6 → +9, losses unchanged;
+  - live victory beside you: +12 (not +18). They were on the field as an
+    allied boss, knocked down mid-fight ("IS DOWN"), and got back up on
+    the win;
+  - a live defeat: −10 −15 and taken.
+- **The warning:** 30 → 23 raised "LORD OSRIC: LOYALTY 23" with his line,
+  once.
+- **DONE, defection flips castle + garrison:**
+  - A garrisoned general at 0: the castle went to the Dominion with its 33
+    troops, and he's its Lord again.
+  - Leading 25 troops: the army went over.
+  - Captive: became Lord of the castle holding him, the newest Lord there.
+- **Never mid-battle:** at 0 during a battle, the general held. Back on the
+  map, he defected and the Last Camp went with him.
+- **DONE, re-recruit starts at 30:** the defector held his castle again.
+  Beaten first in its siege and recruited, he came back at loyalty 30
+  (recruited twice).
+- **Rescue raid:** the castle holding Lord Ysolde offered "Rescue raid:
+  Lord Ysolde". It fielded her in the cell; out alive she went 40 → 65,
+  and the castle stayed theirs. Taking a castle that held her also freed
+  her (+25).
+- **Map:** the castle panel's General button assigned and unassigned. The
+  Send panel's picker made her lead the army. G opened the roster.
+- Generals and their armies survived a reload.
+- **Phone:** tapping the top bar's Generals button opened the roster.
+
+**Regressions:** Phase 0–9 suites green (5: 46/46 functional, timing 5/8
+in band on this single run).
+
+**Bugs found and fixed:**
+- The castle-to-Lord lookup preferred the castle's original Lord over a
+  defector who'd just taken it.
+- The roster's open state survived a trip to the map from a battle.
+  Returning to the map now resets the map mode.
+
+**Assumed / not checked:**
+- Lord levels by tier and +1 level per victory (the PLAN says "level from
+  battles", no rate).
+- Fled Lords simply leave the war.
+- Lords don't add command to their castle's live battle (they fight in
+  it).
+- A defected army's general can't be fought until it reaches a castle.
 
 # Phase 9: the Dominion's campaign AI
 

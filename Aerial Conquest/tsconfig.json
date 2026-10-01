@@ -23,6 +23,7 @@
     "src/army.ts",
     "src/battle.ts",
     "src/campaign.ts",
+    "src/generals.ts",
     "src/war.ts",
     "src/music.ts",
     "src/entities.ts",

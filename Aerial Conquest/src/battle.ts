@@ -37,6 +37,9 @@ interface BattleSpec {
   fightId?: number;                           // joining an off-screen fight (PLAN 7.3)
   armyId?: number;                            // intercepting a Dominion army
   structure?: number;                         // joined fights: the structures' remaining HP share
+  lordId?: string;                            // castle: the Lord's roster id (recruitable if beaten first)
+  generalId?: string;                         // your general fighting beside you (a joined army's, a defended castle's)
+  rescueId?: string;                          // rescue raid: the general in the cell
 }
 
 /** Ground colours per territory scenery (PLAN 10.1: the look comes from the territory). */

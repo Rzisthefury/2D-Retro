@@ -322,7 +322,19 @@ class Renderer {
     c.textAlign = 'center';
     c.fillStyle = PAL.dim;
     c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
-    if (b.resultT > 0.6) c.fillText(IS_TOUCH ? 'tap to return to the map' : 'ENTER to return to the map', VIEW_W / 2, VIEW_H - 40);
+    if (g.pendingRecruit) {
+      const lg = g.war.general(g.pendingRecruit)!;
+      c.fillStyle = '#c7b8ff'; c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
+      c.fillText(`${lg.name}, beaten before the throne fell, kneels. Level ${lg.level}${lg.recruited ? ' (defected once: loyalty starts at 30)' : ''}.`, VIEW_W / 2, RECRUIT_BTN.y - 16);
+      ['Recruit', 'Release (double spoils)'].forEach((label, i) => {
+        const x = RECRUIT_BTN.x0 + i * (RECRUIT_BTN.w + RECRUIT_BTN.gap), on = g.recruitPick === i;
+        c.fillStyle = on ? (i ? 'rgba(200,150,40,0.9)' : 'rgba(60,160,90,0.9)') : 'rgba(40,50,80,0.9)';
+        this.roundRect(c, x, RECRUIT_BTN.y, RECRUIT_BTN.w, RECRUIT_BTN.h, 8); c.fill();
+        if (on) { c.strokeStyle = '#ffffff'; c.lineWidth = 2; this.roundRect(c, x, RECRUIT_BTN.y, RECRUIT_BTN.w, RECRUIT_BTN.h, 8); c.stroke(); }
+        c.fillStyle = '#ffffff'; c.font = '900 13px ui-monospace, Menlo, Consolas, monospace';
+        c.fillText(label.toUpperCase(), x + RECRUIT_BTN.w / 2, RECRUIT_BTN.y + RECRUIT_BTN.h / 2 + 5);
+      });
+    } else if (b.resultT > 0.6) c.fillText(IS_TOUCH ? 'tap to return to the map' : 'ENTER to return to the map', VIEW_W / 2, VIEW_H - 40);
     c.restore();
   }
 
@@ -505,6 +517,40 @@ class Renderer {
     this.drawMapHud(c, g);
   }
 
+  /** The Generals roster (PLAN 7.1 Generals tab): level, command, loyalty, where they are; red at 25 or under. */
+  private drawRoster(c: CanvasRenderingContext2D, g: Game) {
+    const P = MAP_PANEL, R = MAP_ROSTER, w = g.war, camp = g.camp;
+    c.save();
+    this.panelFrame(c, 'Generals', true);
+    const list = w.mine();
+    c.textAlign = 'left'; c.font = '600 11px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = PAL.dim;
+    c.fillText(`active ${w.activeGenerals()} / ${w.generalCap()}  (1 per castle held, max ${WAR.generalCap})`, P.x + P.pad, P.y + R.y0 - 4);
+    if (!list.length) {
+      c.fillStyle = PAL.text; c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+      c.fillText('None yet. Beat a castle Lord before', P.x + P.pad, P.y + R.y0 + 30);
+      c.fillText('the throne falls, then Recruit them.', P.x + P.pad, P.y + R.y0 + 48);
+    }
+    list.slice(0, 6).forEach((gen, i) => {
+      const y = P.y + R.y0 + i * R.rowH, low = gen.loyalty <= WAR.loyaltyWarn;
+      c.fillStyle = low ? 'rgba(120,30,40,0.5)' : 'rgba(30,40,70,0.6)'; this.roundRect(c, P.x + P.pad - 4, y, P.w - P.pad * 2 + 8, R.rowH - 6, 6); c.fill();
+      if (low) { c.strokeStyle = '#ff6b6b'; c.lineWidth = 2; this.roundRect(c, P.x + P.pad - 4, y, P.w - P.pad * 2 + 8, R.rowH - 6, 6); c.stroke(); }
+      c.fillStyle = gen.accent; c.beginPath(); c.arc(P.x + P.pad + 10, y + 16, 8, 0, Math.PI * 2); c.fill();
+      c.textAlign = 'left'; c.fillStyle = '#ffffff'; c.font = '800 12px ui-monospace, Menlo, Consolas, monospace';
+      c.fillText(gen.name, P.x + P.pad + 24, y + 15);
+      c.fillStyle = PAL.dim; c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+      const where = gen.status === 'castle' ? `holding ${camp.nodes[gen.at].name}` : gen.status === 'army' ? 'leading an army' : gen.status === 'captive' ? `CAPTIVE at ${camp.nodes[gen.at].name}` : 'in reserve';
+      c.fillStyle = gen.status === 'captive' ? '#ff9a8a' : PAL.dim;
+      c.fillText(`L${gen.level} · cmd +${Math.round(command(gen) * 100)}% · ${where}`, P.x + P.pad + 24, y + 29);
+      // loyalty bar
+      const bx = P.x + P.pad + 24, bw = P.w - P.pad * 2 - 70;
+      this.bar(c, bx, y + 35, bw, 6, gen.loyalty / 100, low ? '#ff5f56' : gen.loyalty > 60 ? '#4fe08a' : '#ffd54a', 'rgba(0,0,0,0.6)');
+      c.textAlign = 'right'; c.fillStyle = low ? '#ff6b6b' : PAL.text; c.font = '700 10px ui-monospace, Menlo, Consolas, monospace';
+      c.fillText(`${Math.round(gen.loyalty)}${low ? ' !' : ''}`, P.x + P.w - P.pad, y + 41);
+    });
+    this.panelButtons(c, g, []);
+    c.restore();
+  }
+
   /** A muster (PLAN 8's telegraph): a war banner over their castle, the countdown, and a dashed line to the target. */
   private drawMuster(c: CanvasRenderingContext2D, g: Game, m: { from: number; target: number; t: number }) {
     const a = g.camp.nodes[m.from], b = g.camp.nodes[m.target];
@@ -541,7 +587,7 @@ class Renderer {
     c.strokeStyle = '#2a1e10'; c.lineWidth = 2; c.beginPath(); c.moveTo(-7, 4); c.lineTo(-7, -22); c.stroke();
     c.fillStyle = mine ? '#4f8fe0' : '#b83a44';
     c.beginPath(); c.moveTo(-7, -22); c.lineTo(10, -22); c.lineTo(10, -8); c.lineTo(1.5, -4); c.lineTo(-7, -8); c.closePath(); c.fill();
-    c.strokeStyle = mine ? '#1d3b66' : '#4a1418'; c.lineWidth = 1.2; c.stroke();
+    c.strokeStyle = a.general ? '#ffd54a' : mine ? '#1d3b66' : '#4a1418'; c.lineWidth = a.general ? 2 : 1.2; c.stroke();
     c.fillStyle = '#ffffff'; c.font = '800 8px ui-monospace, Menlo, Consolas, monospace'; c.textAlign = 'center';
     c.fillText(String(troopTotal(a.units)), 1.5, -12);
     c.restore();
@@ -611,7 +657,8 @@ class Renderer {
     c.fillStyle = PAL.dim; c.font = '600 10px ui-monospace, Menlo, Consolas, monospace'; c.textAlign = 'left';
     c.fillText(this.unitLine(a.units), at.x, at.y); at.y += 18;
     this.panelRow(c, at, a.order === 'attack' ? 'Attacking' : 'Marching to', camp.nodes[a.target].name);
-    this.panelRow(c, at, 'General', a.general || 'none (-20%)', a.general ? PAL.text : '#ffb070');
+    const ag = g.war.general(a.general);
+    this.panelRow(c, at, 'General', ag ? `${ag.name} (+${Math.round(command(ag) * 100)}%)` : 'none (-20%)', ag ? PAL.text : '#ffb070');
     const n = camp.nodes[a.target], N = camp.nodes.length;
     const here = a.leg < a.path.length - 1 ? a.path[a.leg + 1] : a.path[a.leg];
     const eta = (camp.dist[here * N + n.id] + (a.leg < a.path.length - 1 ? (1 - a.t) * dist(camp.nodes[a.path[a.leg]].x, camp.nodes[a.path[a.leg]].y, camp.nodes[here].x, camp.nodes[here].y) : 0)) / WAR.armySpeed;
@@ -752,6 +799,15 @@ class Renderer {
       c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(-12, 18, 24, 4);
       c.fillStyle = '#ffd54a'; c.fillRect(-12, 18, 24 * f, 4);
     }
+    if (n.type === 'castle' && mine && g.war.generalAt(n.id)) {
+      c.fillStyle = '#ffd54a'; c.beginPath(); c.moveTo(-8, -32); c.lineTo(-8, -38); c.lineTo(-4, -35); c.lineTo(0, -40); c.lineTo(4, -35); c.lineTo(8, -38); c.lineTo(8, -32); c.closePath(); c.fill();
+    }
+    if (n.type === 'castle' && !mine && g.war.captivesAt(n.id).length) {
+      // a cage: one of your generals is held here (PLAN 7.1)
+      c.fillStyle = 'rgba(10,10,14,0.85)'; c.fillRect(-28, -14, 13, 15);
+      c.strokeStyle = '#c8cdd6'; c.lineWidth = 1.3; c.strokeRect(-28, -14, 13, 15);
+      c.beginPath(); for (let k = 1; k < 4; k++) { c.moveTo(-28 + k * 3.25, -14); c.lineTo(-28 + k * 3.25, 1); } c.stroke();
+    }
     // level pips
     if (n.type !== 'outpost') {
       for (let i = 0; i < n.level; i++) {
@@ -817,13 +873,21 @@ class Renderer {
     c.fillText('THE VERDANT REACH', 16, 28);
     c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
     const items: [string, string][] = [
-      ['gold', String(p.gold)], ['warband', `${troopTotal(g.war.warband)} / ${g.warbandCap()}`], ['SP', String(p.skillPoints)], ['territories', `${camp.territoriesHeld('player')} / ${camp.territories.length}`],
+      ['gold', String(p.gold)], ['warband', `${troopTotal(g.war.warband)}/${g.warbandCap()}`], ['SP', String(p.skillPoints)], ['land', `${camp.territoriesHeld('player')}/${camp.territories.length}`],
     ];
-    let x = 260;
+    let x = 214;
     for (const [k, v] of items) {
-      c.fillStyle = PAL.dim; c.fillText(k, x, 27); x += c.measureText(k).width + 6;
-      c.fillStyle = PAL.text; c.fillText(v, x, 27); x += c.measureText(v).width + 22;
+      c.fillStyle = PAL.dim; c.fillText(k, x, 27); x += c.measureText(k).width + 5;
+      c.fillStyle = PAL.text; c.fillText(v, x, 27); x += c.measureText(v).width + 16;
     }
+    // generals: a button that opens the roster (shared hit area MAP_GEN_HIT)
+    const gw = g.war, low = gw.mine().some((x) => x.loyalty <= WAR.loyaltyWarn);
+    c.fillStyle = g.mapMode === 'generals' ? 'rgba(80,140,255,0.35)' : 'rgba(40,50,80,0.8)';
+    this.roundRect(c, MAP_GEN_HIT.x, 9, MAP_GEN_HIT.w, 26, 6); c.fill();
+    if (low) { c.strokeStyle = '#ff6b6b'; c.lineWidth = 2; this.roundRect(c, MAP_GEN_HIT.x, 9, MAP_GEN_HIT.w, 26, 6); c.stroke(); }
+    c.textAlign = 'center'; c.fillStyle = PAL.text; c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillText(`generals ${gw.activeGenerals()}/${gw.generalCap()}${gw.mine().length > gw.activeGenerals() ? ` +${gw.mine().length - gw.activeGenerals()}` : ''}`, MAP_GEN_HIT.x + MAP_GEN_HIT.w / 2, 27);
+    c.textAlign = 'left'; c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
     // the Dominion's tempo (PLAN 7.1 HUD): offensives under way and the next muster
     const w = g.war;
     c.textAlign = 'right'; c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
@@ -835,7 +899,8 @@ class Renderer {
     c.fillStyle = 'rgba(232,236,247,0.75)'; c.fillText(help, VIEW_W / 2, VIEW_H - 8);
     c.restore();
     const cv = g.selectedConvoy(), ar = g.selectedArmy(), fi = g.selectedFight();
-    if (g.mapMode === 'send') this.drawSendPanel(c, g);
+    if (g.mapMode === 'generals') this.drawRoster(c, g);
+    else if (g.mapMode === 'send') this.drawSendPanel(c, g);
     else if (g.mapMode === 'target') {
       c.save();
       c.fillStyle = 'rgba(10,14,28,0.85)'; this.roundRect(c, VIEW_W / 2 - 290, MAP_BAR.h + 8, 580, 30, 8); c.fill();
@@ -2423,7 +2488,7 @@ class Renderer {
 
   /** The big bar along the bottom while a boss is up. */
   private drawBossBar(c: CanvasRenderingContext2D, g: Game) {
-    const e = g.enemies.find((x) => x.alive && x.boss && x.aggro && !x.fleeing);
+    const e = g.enemies.find((x) => x.alive && x.boss && x.aggro && !x.fleeing && x.team === 'enemy');
     if (!e) return;
     const b = e.boss!;
     const w = 460, x = (VIEW_W - w) / 2, y = VIEW_H - 40;
@@ -2579,6 +2644,16 @@ class Renderer {
     this.bar(c, x + 52, y + 17, barW * 0.8, 9, mpRatio, p.charging ? PAL.mpCharge : PAL.mp, 'rgba(0,0,0,0.55)');
     c.fillStyle = p.charging ? PAL.mpCharge : PAL.text;
     c.fillText(p.charging ? 'MP CHARGE!' : `MP ${Math.floor(p.mp)}`, x + 58, y + 24.5);
+    // your general beside you (PLAN 13: ally general portraits with HP)
+    const ge = g.battleGeneral;
+    if (ge && g.screen === 'battle') {
+      const gy = y + 128;
+      c.fillStyle = ge.def.accent; c.beginPath(); c.arc(x + 9, gy + 4, 8, 0, Math.PI * 2); c.fill();
+      c.strokeStyle = ge.alive ? '#ffffff' : '#ff6b6b'; c.lineWidth = 1.5; c.stroke();
+      c.fillStyle = ge.alive ? PAL.text : '#ff9a8a'; c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+      c.fillText(ge.alive ? ge.def.name : `${ge.def.name} (down)`, x + 24, gy + 1);
+      this.bar(c, x + 24, gy + 5, 140, 5, ge.alive ? ge.hp / ge.maxHp : 0, '#5fb4ff', 'rgba(0,0,0,0.55)');
+    }
     c.restore();
 
     // ---- top-right: where you are and what is happening

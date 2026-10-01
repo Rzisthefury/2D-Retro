@@ -554,6 +554,16 @@ const WAR = {
     enemyRefill: 6, // troops / min back into a worn garrison while they have gold (*default*)
     reinforceChance: 0.5, // a besieged castle of theirs gets one reinforcement (*default*: "may")
     reinforceDraw: 0.4, // ...this share of the nearest other castle's garrison
+    // generals and loyalty (Phase 10, PLAN 9)
+    lordLevel: [4, 7, 10, 13, 16], // a castle Lord's level by territory tier (*default*); recruits keep it
+    generalMaxLevel: 20,
+    commandBase: 0.1, commandPerLevel: 0.01, commandMax: 0.3, // command = 0.10 + 0.01 x level, max 0.30
+    generalCap: 8, // active generals: 1 per castle you hold, at most this
+    loyaltyStart: 50, loyaltyReRecruit: 30,
+    loyaltyWin: 6, loyaltyWinTogether: 12, loyaltyRescued: 25, loyaltyDefeat: -10, loyaltyCaptured: -15,
+    captiveDrainEvery: 20, // -1 loyalty per this many seconds held
+    loyaltyWarn: 25, // at or under: the warning (red border, a line)
+    presenceMult: 1.5, // Warlord's Presence (Command talent, Phase 11): loyalty gains x this
     // the Phase 0 test battlefield
     testField: { w: 1920, h: 1200 },
     testFieldTier: 1,
@@ -602,6 +612,12 @@ const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 const MAP_PANEL = { x: 640, y: 62, w: 306, h: 412, pad: 14 };
 const MAP_BTN = { w: 278, h: 46, gap: 8 };
 const MAP_BAR = { h: 44 };
+/** The results screen's Recruit / Release buttons (PLAN 9.1). */
+const RECRUIT_BTN = { x0: 270, y: 430, w: 200, h: 46, gap: 20 };
+/** The top bar's generals readout (opens the roster). */
+const MAP_GEN_HIT = { x: 560, w: 140 };
+/** The Generals roster panel. */
+const MAP_ROSTER = { y0: 58, rowH: 52 };
 /** The Send army panel: a row per troop type with -/+ (step), then Half / All. */
 const MAP_SEND = { y0: 74, rowH: 36, btnW: 44, btnH: 30, step: 5, quickH: 34 };
 const SEND_TYPES = ['sword', 'spear', 'archer', 'shield', 'ram']; // the top bar: treasury, warband, skill points, territories
@@ -713,7 +729,7 @@ const KEYMAP = {
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     Enter: 'confirm', Escape: 'cancel', Backspace: 'cancel',
     Digit1: 'spell1', Digit2: 'spell2', Digit3: 'spell3', Digit4: 'spell4', Digit5: 'spell5',
-    KeyE: 'item', KeyQ: 'command', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back', KeyZ: 'zoom',
+    KeyE: 'item', KeyQ: 'command', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back', KeyZ: 'zoom', KeyG: 'generals',
 };
 // Movement is read separately so WASD can coexist with the arrow-key menu.
 const MOVE_KEYS = { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'] };
@@ -3188,6 +3204,50 @@ class Campaign {
     }
 }
 /* =========================================================================
+ * generals.ts — castle Lords and the generals you recruit from them (PLAN 9).
+ *
+ * Every territory castle but yours and the warlord's has a Lord: a named
+ * knight on AF's boss AI (pattern + signature move + palette), generated
+ * per castle. Beat one in a castle siege before the throne falls and you
+ * may recruit them. A general has a level (1-20, command = 0.10 + 0.01 x
+ * level), a loyalty (0-100) and a place: a castle, an army, the reserve or
+ * a Dominion cell. War (war.ts) runs their fortunes; this file holds the
+ * data and the words.
+ * ========================================================================= */
+/** Patterns and their signature moves (AF's boss AI). */
+const LORD_PATTERNS = [
+    { pattern: 'brute', moves: ['slam', 'rush'], color: '#3d2f5c', accent: '#c79bff' },
+    { pattern: 'sorcerer', moves: ['fan'], color: '#2a3f5f', accent: '#8fd0ff' },
+    { pattern: 'stalker', moves: ['rush'], color: '#4a2a2a', accent: '#ff9a6b' },
+    { pattern: 'skylord', moves: ['dive'], color: '#2f4a3a', accent: '#9fffc0' },
+];
+/** The Lord of a territory's castle (generated from the name table, PLAN 9.1). */
+function makeLord(t, castle) {
+    const p = LORD_PATTERNS[t.id % LORD_PATTERNS.length];
+    return {
+        id: `lord-${t.id}`, name: `Lord ${LORD_NAMES[t.id % LORD_NAMES.length]}`, title: `Lord of ${t.name}`,
+        pattern: p.pattern, moves: p.moves.slice(), color: p.color, accent: p.accent,
+        level: clamp(WAR.lordLevel[t.tier - 1], 1, WAR.generalMaxLevel),
+        loyalty: WAR.loyaltyStart, status: 'lord', at: castle, army: -1, captiveT: 0, warned: false, recruited: 0, lordSince: 0,
+    };
+}
+/** PLAN 9.2: command = 0.10 + 0.01 x level, capped at 0.30. */
+function command(g) { return Math.min(WAR.commandMax, WAR.commandBase + WAR.commandPerLevel * g.level); }
+/** The boss a general or Lord fights as (AF's boss data, PLAN 11.3). */
+function generalBoss(g, tier) {
+    return { id: g.id, name: g.name, title: g.title, tier, stats: WAR.lordStats, uniqueMaterials: [], pattern: g.pattern, moves: g.moves, color: g.color, accent: g.accent };
+}
+/** One portrait line per moment (PLAN 13 story: templates per general). */
+function generalLine(g, moment) {
+    const first = g.name.replace(/^Lord /, '');
+    switch (moment) {
+        case 'recruit': return `${g.name}: "Beaten fairly. My sword is yours, Knight."`;
+        case 'low': return `${g.name}: "I begin to wonder whose war this is, Knight."`;
+        case 'defect': return `${g.name}: "The Dominion pays its lords better. Farewell." (${first} defects)`;
+        case 'rescue': return `${g.name}: "You came for me. I won't forget it."`;
+    }
+}
+/* =========================================================================
  * war.ts — the war state on the campaign map (PLAN 6, 7): the treasury's
  * income, convoys, castle garrisons and troop production, node upgrades and
  * the knight's warband. Ticks while the map is up (battles pause it).
@@ -3251,6 +3311,10 @@ class War {
         this.refill = []; // per node: progress to the next recruit back into a worn garrison
         this.won = false; // their capital has fallen
         this.events = [];
+        // generals (Phase 10)
+        this.generals = [];
+        this.loyaltyMult = 1; // Warlord's Presence (Phase 11): set by the game from the knight's talents
+        this.liveGenerals = new Set(); // generals who fought beside the knight in the battle being settled
         this.camp = camp;
         const N = camp.nodes.length;
         this.stock = new Array(N).fill(0);
@@ -3285,6 +3349,8 @@ class War {
         this.musters = [];
         this.won = false;
         this.events = [];
+        // every territory castle but yours and the warlord's has a Lord (PLAN 9.1)
+        this.generals = this.camp.territories.filter((t) => t.id !== WAR.startTerritory && t.id !== WAR.capitalTerritory).map((t) => makeLord(t, this.camp.castleOf(t.id).id));
         this.clock = WAR.warClock[this.difficulty];
         this.enemyConvoyT = WAR.enemyConvoyEvery * 0.5;
         this.delivered = 0;
@@ -3432,6 +3498,17 @@ class War {
         this.convoys = this.convoys.filter((c) => c.leg < c.path.length - 1);
         this.tickArmies(dt);
         this.tickAI(dt);
+        for (const g of this.generals) {
+            if (g.status === 'captive') {
+                g.captiveT += dt;
+                while (g.captiveT >= WAR.captiveDrainEvery) {
+                    g.captiveT -= WAR.captiveDrainEvery;
+                    this.loyalty(g, -1);
+                }
+            }
+            if ((g.status === 'castle' || g.status === 'army' || g.status === 'captive') && g.loyalty <= 0)
+                this.defect(g);
+        }
         this.refillWarband();
     }
     /** PLAN 6: castles recruit continuously while there's gold, up to their cap; a ram every 30. */
@@ -3569,7 +3646,7 @@ class War {
     }
     /** The node's defending strength, as the sim would field it (fortified). */
     nodeStrength(n) {
-        return War.strength(this.defendersOf(n), this.camp.battleTier(n), this.fortification(n) * this.mult(n.owner, null));
+        return War.strength(this.defendersOf(n), this.camp.battleTier(n), this.fortification(n) * this.nodeMult(n));
     }
     /** The Dominion's next offensive: its best target and the castle that musters for it, or null. */
     planOffensive() {
@@ -3715,6 +3792,170 @@ class War {
         this.armies.push({ id: this.nextArmyId++, team: 'enemy', general: null, units, path, leg: 0, t: 0, target: n.id, order: 'reinforce', fight: -1 });
         this.events.push({ kind: 'reinforce', node: from, target: n.id });
     }
+    /* --------------------------------------------- generals and loyalty (Phase 10, PLAN 9) */
+    general(id) { return id ? this.generals.find((g) => g.id === id) || null : null; }
+    /** The Lord holding a Dominion castle, or null (the warlord's seat has none to recruit). */
+    lordAt(node) {
+        let best = null;
+        for (const g of this.generals)
+            if (g.status === 'lord' && g.at === node && (!best || g.lordSince > best.lordSince))
+                best = g;
+        return best;
+    }
+    /** Your general assigned to a castle, or null. */
+    generalAt(node) { return this.generals.find((g) => g.status === 'castle' && g.at === node) || null; }
+    /** Generals in Dominion cells at a castle. */
+    captivesAt(node) { return this.generals.filter((g) => g.status === 'captive' && g.at === node); }
+    /** Your generals (recruited, wherever they are). */
+    mine() { return this.generals.filter((g) => g.status === 'reserve' || g.status === 'castle' || g.status === 'army' || g.status === 'captive'); }
+    activeGenerals() { return this.generals.filter((g) => g.status === 'castle' || g.status === 'army').length; }
+    /** PLAN 9.2: one active general per castle you hold, at most 8. */
+    generalCap() { return Math.min(WAR.generalCap, this.camp.nodes.filter((n) => n.type === 'castle' && n.owner === 'player').length); }
+    /** Loyalty moves (PLAN 9.4); gains x1.5 with Warlord's Presence. Warns once at 25 or under. */
+    loyalty(g, delta) {
+        if (delta > 0)
+            delta *= this.loyaltyMult;
+        g.loyalty = clamp(g.loyalty + delta, 0, 100);
+        if (g.loyalty > WAR.loyaltyWarn)
+            g.warned = false;
+        else if (!g.warned) {
+            g.warned = true;
+            this.events.push({ kind: 'lowLoyalty', node: -1, target: -1, general: g.id });
+        }
+    }
+    /** A victory a general was part of: +6 (the knight beside them live: +12, PLAN 9.4) and a level. */
+    generalWon(g, live) {
+        this.loyalty(g, live ? WAR.loyaltyWinTogether : WAR.loyaltyWin);
+        g.level = Math.min(WAR.generalMaxLevel, g.level + 1);
+    }
+    /** A defeat with the general present: -10; their side broke, so they're taken (-15) to the nearest Dominion castle. */
+    generalLost(g, near) {
+        this.loyalty(g, WAR.loyaltyDefeat);
+        const cell = this.nearestCastle(near, 'enemy');
+        g.army = -1;
+        if (cell < 0) {
+            g.status = 'reserve';
+            g.at = -1;
+            return;
+        } // nowhere left to hold them
+        g.status = 'captive';
+        g.at = cell;
+        g.captiveT = 0;
+        this.loyalty(g, WAR.loyaltyCaptured);
+        this.events.push({ kind: 'captured', node: cell, target: -1, general: g.id });
+    }
+    /** Freed (PLAN 9.3): +25, back in the reserve. */
+    rescue(g) {
+        if (g.status !== 'captive')
+            return;
+        g.status = 'reserve';
+        g.at = -1;
+        g.captiveT = 0;
+        this.loyalty(g, WAR.loyaltyRescued);
+        this.events.push({ kind: 'rescued', node: -1, target: -1, general: g.id });
+    }
+    /** A beaten Lord joins you (PLAN 9.1): loyalty 50, or 30 if they defected before. */
+    recruit(g) {
+        g.status = 'reserve';
+        g.at = -1;
+        g.army = -1;
+        g.warned = false;
+        g.loyalty = g.recruited > 0 ? WAR.loyaltyReRecruit : WAR.loyaltyStart;
+        g.recruited++;
+    }
+    /** Put a general in a castle of yours (or take them out with null). Respects the active cap. */
+    assignCastle(node, id) {
+        const cur = this.generalAt(node);
+        if (cur) {
+            cur.status = 'reserve';
+            cur.at = -1;
+        }
+        if (!id)
+            return true;
+        const g = this.general(id);
+        if (!g || g.status !== 'reserve' || this.activeGenerals() >= this.generalCap()) {
+            if (cur) {
+                cur.status = 'castle';
+                cur.at = node;
+            }
+            return false;
+        }
+        g.status = 'castle';
+        g.at = node;
+        return true;
+    }
+    /** A general can lead or hold if they're in the reserve (and the cap allows), or already at `node`. */
+    assignable(node) {
+        const room = this.activeGenerals() < this.generalCap();
+        return this.generals.filter((g) => (g.status === 'reserve' && room) || (g.status === 'castle' && g.at === node));
+    }
+    /**
+     * PLAN 9.4: at 0 loyalty a general defects (checked on the map, never mid-battle):
+     * from a castle, the castle and its garrison go with them and they're its Lord again;
+     * leading an army, the army goes over; held captive, they join the castle holding them.
+     */
+    defect(g) {
+        const camp = this.camp;
+        g.lordSince = 1 + Math.max(0, ...this.generals.map((x) => x.lordSince));
+        this.events.push({ kind: 'defected', node: g.at, target: -1, general: g.id });
+        if (g.status === 'castle') {
+            const n = camp.nodes[g.at];
+            n.owner = 'enemy';
+            this.nodeForce[n.id] = this.garrison[n.id] ? { ...this.garrison[n.id] } : emptyReserve();
+            this.garrison[n.id] = null;
+            this.captured.push(n.id);
+            g.status = 'lord';
+        }
+        else if (g.status === 'army') {
+            const a = this.armies.find((x) => x.id === g.army);
+            g.status = 'lord';
+            g.at = -1;
+            if (a) {
+                a.team = 'enemy';
+                a.offensive = false;
+                const here = a.leg < a.path.length - 1 && a.t > 0.5 ? a.path[a.leg + 1] : a.path[a.leg];
+                const to = this.nearestCastle(here, 'enemy');
+                if (to >= 0 && a.fight < 0) {
+                    a.path = this.path(here, to);
+                    a.leg = 0;
+                    a.t = 0;
+                    a.target = to;
+                    a.order = 'reinforce';
+                }
+                // the fight it was in changes sides with it
+                const f = this.fights.find((x) => x.id === a.fight);
+                if (f) {
+                    f.over = true;
+                    a.fight = -1;
+                    this.fights = this.fights.filter((x) => !x.over);
+                }
+            }
+        }
+        else if (g.status === 'captive') {
+            g.status = 'lord'; // the castle holding them gets a Lord
+        }
+        g.army = -1;
+    }
+    /** Who leads a castle siege battle: the castle's Lord from the roster (the warlord's seat has its own). */
+    dressCastle(spec, n) {
+        if (n.type !== 'castle')
+            return;
+        const lord = this.lordAt(n.id);
+        spec.lordId = lord ? lord.id : undefined;
+        spec.lordName = lord ? lord.name : n.territory === WAR.capitalTerritory ? 'Warlord Garrick Thorne' : 'the Castellan';
+    }
+    /** PLAN 9.3: a rescue raid on the castle holding one of your generals, without taking it. */
+    rescueSpecFor(n, g) {
+        const t = this.camp.territories[n.territory], s = rescueSpec();
+        s.name = `${n.name} (cells)`;
+        s.tier = this.camp.battleTier(n);
+        s.scenery = t.scenery;
+        s.seed = 11000 + n.id * 23;
+        s.generalName = g.name;
+        s.rescueId = g.id;
+        this.dressCastle(s, n);
+        return s;
+    }
     /* ------------------------------------------------- armies (Phase 8, PLAN 7.2) */
     /** Strength (PLAN 7.3): sum of count x power x tier scale, x the side's multipliers. */
     static strength(u, tier, mult) {
@@ -3731,9 +3972,15 @@ class War {
             return WAR.keepFort[n.level - 1];
         return 1;
     }
-    /** A side's multiplier besides fortification: no general -20% (generals arrive in Phase 10); your troops' per-unit edge. */
+    /** An army's multiplier: x(1 + command) with a general, -20% without (PLAN 7.3); your troops' per-unit edge. */
     sideMult(team, general) {
-        return (general ? 1 : WAR.noGeneralMult) * (team === 'player' ? WAR.playerTroopMult : 1);
+        const g = this.general(general);
+        return (g ? 1 + command(g) : WAR.noGeneralMult) * (team === 'player' ? WAR.playerTroopMult : 1);
+    }
+    /** A node's defenders' multiplier (before fortification): x(1 + command) of its general or Lord. */
+    nodeMult(n) {
+        const g = n.owner === 'player' ? this.generalAt(n.id) : n.type === 'castle' ? this.lordAt(n.id) : null;
+        return (g ? 1 + command(g) : 1) * (n.owner === 'player' ? WAR.playerTroopMult : 1);
     }
     /** Where an army is on the map. */
     armyPos(a) {
@@ -3746,7 +3993,7 @@ class War {
     /** The node an army stands at (fighting or arrived), or -1 while on a road. */
     armyNode(a) { return a.t === 0 ? a.path[a.leg] : -1; }
     /** Send troops from one of your castles: to an enemy node (attack) or one of your castles (reinforce). */
-    sendArmy(from, units, target) {
+    sendArmy(from, units, target, generalId = null) {
         const g = this.garrison[from.id];
         if (!g || from.owner !== 'player' || from.id === target.id)
             return null;
@@ -3759,7 +4006,14 @@ class War {
             return null;
         for (const k of UNIT_ORDER)
             g[k] -= units[k];
-        const a = { id: this.nextArmyId++, team: 'player', general: null, units: { ...units }, path, leg: 0, t: 0, target: target.id, order: target.owner === 'player' ? 'reinforce' : 'attack', fight: -1 };
+        const gen = this.general(generalId);
+        const canLead = !!gen && (gen.status === 'reserve' ? this.activeGenerals() < this.generalCap() : gen.status === 'castle' && gen.at === from.id);
+        const a = { id: this.nextArmyId++, team: 'player', general: canLead ? gen.id : null, units: { ...units }, path, leg: 0, t: 0, target: target.id, order: target.owner === 'player' ? 'reinforce' : 'attack', fight: -1 };
+        if (canLead) {
+            gen.status = 'army';
+            gen.at = -1;
+            gen.army = a.id;
+        }
         this.armies.push(a);
         return a;
     }
@@ -3855,6 +4109,14 @@ class War {
     /** An army done at one of its own nodes: castles take it into the garrison; elsewhere it heads for the nearest castle. */
     settleAt(a, n) {
         if (n.type === 'castle') {
+            const g = this.general(a.general);
+            if (g && a.team === 'player' && g.status === 'army') {
+                g.status = 'reserve';
+                g.army = -1;
+                g.at = -1;
+            }
+            if (g && a.team === 'enemy' && g.status === 'lord' && g.at < 0)
+                g.at = n.id;
             if (a.team === 'player') {
                 const g = this.garrison[n.id] || (this.garrison[n.id] = emptyReserve());
                 for (const k of UNIT_ORDER)
@@ -3905,7 +4167,7 @@ class War {
     defStrength(f) {
         if (f.node >= 0) {
             const n = this.camp.nodes[f.node];
-            return War.strength(this.defendersOf(n), f.tier, this.fortification(n) * this.sideMult(n.owner, null));
+            return War.strength(this.defendersOf(n), f.tier, this.fortification(n) * this.nodeMult(n));
         }
         const d = this.armies.find((x) => x.id === f.defenders[0]);
         return d ? Fight.str(this, d, f) : 0;
@@ -3932,7 +4194,7 @@ class War {
         const n = f.node >= 0 ? camp.nodes[f.node] : null;
         const defArmy = n ? null : this.armies.find((x) => x.id === f.defenders[0]) || null;
         const defUnits = n ? this.defendersOf(n) : defArmy ? defArmy.units : emptyReserve();
-        const aMult = this.sideMult(att.team, att.general), dMult = n ? this.fortification(n) * this.sideMult(n.owner, null) : this.sideMult(defArmy.team, defArmy.general);
+        const aMult = this.sideMult(att.team, att.general), dMult = n ? this.fortification(n) * this.nodeMult(n) : this.sideMult(defArmy.team, defArmy.general);
         const sA = War.strength(att.units, f.tier, aMult), sD = War.strength(defUnits, f.tier, dMult);
         const scale = TIER_SCALING.hpMultiplier(f.tier);
         f.lossA += WAR.simRate * sD * dt / (aMult * scale);
@@ -3966,6 +4228,36 @@ class War {
         f.winner = winner;
         const camp = this.camp;
         const att = this.armies.find((x) => x.id === f.attackers[0]);
+        // generals on your side (PLAN 9.4): the army's, and a castle's you defended
+        const near = f.node >= 0 ? f.node : att ? att.path[att.leg] : 0;
+        const involved = [];
+        for (const id of [...f.attackers, ...f.defenders]) {
+            const a = this.armies.find((x) => x.id === id), g = a && a.team === 'player' ? this.general(a.general) : null;
+            if (g && g.status === 'army')
+                involved.push(g);
+        }
+        if (f.node >= 0 && camp.nodes[f.node].owner === 'player') {
+            const g = this.generalAt(f.node);
+            if (g)
+                involved.push(g);
+        }
+        for (const g of involved) {
+            if (winner === 'player')
+                this.generalWon(g, this.liveGenerals.has(g.id));
+            else
+                this.generalLost(g, near);
+        }
+        if (f.node >= 0 && att && winner === att.team && att.team === 'player') {
+            // their castle falls: its Lord is gone (a siege won live may have recruited them already); its cells open
+            const n = camp.nodes[f.node];
+            const lord = this.lordAt(n.id);
+            if (lord) {
+                lord.status = 'gone';
+                lord.at = -1;
+            } // one beaten live first is recruited after (Game.finishBattle)
+            for (const c of this.captivesAt(n.id))
+                this.rescue(c);
+        }
         if (f.node >= 0) {
             const n = camp.nodes[f.node];
             if (att && winner === att.team) {
@@ -4025,6 +4317,8 @@ class War {
             const mine = att.team === 'player' ? att : def, theirs = att.team === 'player' ? def : att;
             const s = this.fieldSpecFor(theirs, mine, f.tier);
             s.fightId = f.id;
+            if (mine.general)
+                s.generalId = mine.general;
             return s;
         }
         const n = this.camp.nodes[f.node];
@@ -4044,9 +4338,15 @@ class War {
             d.houses = n.type === 'village' ? 2 + n.level : 3;
             d.nodeId = n.id;
             d.fightId = f.id;
+            const gen = this.generalAt(n.id);
+            if (gen)
+                d.generalId = gen.id;
             return d;
         }
         const s = this.camp.battleSpec(n);
+        this.dressCastle(s, n);
+        if (att.general)
+            s.generalId = att.general;
         const d = this.defendersOf(n), full = this.camp.garrison(n);
         s.foes = { ...d };
         // the battle's reinforcements shrink with the garrison the sim has already worn down
@@ -4129,10 +4429,11 @@ class War {
             garrison: this.garrison.map(r), prod: this.prod.map((s) => +s.toFixed(2)), sinceRam: this.sinceRam, mix: this.mix,
             warband: r(this.warband), enemyConvoyT: Math.round(this.enemyConvoyT), delivered: this.delivered,
             convoys: this.convoys.map((c) => [c.team === 'player' ? 1 : 0, c.path, c.leg, +c.t.toFixed(3), c.cargo]),
-            armies: this.armies.map((a) => [a.id, a.team === 'player' ? 1 : 0, UNIT_ORDER.map((k) => a.units[k]), a.path, a.leg, +a.t.toFixed(3), a.target, a.order === 'attack' ? 1 : 0, a.fight]),
+            armies: this.armies.map((a) => [a.id, a.team === 'player' ? 1 : 0, UNIT_ORDER.map((k) => a.units[k]), a.path, a.leg, +a.t.toFixed(3), a.target, a.order === 'attack' ? 1 : 0, a.fight, a.general]),
             fights: this.fights.map((f) => [f.id, f.node, Math.round(f.x), Math.round(f.y), f.attackers, f.defenders, f.attackTeam === 'player' ? 1 : 0, f.tier, +f.startAtt.toFixed(2), +f.startDef.toFixed(2), +f.lossA.toFixed(3), +f.lossD.toFixed(3), +f.structure.toFixed(3)]),
             nodeForce: this.nodeForce.map(r),
             nextArmyId: this.nextArmyId, nextFightId: this.nextFightId,
+            generals: this.generals.map((g) => [g.id, g.status, g.at, g.army, g.level, +g.loyalty.toFixed(2), +g.captiveT.toFixed(1), g.warned ? 1 : 0, g.recruited, g.lordSince]),
             ai: { difficulty: this.difficulty, gold: Math.round(this.enemyGold), clock: +this.clock.toFixed(1), won: this.won,
                 musters: this.musters.map((m) => [m.from, m.target, m.size, +m.t.toFixed(1)]), grace: this.grace.map((g) => Math.round(g)), refill: this.refill.map((r) => +r.toFixed(2)),
                 offensive: this.armies.filter((a) => a.offensive).map((a) => a.id) },
@@ -4177,7 +4478,7 @@ class War {
                 if (!u)
                     continue;
                 const path = a[3];
-                this.armies.push({ id: a[0] | 0, team: a[1] === 1 ? 'player' : 'enemy', general: null, units: u, path, leg: clamp(a[4] | 0, 0, path.length - 1), t: clamp(+a[5] || 0, 0, 1), target: clamp(a[6] | 0, 0, N - 1), order: a[7] === 1 ? 'attack' : 'reinforce', fight: a[8] | 0 });
+                this.armies.push({ id: a[0] | 0, team: a[1] === 1 ? 'player' : 'enemy', general: typeof a[9] === 'string' ? a[9] : null, units: u, path, leg: clamp(a[4] | 0, 0, path.length - 1), t: clamp(+a[5] || 0, 0, 1), target: clamp(a[6] | 0, 0, N - 1), order: a[7] === 1 ? 'attack' : 'reinforce', fight: a[8] | 0 });
             }
         }
         if (Array.isArray(s.fights)) {
@@ -4200,6 +4501,31 @@ class War {
         for (const a of this.armies)
             if (a.fight >= 0 && !this.fights.some((f) => f.id === a.fight))
                 a.fight = -1;
+        if (Array.isArray(s.generals)) {
+            const statuses = ['lord', 'reserve', 'castle', 'army', 'captive', 'gone'];
+            for (const row of s.generals) {
+                if (!Array.isArray(row))
+                    continue;
+                const g = this.general(String(row[0]));
+                if (!g || !statuses.includes(row[1]))
+                    continue;
+                g.status = row[1];
+                g.at = clamp(row[2] | 0, -1, N - 1);
+                g.army = row[3] | 0;
+                g.level = clamp(row[4] | 0, 1, WAR.generalMaxLevel);
+                g.loyalty = clamp(+row[5] || 0, 0, 100);
+                g.captiveT = Math.max(0, +row[6] || 0);
+                g.warned = row[7] === 1;
+                g.recruited = Math.max(0, row[8] | 0);
+                g.lordSince = Math.max(0, row[9] | 0);
+            }
+            // an army a general was leading that didn't load: they're back in the reserve
+            for (const g of this.generals)
+                if (g.status === 'army' && !this.armies.some((a) => a.id === g.army && a.general === g.id)) {
+                    g.status = 'reserve';
+                    g.army = -1;
+                }
+        }
         if (s.ai && typeof s.ai === 'object') {
             const ai = s.ai;
             if (ai.difficulty === 'easy' || ai.difficulty === 'normal' || ai.difficulty === 'hard')
@@ -5728,6 +6054,7 @@ class Enemy {
         this.leader = false; // the Dominion side's commander: while alive, the side cannot rout
         this.fleeing = false; // routed: runs for its own edge and leaves the field
         this.escort = false; // sticks with the knight: only fights what comes near them (a freed general)
+        this.generalId = null; // one of your generals fighting live (knocked down, not killed, at 0 HP)
         this.retargetT = 0;
         // an un-aggro'd enemy idles near home until you come close (garrisons later)
         this.aggro = true;
@@ -6923,7 +7250,28 @@ class Renderer {
         c.textAlign = 'center';
         c.fillStyle = PAL.dim;
         c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
-        if (b.resultT > 0.6)
+        if (g.pendingRecruit) {
+            const lg = g.war.general(g.pendingRecruit);
+            c.fillStyle = '#c7b8ff';
+            c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
+            c.fillText(`${lg.name}, beaten before the throne fell, kneels. Level ${lg.level}${lg.recruited ? ' (defected once: loyalty starts at 30)' : ''}.`, VIEW_W / 2, RECRUIT_BTN.y - 16);
+            ['Recruit', 'Release (double spoils)'].forEach((label, i) => {
+                const x = RECRUIT_BTN.x0 + i * (RECRUIT_BTN.w + RECRUIT_BTN.gap), on = g.recruitPick === i;
+                c.fillStyle = on ? (i ? 'rgba(200,150,40,0.9)' : 'rgba(60,160,90,0.9)') : 'rgba(40,50,80,0.9)';
+                this.roundRect(c, x, RECRUIT_BTN.y, RECRUIT_BTN.w, RECRUIT_BTN.h, 8);
+                c.fill();
+                if (on) {
+                    c.strokeStyle = '#ffffff';
+                    c.lineWidth = 2;
+                    this.roundRect(c, x, RECRUIT_BTN.y, RECRUIT_BTN.w, RECRUIT_BTN.h, 8);
+                    c.stroke();
+                }
+                c.fillStyle = '#ffffff';
+                c.font = '900 13px ui-monospace, Menlo, Consolas, monospace';
+                c.fillText(label.toUpperCase(), x + RECRUIT_BTN.w / 2, RECRUIT_BTN.y + RECRUIT_BTN.h / 2 + 5);
+            });
+        }
+        else if (b.resultT > 0.6)
             c.fillText(IS_TOUCH ? 'tap to return to the map' : 'ENTER to return to the map', VIEW_W / 2, VIEW_H - 40);
         c.restore();
     }
@@ -7193,6 +7541,57 @@ class Renderer {
             this.drawMuster(c, g, m);
         this.drawMapHud(c, g);
     }
+    /** The Generals roster (PLAN 7.1 Generals tab): level, command, loyalty, where they are; red at 25 or under. */
+    drawRoster(c, g) {
+        const P = MAP_PANEL, R = MAP_ROSTER, w = g.war, camp = g.camp;
+        c.save();
+        this.panelFrame(c, 'Generals', true);
+        const list = w.mine();
+        c.textAlign = 'left';
+        c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.dim;
+        c.fillText(`active ${w.activeGenerals()} / ${w.generalCap()}  (1 per castle held, max ${WAR.generalCap})`, P.x + P.pad, P.y + R.y0 - 4);
+        if (!list.length) {
+            c.fillStyle = PAL.text;
+            c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+            c.fillText('None yet. Beat a castle Lord before', P.x + P.pad, P.y + R.y0 + 30);
+            c.fillText('the throne falls, then Recruit them.', P.x + P.pad, P.y + R.y0 + 48);
+        }
+        list.slice(0, 6).forEach((gen, i) => {
+            const y = P.y + R.y0 + i * R.rowH, low = gen.loyalty <= WAR.loyaltyWarn;
+            c.fillStyle = low ? 'rgba(120,30,40,0.5)' : 'rgba(30,40,70,0.6)';
+            this.roundRect(c, P.x + P.pad - 4, y, P.w - P.pad * 2 + 8, R.rowH - 6, 6);
+            c.fill();
+            if (low) {
+                c.strokeStyle = '#ff6b6b';
+                c.lineWidth = 2;
+                this.roundRect(c, P.x + P.pad - 4, y, P.w - P.pad * 2 + 8, R.rowH - 6, 6);
+                c.stroke();
+            }
+            c.fillStyle = gen.accent;
+            c.beginPath();
+            c.arc(P.x + P.pad + 10, y + 16, 8, 0, Math.PI * 2);
+            c.fill();
+            c.textAlign = 'left';
+            c.fillStyle = '#ffffff';
+            c.font = '800 12px ui-monospace, Menlo, Consolas, monospace';
+            c.fillText(gen.name, P.x + P.pad + 24, y + 15);
+            c.fillStyle = PAL.dim;
+            c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+            const where = gen.status === 'castle' ? `holding ${camp.nodes[gen.at].name}` : gen.status === 'army' ? 'leading an army' : gen.status === 'captive' ? `CAPTIVE at ${camp.nodes[gen.at].name}` : 'in reserve';
+            c.fillStyle = gen.status === 'captive' ? '#ff9a8a' : PAL.dim;
+            c.fillText(`L${gen.level} · cmd +${Math.round(command(gen) * 100)}% · ${where}`, P.x + P.pad + 24, y + 29);
+            // loyalty bar
+            const bx = P.x + P.pad + 24, bw = P.w - P.pad * 2 - 70;
+            this.bar(c, bx, y + 35, bw, 6, gen.loyalty / 100, low ? '#ff5f56' : gen.loyalty > 60 ? '#4fe08a' : '#ffd54a', 'rgba(0,0,0,0.6)');
+            c.textAlign = 'right';
+            c.fillStyle = low ? '#ff6b6b' : PAL.text;
+            c.font = '700 10px ui-monospace, Menlo, Consolas, monospace';
+            c.fillText(`${Math.round(gen.loyalty)}${low ? ' !' : ''}`, P.x + P.w - P.pad, y + 41);
+        });
+        this.panelButtons(c, g, []);
+        c.restore();
+    }
     /** A muster (PLAN 8's telegraph): a war banner over their castle, the countdown, and a dashed line to the target. */
     drawMuster(c, g, m) {
         const a = g.camp.nodes[m.from], b = g.camp.nodes[m.target];
@@ -7270,8 +7669,8 @@ class Renderer {
         c.lineTo(-7, -8);
         c.closePath();
         c.fill();
-        c.strokeStyle = mine ? '#1d3b66' : '#4a1418';
-        c.lineWidth = 1.2;
+        c.strokeStyle = a.general ? '#ffd54a' : mine ? '#1d3b66' : '#4a1418';
+        c.lineWidth = a.general ? 2 : 1.2;
         c.stroke();
         c.fillStyle = '#ffffff';
         c.font = '800 8px ui-monospace, Menlo, Consolas, monospace';
@@ -7372,7 +7771,8 @@ class Renderer {
         c.fillText(this.unitLine(a.units), at.x, at.y);
         at.y += 18;
         this.panelRow(c, at, a.order === 'attack' ? 'Attacking' : 'Marching to', camp.nodes[a.target].name);
-        this.panelRow(c, at, 'General', a.general || 'none (-20%)', a.general ? PAL.text : '#ffb070');
+        const ag = g.war.general(a.general);
+        this.panelRow(c, at, 'General', ag ? `${ag.name} (+${Math.round(command(ag) * 100)}%)` : 'none (-20%)', ag ? PAL.text : '#ffb070');
         const n = camp.nodes[a.target], N = camp.nodes.length;
         const here = a.leg < a.path.length - 1 ? a.path[a.leg + 1] : a.path[a.leg];
         const eta = (camp.dist[here * N + n.id] + (a.leg < a.path.length - 1 ? (1 - a.t) * dist(camp.nodes[a.path[a.leg]].x, camp.nodes[a.path[a.leg]].y, camp.nodes[here].x, camp.nodes[here].y) : 0)) / WAR.armySpeed;
@@ -7601,6 +8001,33 @@ class Renderer {
             c.fillStyle = '#ffd54a';
             c.fillRect(-12, 18, 24 * f, 4);
         }
+        if (n.type === 'castle' && mine && g.war.generalAt(n.id)) {
+            c.fillStyle = '#ffd54a';
+            c.beginPath();
+            c.moveTo(-8, -32);
+            c.lineTo(-8, -38);
+            c.lineTo(-4, -35);
+            c.lineTo(0, -40);
+            c.lineTo(4, -35);
+            c.lineTo(8, -38);
+            c.lineTo(8, -32);
+            c.closePath();
+            c.fill();
+        }
+        if (n.type === 'castle' && !mine && g.war.captivesAt(n.id).length) {
+            // a cage: one of your generals is held here (PLAN 7.1)
+            c.fillStyle = 'rgba(10,10,14,0.85)';
+            c.fillRect(-28, -14, 13, 15);
+            c.strokeStyle = '#c8cdd6';
+            c.lineWidth = 1.3;
+            c.strokeRect(-28, -14, 13, 15);
+            c.beginPath();
+            for (let k = 1; k < 4; k++) {
+                c.moveTo(-28 + k * 3.25, -14);
+                c.lineTo(-28 + k * 3.25, 1);
+            }
+            c.stroke();
+        }
         // level pips
         if (n.type !== 'outpost') {
             for (let i = 0; i < n.level; i++) {
@@ -7677,17 +8104,34 @@ class Renderer {
         c.fillText('THE VERDANT REACH', 16, 28);
         c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
         const items = [
-            ['gold', String(p.gold)], ['warband', `${troopTotal(g.war.warband)} / ${g.warbandCap()}`], ['SP', String(p.skillPoints)], ['territories', `${camp.territoriesHeld('player')} / ${camp.territories.length}`],
+            ['gold', String(p.gold)], ['warband', `${troopTotal(g.war.warband)}/${g.warbandCap()}`], ['SP', String(p.skillPoints)], ['land', `${camp.territoriesHeld('player')}/${camp.territories.length}`],
         ];
-        let x = 260;
+        let x = 214;
         for (const [k, v] of items) {
             c.fillStyle = PAL.dim;
             c.fillText(k, x, 27);
-            x += c.measureText(k).width + 6;
+            x += c.measureText(k).width + 5;
             c.fillStyle = PAL.text;
             c.fillText(v, x, 27);
-            x += c.measureText(v).width + 22;
+            x += c.measureText(v).width + 16;
         }
+        // generals: a button that opens the roster (shared hit area MAP_GEN_HIT)
+        const gw = g.war, low = gw.mine().some((x) => x.loyalty <= WAR.loyaltyWarn);
+        c.fillStyle = g.mapMode === 'generals' ? 'rgba(80,140,255,0.35)' : 'rgba(40,50,80,0.8)';
+        this.roundRect(c, MAP_GEN_HIT.x, 9, MAP_GEN_HIT.w, 26, 6);
+        c.fill();
+        if (low) {
+            c.strokeStyle = '#ff6b6b';
+            c.lineWidth = 2;
+            this.roundRect(c, MAP_GEN_HIT.x, 9, MAP_GEN_HIT.w, 26, 6);
+            c.stroke();
+        }
+        c.textAlign = 'center';
+        c.fillStyle = PAL.text;
+        c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+        c.fillText(`generals ${gw.activeGenerals()}/${gw.generalCap()}${gw.mine().length > gw.activeGenerals() ? ` +${gw.mine().length - gw.activeGenerals()}` : ''}`, MAP_GEN_HIT.x + MAP_GEN_HIT.w / 2, 27);
+        c.textAlign = 'left';
+        c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
         // the Dominion's tempo (PLAN 7.1 HUD): offensives under way and the next muster
         const w = g.war;
         c.textAlign = 'right';
@@ -7704,7 +8148,9 @@ class Renderer {
         c.fillText(help, VIEW_W / 2, VIEW_H - 8);
         c.restore();
         const cv = g.selectedConvoy(), ar = g.selectedArmy(), fi = g.selectedFight();
-        if (g.mapMode === 'send')
+        if (g.mapMode === 'generals')
+            this.drawRoster(c, g);
+        else if (g.mapMode === 'send')
             this.drawSendPanel(c, g);
         else if (g.mapMode === 'target') {
             c.save();
@@ -9937,7 +10383,7 @@ class Renderer {
     }
     /** The big bar along the bottom while a boss is up. */
     drawBossBar(c, g) {
-        const e = g.enemies.find((x) => x.alive && x.boss && x.aggro && !x.fleeing);
+        const e = g.enemies.find((x) => x.alive && x.boss && x.aggro && !x.fleeing && x.team === 'enemy');
         if (!e)
             return;
         const b = e.boss;
@@ -10091,6 +10537,22 @@ class Renderer {
         this.bar(c, x + 52, y + 17, barW * 0.8, 9, mpRatio, p.charging ? PAL.mpCharge : PAL.mp, 'rgba(0,0,0,0.55)');
         c.fillStyle = p.charging ? PAL.mpCharge : PAL.text;
         c.fillText(p.charging ? 'MP CHARGE!' : `MP ${Math.floor(p.mp)}`, x + 58, y + 24.5);
+        // your general beside you (PLAN 13: ally general portraits with HP)
+        const ge = g.battleGeneral;
+        if (ge && g.screen === 'battle') {
+            const gy = y + 128;
+            c.fillStyle = ge.def.accent;
+            c.beginPath();
+            c.arc(x + 9, gy + 4, 8, 0, Math.PI * 2);
+            c.fill();
+            c.strokeStyle = ge.alive ? '#ffffff' : '#ff6b6b';
+            c.lineWidth = 1.5;
+            c.stroke();
+            c.fillStyle = ge.alive ? PAL.text : '#ff9a8a';
+            c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+            c.fillText(ge.alive ? ge.def.name : `${ge.def.name} (down)`, x + 24, gy + 1);
+            this.bar(c, x + 24, gy + 5, 140, 5, ge.alive ? ge.hp / ge.maxHp : 0, '#5fb4ff', 'rgba(0,0,0,0.55)');
+        }
         c.restore();
         // ---- top-right: where you are and what is happening
         c.save();
@@ -11189,6 +11651,9 @@ class Game {
         this.mapConvoy = -1; // selected convoy id, or -1
         this.autosaveT = 0;
         this.battleWarband = emptyReserve(); // the warband as it went into the current battle
+        this.battleGeneral = null; // your general on the field, if one came
+        this.pendingRecruit = null; // a Lord beaten first, waiting on Recruit / Release at the results screen
+        this.recruitPick = 0; // 0 Recruit, 1 Release
         /** Where the map is looking (map units, the view's centre) and how close (0 whole continent .. 1 close-up). */
         this.mapX = CONTINENT.w / 2;
         this.mapY = CONTINENT.h / 2;
@@ -11202,6 +11667,7 @@ class Game {
         this.mapFight = -1;
         /** 'send': picking troops from a castle; 'target': choosing where they march. */
         this.mapMode = 'browse';
+        this.sendGeneral = null;
         this.sendFrom = -1;
         this.sendUnits = emptyReserve();
         /* ------------------------------------------------------------ autopilot */
@@ -11385,6 +11851,7 @@ class Game {
         this.freshCamp();
         this.screen = 'campaign';
         this.battleFrom = 'map';
+        this.mapMode = 'browse';
         const sv = loadSave();
         this.camp.load(sv.war);
         this.war.load(sv.econ);
@@ -11433,8 +11900,13 @@ class Game {
     mapButtons() {
         const out = [];
         const close = { label: 'Close', enabled: true, act: () => { this.clearPick(); this.mapMode = 'browse'; } };
+        if (this.mapMode === 'generals')
+            return [{ label: 'Close', enabled: true, act: () => { this.mapMode = 'browse'; } }];
         if (this.mapMode === 'send') {
             const n = troopTotal(this.sendUnits);
+            const opts = [null, ...this.war.assignable(this.sendFrom).map((g) => g.id)];
+            const cur = this.war.general(this.sendGeneral);
+            out.push({ label: `General: ${cur ? cur.name : 'none (-20%)'}`, enabled: opts.length > 1, act: () => { this.sendGeneral = opts[(opts.indexOf(this.sendGeneral) + 1) % opts.length]; this.sfx.guard(); }, why: this.war.mine().length ? 'NO GENERAL FREE (CAP: 1 PER CASTLE)' : 'NO GENERALS YET: BEAT A LORD FIRST' });
             out.push({ label: n ? `Choose target  ·  ${n} troops` : 'Choose target', enabled: n > 0, act: () => { this.mapMode = 'target'; this.mapSel = -1; this.toast('CHOOSE A TARGET'); }, why: 'PICK SOME TROOPS FIRST' });
             out.push({ label: 'Cancel', enabled: true, act: () => { this.mapMode = 'browse'; this.mapSel = this.sendFrom; } });
             return out;
@@ -11465,10 +11937,17 @@ class Game {
         if (this.mapSel < 0)
             return [];
         const n = this.camp.nodes[this.mapSel];
-        if (n.owner === 'enemy')
+        if (n.owner === 'enemy') {
             out.push({ label: 'Attack', enabled: this.camp.canAttack(n), act: () => this.attackNode(n), why: 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST' });
+            // PLAN 9.3: get a general out of their cells without taking the castle
+            const held = n.type === 'castle' ? this.war.captivesAt(n.id)[0] : undefined;
+            if (held)
+                out.push({ label: `Rescue raid: ${held.name}`, enabled: this.camp.canAttack(n), act: () => { this.sfx.cast(560); this.battleFrom = 'map'; this.startBattle(this.war.rescueSpecFor(n, held)); }, why: 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST' });
+        }
         else {
             if (n.type === 'castle') {
+                const cur = this.war.generalAt(n.id), opts = [null, ...this.war.assignable(n.id).map((g) => g.id)];
+                out.push({ label: `General: ${cur ? cur.name : 'none'}`, enabled: opts.length > 1, act: () => { const next = opts[(opts.indexOf(cur ? cur.id : null) + 1) % opts.length]; this.war.assignCastle(n.id, next); this.sfx.guard(); this.save(); }, why: this.war.mine().length ? 'NO GENERAL FREE (CAP: 1 PER CASTLE)' : 'NO GENERALS YET: BEAT A LORD FIRST' });
                 const g = this.war.garrison[n.id];
                 out.push({ label: 'Send army', enabled: !!g && troopTotal(g) > 0, act: () => this.beginSend(n), why: 'NO TROOPS IN THE GARRISON' });
                 out.push({ label: `Mix: ${RECRUIT_MIXES[this.war.mix[n.id]].name}`, enabled: true, act: () => { this.war.mix[n.id] = (this.war.mix[n.id] + 1) % RECRUIT_MIXES.length; this.sfx.guard(); } });
@@ -11511,6 +11990,7 @@ class Game {
         this.mapMode = 'send';
         this.sendFrom = n.id;
         this.sendUnits = emptyReserve();
+        this.sendGeneral = null;
         const g = this.war.garrison[n.id];
         for (const k of SEND_TYPES)
             this.sendUnits[k] = Math.floor(g[k] / 2);
@@ -11526,7 +12006,7 @@ class Game {
             this.toast('REINFORCE ONE OF YOUR CASTLES, OR PICK AN ENEMY NODE');
             return;
         }
-        const a = this.war.sendArmy(from, this.sendUnits, to);
+        const a = this.war.sendArmy(from, this.sendUnits, to, this.sendGeneral);
         if (!a) {
             this.sfx.guard();
             this.toast(to.id === from.id ? 'PICK ANOTHER NODE' : 'NO ROAD THERE');
@@ -11617,7 +12097,9 @@ class Game {
             return;
         this.sfx.cast(560);
         this.battleFrom = 'map';
-        this.startBattle(this.camp.battleSpec(n));
+        const spec = this.camp.battleSpec(n);
+        this.war.dressCastle(spec, n);
+        this.startBattle(spec);
     }
     /** Select a node (or none) and bring it into view. */
     selectNode(id) {
@@ -11683,11 +12165,26 @@ class Game {
             this.mapArmy = -1;
         if (this.mapFight >= 0 && !this.selectedFight())
             this.mapFight = -1;
-        if (this.mapMode !== 'browse' && (this.sendFrom < 0 || this.camp.nodes[this.sendFrom].owner !== 'player'))
+        if ((this.mapMode === 'send' || this.mapMode === 'target') && (this.sendFrom < 0 || this.camp.nodes[this.sendFrom].owner !== 'player'))
             this.mapMode = 'browse';
-        // the Dominion's moves (PLAN 8)
+        this.war.loyaltyMult = this.player.hasT('presence') ? WAR.presenceMult : 1; // Warlord's Presence (Phase 11)
+        if (inp.wasPressed('generals')) {
+            this.mapMode = this.mapMode === 'generals' ? 'browse' : 'generals';
+            this.clearPick();
+            this.sfx.guard();
+        }
+        // the Dominion's moves (PLAN 8), and your generals' fortunes (PLAN 9)
         for (const e of this.war.events) {
             const nm = (id) => this.camp.nodes[id].name;
+            const gen = this.war.general(e.general || null);
+            if (gen && e.kind === 'lowLoyalty')
+                this.banner(`${gen.name.toUpperCase()}: LOYALTY ${Math.round(gen.loyalty)}`, generalLine(gen, 'low'), '#ff6b6b');
+            if (gen && e.kind === 'captured')
+                this.banner(`${gen.name.toUpperCase()} IS TAKEN`, `held at ${nm(e.node)}  ·  take it, or raid the cells`, '#ff6b6b');
+            if (gen && e.kind === 'rescued')
+                this.banner(`${gen.name.toUpperCase()} IS FREE`, generalLine(gen, 'rescue'), '#4fe08a');
+            if (gen && e.kind === 'defected')
+                this.banner(`${gen.name.toUpperCase()} DEFECTS`, generalLine(gen, 'defect'), '#ff6b6b');
             if (e.kind === 'muster')
                 this.banner(`THE DOMINION MUSTERS AT ${nm(e.node).toUpperCase()}`, `they march on ${nm(e.target)} in ${WAR.telegraph} s`, '#ff9a8a');
             else if (e.kind === 'depart')
@@ -11754,6 +12251,12 @@ class Game {
         inp.takeTap();
         if (click) {
             let used = false;
+            // the top bar's generals readout opens the roster
+            if (click.y <= MAP_BAR.h && click.x >= MAP_GEN_HIT.x && click.x <= MAP_GEN_HIT.x + MAP_GEN_HIT.w) {
+                this.mapMode = this.mapMode === 'generals' ? 'browse' : 'generals';
+                this.clearPick();
+                used = true;
+            }
             for (const h of this.sendHits()) {
                 if (click.x >= h.x && click.x <= h.x + h.w && click.y >= h.y && click.y <= h.y + h.h) {
                     h.act();
@@ -11775,12 +12278,14 @@ class Game {
             }
             if (this.screen !== 'campaign')
                 return;
-            const panelUp = this.mapMode === 'send' || this.mapSel >= 0 || this.mapConvoy >= 0 || this.mapArmy >= 0 || this.mapFight >= 0;
+            const panelUp = this.mapMode === 'send' || this.mapMode === 'generals' || this.mapSel >= 0 || this.mapConvoy >= 0 || this.mapArmy >= 0 || this.mapFight >= 0;
             const inPanel = panelUp && click.x >= MAP_PANEL.x && click.y >= MAP_PANEL.y && click.y <= MAP_PANEL.y + MAP_PANEL.h;
             if (!used && !inPanel) {
                 if (this.mapMode === 'target')
                     this.pickTarget(this.nodeAt(click.x, click.y));
-                else if (this.mapMode === 'browse') {
+                else if (this.mapMode === 'browse' || this.mapMode === 'generals') {
+                    if (this.mapMode === 'generals')
+                        this.mapMode = 'browse';
                     const hit = this.pickAt(click.x, click.y);
                     if (!hit || hit.kind === 'node')
                         this.selectNode(hit ? hit.id : -1);
@@ -11828,6 +12333,10 @@ class Game {
                 this.sfx.guard();
                 this.toast(n.owner === 'player' ? 'YOURS' : 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST');
             }
+            return;
+        }
+        if (inp.wasPressed('cancel') && this.mapMode === 'generals') {
+            this.mapMode = 'browse';
             return;
         }
         if (inp.wasPressed('cancel')) {
@@ -11994,9 +12503,9 @@ class Game {
             this.enemies.push(e);
             return e;
         };
-        const boss = (name, title, stats, pattern, moves, color, accent, x, y) => {
+        const boss = (name, title, stats, pattern, moves, color, accent, x, y, level = WAR.testFieldLevel) => {
             const def = { id: name.toLowerCase().replace(/\W+/g, '-'), name, title, tier: spec.tier, stats, uniqueMaterials: [], pattern, moves, color, accent };
-            const e = new Enemy(bossEnemyDef(def), x, y, WAR.testFieldLevel, spec.tier);
+            const e = new Enemy(bossEnemyDef(def), x, y, level, spec.tier);
             e.boss = def;
             e.leader = true;
             e.homeX = x;
@@ -12038,7 +12547,10 @@ class Game {
                 this.spawnBlock(foes.slice(n), 'enemy', hall.x0 + 200, cy + 140, spec.tier);
                 spreadElites((court.x0 + court.x1) / 2 + 120, cy);
                 const t = b.throne;
-                b.lord = boss(spec.lordName || 'the Lord', 'Castle Lord', WAR.lordStats, 'brute', ['slam', 'rush'], '#3d2f5c', '#c79bff', t.x - 110, t.y);
+                // the castle's own Lord from the roster: their pattern, moves, colours and level (PLAN 9.1)
+                const lg = this.battleFrom === 'map' ? this.war.general(spec.lordId || null) : null;
+                b.lord = lg ? boss(lg.name, lg.title, WAR.lordStats, lg.pattern, lg.moves, lg.color, lg.accent, t.x - 110, t.y, lg.level)
+                    : boss(spec.lordName || 'the Lord', 'Castle Lord', WAR.lordStats, 'brute', ['slam', 'rush'], '#3d2f5c', '#c79bff', t.x - 110, t.y);
                 b.lord.aggro = false;
                 break;
             }
@@ -12068,6 +12580,17 @@ class Game {
         if (spec.kind !== 'rescue')
             for (const k of unitList(spec.reinforce || {}))
                 this.army.addReserve('enemy', k);
+        // your general (a joined army's, a defended castle's) fights beside you on their boss AI (PLAN 9.2)
+        this.battleGeneral = null;
+        const gen = this.battleFrom === 'map' ? this.war.general(spec.generalId || null) : null;
+        if (gen) {
+            const e = new Enemy(bossEnemyDef(generalBoss(gen, spec.tier)), p.x + (top ? 70 : 60), p.y + (top ? 60 : 70), gen.level, spec.tier);
+            e.boss = generalBoss(gen, spec.tier);
+            e.team = 'player';
+            e.generalId = gen.id;
+            this.enemies.push(e);
+            this.battleGeneral = e;
+        }
         b.startFoes = this.foeStrength();
         b.startAllies = this.army.live('player') + this.army.reserveCount('player');
         if (spec.kind === 'convoy')
@@ -12169,7 +12692,7 @@ class Game {
                         b.notes.push(`${b.spec.lordName || 'The Lord'} fled — not recruitable`);
                     }
                     else if (b.lordBeatenFirst)
-                        b.notes.push(`${b.spec.lordName || 'The Lord'} beaten first — can be recruited (Phase 10)`);
+                        b.notes.push(`${b.spec.lordName || 'The Lord'} beaten first: Recruit or Release`);
                     b.outcome = `${b.spec.name} taken — the throne is destroyed`;
                     this.finishBattle('win');
                     return;
@@ -12258,10 +12781,16 @@ class Game {
     /** Rescue: the cell opens; the general joins the knight's side and follows them out. */
     freeGeneral() {
         const b = this.battle, c = b.cell;
-        const g = new Enemy(ENEMIES.bruiser, c.x, c.y + 40, WAR.testFieldLevel + 2, b.spec.tier, WAR.commanderMult);
+        const real = this.battleFrom === 'map' ? this.war.general(b.spec.rescueId || null) : null;
+        const g = real ? new Enemy(bossEnemyDef(generalBoss(real, b.spec.tier)), c.x, c.y + 40, real.level, b.spec.tier) : new Enemy(ENEMIES.bruiser, c.x, c.y + 40, WAR.testFieldLevel + 2, b.spec.tier, WAR.commanderMult);
         g.team = 'player';
         g.escort = true;
-        g.def = { ...g.def, name: b.spec.generalName || 'General', color: '#2d4f7a', accent: PAL.ally };
+        if (real) {
+            g.boss = generalBoss(real, b.spec.tier);
+            g.generalId = real.id;
+        }
+        else
+            g.def = { ...g.def, name: b.spec.generalName || 'General', color: '#2d4f7a', accent: PAL.ally };
         this.enemies.push(g);
         b.general = g;
         c.hp = 0;
@@ -12306,6 +12835,8 @@ class Game {
                     fielded[k] += src[k] || 0;
             for (const k of UNIT_ORDER)
                 share[k] = fielded[k] ? clamp(theirs[k] / fielded[k], 0, 1) : 1;
+            if (b.spec.generalId)
+                this.war.liveGenerals.add(b.spec.generalId);
             if (b.spec.fightId !== undefined) {
                 // a joined fight: its armies and the node carry on from here (PLAN 7.3)
                 const node = this.war.resolveJoin(b.spec.fightId, result, ally, share, b.wear());
@@ -12319,6 +12850,36 @@ class Game {
                 if (result === 'win')
                     b.notes.push('the Dominion army is broken');
             }
+            this.war.liveGenerals.clear();
+            if (b.spec.generalId) {
+                const g = this.war.general(b.spec.generalId);
+                b.notes.push(result === 'win' ? `${g.name}: loyalty ${Math.round(g.loyalty)} (fought beside you)` : result === 'lose' ? `${g.name} is taken` : `${g.name} withdraws with you`);
+            }
+            // a castle taken live: its Lord, beaten first, may be recruited (PLAN 9.1); its cells open
+            if (result === 'win' && b.spec.kind === 'castle' && b.spec.nodeId !== undefined) {
+                const lord = this.war.general(b.spec.lordId || null);
+                if (lord && b.lordBeatenFirst) {
+                    this.pendingRecruit = lord.id;
+                    this.recruitPick = 0;
+                }
+                if (lord) {
+                    lord.status = 'gone';
+                    lord.at = -1;
+                }
+                for (const c of this.war.captivesAt(b.spec.nodeId)) {
+                    this.war.rescue(c);
+                    b.notes.push(`${c.name} freed from the cells`);
+                }
+            }
+            // a rescue raid that got them out
+            if (result === 'win' && b.spec.rescueId) {
+                const g = this.war.general(b.spec.rescueId);
+                if (g) {
+                    this.war.rescue(g);
+                    b.outcome = `${g.name} is out — rescued (loyalty +${WAR.loyaltyRescued})`;
+                }
+            }
+            this.save();
         }
         if (!b.outcome)
             b.outcome = result === 'win' ? 'Victory' : result === 'lose' ? 'You fell. Back to camp — the warband is lost, the node unchanged.' : 'You left the field. The attack is abandoned.';
@@ -12332,8 +12893,8 @@ class Game {
                 b.notes = b.notes.filter((s) => !/aboard/.test(s));
                 b.notes.push(`cargo taken: ${b.cargo} gold`);
             }
-            if (b.spec.kind === 'rescue')
-                b.notes.push(`${b.spec.generalName || 'The general'} rescued (loyalty +25 with Phase 10)`);
+            if (b.spec.kind === 'rescue' && !b.spec.rescueId)
+                b.notes.push(`${b.spec.generalName || 'The general'} rescued`);
             if (b.spec.nodeId !== undefined && b.spec.fightId === undefined && this.battleFrom === 'map') {
                 // PLAN 5.3: the node is yours, a level down from the fighting
                 const n = this.camp.nodes[b.spec.nodeId];
@@ -12362,6 +12923,31 @@ class Game {
             if (this.battleFrom === 'map')
                 this.save();
         }
+    }
+    /** Recruit the Lord you beat (loyalty 50, or 30 if they'd defected before), or let them go for double spoils. */
+    decideRecruit(recruit) {
+        const g = this.war.general(this.pendingRecruit), b = this.battle, p = this.player;
+        this.pendingRecruit = null;
+        if (!g)
+            return;
+        if (recruit) {
+            this.war.recruit(g);
+            b.notes.push(generalLine(g, 'recruit'));
+            this.banner(`${g.name.toUpperCase()} JOINS YOU`, `level ${g.level}  ·  loyalty ${g.loyalty}`, '#4fe08a');
+        }
+        else {
+            // Release: the spoils again
+            p.gold += b.spoils.gold;
+            for (const m of Object.keys(b.spoils.mats))
+                p.inv[m] = (p.inv[m] || 0) + (b.spoils.mats[m] || 0);
+            b.spoils.gold *= 2;
+            for (const m of Object.keys(b.spoils.mats))
+                b.spoils.mats[m] = (b.spoils.mats[m] || 0) * 2;
+            b.notes.push(`${g.name} released: double spoils`);
+        }
+        this.sfx.levelUp();
+        this.battle.resultT = 0.3; // a moment before Enter leaves
+        this.save();
     }
     botDrive() {
         const b = this.battle, p = this.player, inp = this.input;
@@ -12576,6 +13162,28 @@ class Game {
             this.updateVfx(dt);
             this.syncMusic();
             const tap = this.input.takeTap();
+            if (this.pendingRecruit) {
+                // PLAN 9.1: Recruit the beaten Lord, or Release them for double spoils
+                const inp = this.input;
+                if (inp.wasPressed('left') || inp.wasPressed('right')) {
+                    this.recruitPick = 1 - this.recruitPick;
+                    this.sfx.guard();
+                }
+                let choose = -1;
+                if (tap)
+                    for (let i = 0; i < 2; i++) {
+                        const r = RECRUIT_BTN;
+                        const x = r.x0 + i * (r.w + r.gap);
+                        if (tap.x >= x && tap.x <= x + r.w && tap.y >= r.y && tap.y <= r.y + r.h)
+                            choose = i;
+                    }
+                if (this.battle.resultT > 0.6 && (inp.wasPressed('confirm') || inp.wasPressed('attack')))
+                    choose = this.recruitPick;
+                if (choose >= 0)
+                    this.decideRecruit(choose === 0);
+                this.input.endTick();
+                return;
+            }
             if (this.battle.resultT > 0.6 && (tap || this.input.wasPressed('confirm') || this.input.wasPressed('attack') || this.input.wasPressed('restart'))) {
                 const b = this.battle;
                 if (this.battleFrom === 'sandbox')
@@ -12591,7 +13199,7 @@ class Game {
                         this.mapX = n.x;
                         this.mapY = n.y;
                         this.clampMap();
-                        if (b.result === 'win') {
+                        if (b.result === 'win' && b.spec.kind !== 'defense' && !b.spec.rescueId) {
                             const t = this.camp.territories[n.territory];
                             this.banner(`${n.name.toUpperCase()} TAKEN`, n.type === 'castle' ? `${t.name} is yours` : 'the frontier moves', '#4fe08a');
                         }
@@ -13833,6 +14441,8 @@ class Game {
     /* --------------------------------------------------------- progression */
     /** No EXP and no field drops in v2: spoils are paid on the results screen (Phase 4+). */
     onEnemyDeath(e) {
+        if (e.generalId)
+            this.banner(`${e.def.name.toUpperCase()} IS DOWN`, 'win, and they get back up', '#ffb070');
         const b = this.battle;
         if (e.team === 'enemy')
             b.kills.elites++;

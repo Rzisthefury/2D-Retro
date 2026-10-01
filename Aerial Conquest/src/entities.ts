@@ -650,6 +650,7 @@ class Enemy {
   leader = false;                    // the Dominion side's commander: while alive, the side cannot rout
   fleeing = false;                   // routed: runs for its own edge and leaves the field
   escort = false;                    // sticks with the knight: only fights what comes near them (a freed general)
+  generalId: string | null = null;   // one of your generals fighting live (knocked down, not killed, at 0 HP)
   private retargetT = 0;
 
   // an un-aggro'd enemy idles near home until you come close (garrisons later)

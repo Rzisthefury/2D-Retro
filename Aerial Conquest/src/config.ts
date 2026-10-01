@@ -514,6 +514,17 @@ const WAR = {
   reinforceChance: 0.5,                 // a besieged castle of theirs gets one reinforcement (*default*: "may")
   reinforceDraw: 0.4,                   // ...this share of the nearest other castle's garrison
 
+  // generals and loyalty (Phase 10, PLAN 9)
+  lordLevel: [4, 7, 10, 13, 16],        // a castle Lord's level by territory tier (*default*); recruits keep it
+  generalMaxLevel: 20,
+  commandBase: 0.1, commandPerLevel: 0.01, commandMax: 0.3,   // command = 0.10 + 0.01 x level, max 0.30
+  generalCap: 8,                        // active generals: 1 per castle you hold, at most this
+  loyaltyStart: 50, loyaltyReRecruit: 30,
+  loyaltyWin: 6, loyaltyWinTogether: 12, loyaltyRescued: 25, loyaltyDefeat: -10, loyaltyCaptured: -15,
+  captiveDrainEvery: 20,                // -1 loyalty per this many seconds held
+  loyaltyWarn: 25,                      // at or under: the warning (red border, a line)
+  presenceMult: 1.5,                    // Warlord's Presence (Command talent, Phase 11): loyalty gains x this
+
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
   testFieldTier: 1,
@@ -575,6 +586,12 @@ const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
 const MAP_PANEL = { x: 640, y: 62, w: 306, h: 412, pad: 14 };
 const MAP_BTN = { w: 278, h: 46, gap: 8 };
 const MAP_BAR = { h: 44 };
+/** The results screen's Recruit / Release buttons (PLAN 9.1). */
+const RECRUIT_BTN = { x0: 270, y: 430, w: 200, h: 46, gap: 20 };
+/** The top bar's generals readout (opens the roster). */
+const MAP_GEN_HIT = { x: 560, w: 140 };
+/** The Generals roster panel. */
+const MAP_ROSTER = { y0: 58, rowH: 52 };
 /** The Send army panel: a row per troop type with -/+ (step), then Half / All. */
 const MAP_SEND = { y0: 74, rowH: 36, btnW: 44, btnH: 30, step: 5, quickH: 34 };
 const SEND_TYPES: UnitType[] = ['sword', 'spear', 'archer', 'shield', 'ram'];             // the top bar: treasury, warband, skill points, territories

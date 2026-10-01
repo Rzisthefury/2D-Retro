@@ -331,6 +331,9 @@ class Game {
   mapConvoy = -1;               // selected convoy id, or -1
   autosaveT = 0;
   battleWarband: Reserve = emptyReserve();   // the warband as it went into the current battle
+  battleGeneral: Enemy | null = null;        // your general on the field, if one came
+  pendingRecruit: string | null = null;      // a Lord beaten first, waiting on Recruit / Release at the results screen
+  recruitPick = 0;                           // 0 Recruit, 1 Release
   /** Where the map is looking (map units, the view's centre) and how close (0 whole continent .. 1 close-up). */
   mapX = CONTINENT.w / 2; mapY = CONTINENT.h / 2;
   mapZoom = 0; mapZoomTo = 0;
@@ -359,6 +362,7 @@ class Game {
     this.freshCamp();
     this.screen = 'campaign';
     this.battleFrom = 'map';
+    this.mapMode = 'browse';
     const sv = loadSave();
     this.camp.load(sv.war);
     this.war.load(sv.econ);
@@ -407,7 +411,8 @@ class Game {
   mapArmy = -1;
   mapFight = -1;
   /** 'send': picking troops from a castle; 'target': choosing where they march. */
-  mapMode: 'browse' | 'send' | 'target' = 'browse';
+  mapMode: 'browse' | 'send' | 'target' | 'generals' = 'browse';
+  sendGeneral: string | null = null;
   sendFrom = -1;
   sendUnits: Reserve = emptyReserve();
 
@@ -417,8 +422,12 @@ class Game {
   mapButtons(): { label: string; enabled: boolean; act: () => void; why?: string }[] {
     const out: { label: string; enabled: boolean; act: () => void; why?: string }[] = [];
     const close = { label: 'Close', enabled: true, act: () => { this.clearPick(); this.mapMode = 'browse'; } };
+    if (this.mapMode === 'generals') return [{ label: 'Close', enabled: true, act: () => { this.mapMode = 'browse'; } }];
     if (this.mapMode === 'send') {
       const n = troopTotal(this.sendUnits);
+      const opts = [null, ...this.war.assignable(this.sendFrom).map((g) => g.id)];
+      const cur = this.war.general(this.sendGeneral);
+      out.push({ label: `General: ${cur ? cur.name : 'none (-20%)'}`, enabled: opts.length > 1, act: () => { this.sendGeneral = opts[(opts.indexOf(this.sendGeneral) + 1) % opts.length]; this.sfx.guard(); }, why: this.war.mine().length ? 'NO GENERAL FREE (CAP: 1 PER CASTLE)' : 'NO GENERALS YET: BEAT A LORD FIRST' });
       out.push({ label: n ? `Choose target  ·  ${n} troops` : 'Choose target', enabled: n > 0, act: () => { this.mapMode = 'target'; this.mapSel = -1; this.toast('CHOOSE A TARGET'); }, why: 'PICK SOME TROOPS FIRST' });
       out.push({ label: 'Cancel', enabled: true, act: () => { this.mapMode = 'browse'; this.mapSel = this.sendFrom; } });
       return out;
@@ -445,9 +454,15 @@ class Game {
     }
     if (this.mapSel < 0) return [];
     const n = this.camp.nodes[this.mapSel];
-    if (n.owner === 'enemy') out.push({ label: 'Attack', enabled: this.camp.canAttack(n), act: () => this.attackNode(n), why: 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST' });
-    else {
+    if (n.owner === 'enemy') {
+      out.push({ label: 'Attack', enabled: this.camp.canAttack(n), act: () => this.attackNode(n), why: 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST' });
+      // PLAN 9.3: get a general out of their cells without taking the castle
+      const held = n.type === 'castle' ? this.war.captivesAt(n.id)[0] : undefined;
+      if (held) out.push({ label: `Rescue raid: ${held.name}`, enabled: this.camp.canAttack(n), act: () => { this.sfx.cast(560); this.battleFrom = 'map'; this.startBattle(this.war.rescueSpecFor(n, held)); }, why: 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST' });
+    } else {
       if (n.type === 'castle') {
+        const cur = this.war.generalAt(n.id), opts = [null, ...this.war.assignable(n.id).map((g) => g.id)];
+        out.push({ label: `General: ${cur ? cur.name : 'none'}`, enabled: opts.length > 1, act: () => { const next = opts[(opts.indexOf(cur ? cur.id : null) + 1) % opts.length]; this.war.assignCastle(n.id, next); this.sfx.guard(); this.save(); }, why: this.war.mine().length ? 'NO GENERAL FREE (CAP: 1 PER CASTLE)' : 'NO GENERALS YET: BEAT A LORD FIRST' });
         const g = this.war.garrison[n.id];
         out.push({ label: 'Send army', enabled: !!g && troopTotal(g) > 0, act: () => this.beginSend(n), why: 'NO TROOPS IN THE GARRISON' });
         out.push({ label: `Mix: ${RECRUIT_MIXES[this.war.mix[n.id]].name}`, enabled: true, act: () => { this.war.mix[n.id] = (this.war.mix[n.id] + 1) % RECRUIT_MIXES.length; this.sfx.guard(); } });
@@ -482,7 +497,7 @@ class Game {
   }
 
   private beginSend(n: MapNode) {
-    this.mapMode = 'send'; this.sendFrom = n.id; this.sendUnits = emptyReserve();
+    this.mapMode = 'send'; this.sendFrom = n.id; this.sendUnits = emptyReserve(); this.sendGeneral = null;
     const g = this.war.garrison[n.id]!;
     for (const k of SEND_TYPES) this.sendUnits[k] = Math.floor(g[k] / 2);
     this.sfx.guard();
@@ -493,7 +508,7 @@ class Game {
     if (id < 0) return;
     const from = this.camp.nodes[this.sendFrom], to = this.camp.nodes[id];
     if (to.owner === 'player' && to.type !== 'castle') { this.sfx.guard(); this.toast('REINFORCE ONE OF YOUR CASTLES, OR PICK AN ENEMY NODE'); return; }
-    const a = this.war.sendArmy(from, this.sendUnits, to);
+    const a = this.war.sendArmy(from, this.sendUnits, to, this.sendGeneral);
     if (!a) { this.sfx.guard(); this.toast(to.id === from.id ? 'PICK ANOTHER NODE' : 'NO ROAD THERE'); return; }
     this.sfx.cast(520);
     this.toast(a.order === 'attack' ? `${troopTotal(a.units)} TROOPS MARCH ON ${to.name.toUpperCase()}` : `${troopTotal(a.units)} TROOPS TO ${to.name.toUpperCase()}`);
@@ -564,7 +579,9 @@ class Game {
     if (!this.camp.canAttack(n)) return;
     this.sfx.cast(560);
     this.battleFrom = 'map';
-    this.startBattle(this.camp.battleSpec(n));
+    const spec = this.camp.battleSpec(n);
+    this.war.dressCastle(spec, n);
+    this.startBattle(spec);
   }
 
   /** Select a node (or none) and bring it into view. */
@@ -612,10 +629,17 @@ class Game {
     if (this.mapConvoy >= 0 && !this.selectedConvoy()) this.mapConvoy = -1;   // it arrived
     if (this.mapArmy >= 0 && !this.selectedArmy()) this.mapArmy = -1;
     if (this.mapFight >= 0 && !this.selectedFight()) this.mapFight = -1;
-    if (this.mapMode !== 'browse' && (this.sendFrom < 0 || this.camp.nodes[this.sendFrom].owner !== 'player')) this.mapMode = 'browse';
-    // the Dominion's moves (PLAN 8)
+    if ((this.mapMode === 'send' || this.mapMode === 'target') && (this.sendFrom < 0 || this.camp.nodes[this.sendFrom].owner !== 'player')) this.mapMode = 'browse';
+    this.war.loyaltyMult = this.player.hasT('presence') ? WAR.presenceMult : 1;   // Warlord's Presence (Phase 11)
+    if (inp.wasPressed('generals')) { this.mapMode = this.mapMode === 'generals' ? 'browse' : 'generals'; this.clearPick(); this.sfx.guard(); }
+    // the Dominion's moves (PLAN 8), and your generals' fortunes (PLAN 9)
     for (const e of this.war.events) {
       const nm = (id: number) => this.camp.nodes[id].name;
+      const gen = this.war.general(e.general || null);
+      if (gen && e.kind === 'lowLoyalty') this.banner(`${gen.name.toUpperCase()}: LOYALTY ${Math.round(gen.loyalty)}`, generalLine(gen, 'low'), '#ff6b6b');
+      if (gen && e.kind === 'captured') this.banner(`${gen.name.toUpperCase()} IS TAKEN`, `held at ${nm(e.node)}  ·  take it, or raid the cells`, '#ff6b6b');
+      if (gen && e.kind === 'rescued') this.banner(`${gen.name.toUpperCase()} IS FREE`, generalLine(gen, 'rescue'), '#4fe08a');
+      if (gen && e.kind === 'defected') this.banner(`${gen.name.toUpperCase()} DEFECTS`, generalLine(gen, 'defect'), '#ff6b6b');
       if (e.kind === 'muster') this.banner(`THE DOMINION MUSTERS AT ${nm(e.node).toUpperCase()}`, `they march on ${nm(e.target)} in ${WAR.telegraph} s`, '#ff9a8a');
       else if (e.kind === 'depart') this.toast(`THE DOMINION MARCHES ON ${nm(e.target).toUpperCase()}`);
       else if (e.kind === 'attacked') { this.banner(`${nm(e.node).toUpperCase()} UNDER ATTACK`, 'select the fight to join the defense', '#ff6b6b'); }
@@ -661,6 +685,8 @@ class Game {
     inp.takeTap();
     if (click) {
       let used = false;
+      // the top bar's generals readout opens the roster
+      if (click.y <= MAP_BAR.h && click.x >= MAP_GEN_HIT.x && click.x <= MAP_GEN_HIT.x + MAP_GEN_HIT.w) { this.mapMode = this.mapMode === 'generals' ? 'browse' : 'generals'; this.clearPick(); used = true; }
       for (const h of this.sendHits()) {
         if (click.x >= h.x && click.x <= h.x + h.w && click.y >= h.y && click.y <= h.y + h.h) { h.act(); used = true; }
       }
@@ -673,11 +699,12 @@ class Game {
         }
       }
       if (this.screen !== 'campaign') return;
-      const panelUp = this.mapMode === 'send' || this.mapSel >= 0 || this.mapConvoy >= 0 || this.mapArmy >= 0 || this.mapFight >= 0;
+      const panelUp = this.mapMode === 'send' || this.mapMode === 'generals' || this.mapSel >= 0 || this.mapConvoy >= 0 || this.mapArmy >= 0 || this.mapFight >= 0;
       const inPanel = panelUp && click.x >= MAP_PANEL.x && click.y >= MAP_PANEL.y && click.y <= MAP_PANEL.y + MAP_PANEL.h;
       if (!used && !inPanel) {
         if (this.mapMode === 'target') this.pickTarget(this.nodeAt(click.x, click.y));
-        else if (this.mapMode === 'browse') {
+        else if (this.mapMode === 'browse' || this.mapMode === 'generals') {
+          if (this.mapMode === 'generals') this.mapMode = 'browse';
           const hit: { kind: string; id: number } | null = this.pickAt(click.x, click.y);
           if (!hit || hit.kind === 'node') this.selectNode(hit ? hit.id : -1);
           else {
@@ -704,6 +731,7 @@ class Game {
       else { this.sfx.guard(); this.toast(n.owner === 'player' ? 'YOURS' : 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST'); }
       return;
     }
+    if (inp.wasPressed('cancel') && this.mapMode === 'generals') { this.mapMode = 'browse'; return; }
     if (inp.wasPressed('cancel')) {
       if (this.mapMode === 'target') { this.mapMode = 'send'; this.mapSel = -1; }
       else if (this.mapMode === 'send') { this.mapMode = 'browse'; this.mapSel = this.sendFrom; }
@@ -837,9 +865,9 @@ class Game {
       this.enemies.push(e);
       return e;
     };
-    const boss = (name: string, title: string, stats: { hp: number; attack: number; defense: number }, pattern: BossPattern, moves: BossMove[], color: string, accent: string, x: number, y: number) => {
+    const boss = (name: string, title: string, stats: { hp: number; attack: number; defense: number }, pattern: BossPattern, moves: BossMove[], color: string, accent: string, x: number, y: number, level = WAR.testFieldLevel) => {
       const def: BossDefinition = { id: name.toLowerCase().replace(/\W+/g, '-'), name, title, tier: spec.tier, stats, uniqueMaterials: [], pattern, moves, color, accent };
-      const e = new Enemy(bossEnemyDef(def), x, y, WAR.testFieldLevel, spec.tier);
+      const e = new Enemy(bossEnemyDef(def), x, y, level, spec.tier);
       e.boss = def; e.leader = true;
       e.homeX = x; e.homeY = y;
       this.enemies.push(e);
@@ -878,7 +906,10 @@ class Game {
         this.spawnBlock(foes.slice(n), 'enemy', hall.x0 + 200, cy + 140, spec.tier);
         spreadElites((court.x0 + court.x1) / 2 + 120, cy);
         const t = b.throne!;
-        b.lord = boss(spec.lordName || 'the Lord', 'Castle Lord', WAR.lordStats, 'brute', ['slam', 'rush'], '#3d2f5c', '#c79bff', t.x - 110, t.y);
+        // the castle's own Lord from the roster: their pattern, moves, colours and level (PLAN 9.1)
+        const lg = this.battleFrom === 'map' ? this.war.general(spec.lordId || null) : null;
+        b.lord = lg ? boss(lg.name, lg.title, WAR.lordStats, lg.pattern, lg.moves, lg.color, lg.accent, t.x - 110, t.y, lg.level)
+          : boss(spec.lordName || 'the Lord', 'Castle Lord', WAR.lordStats, 'brute', ['slam', 'rush'], '#3d2f5c', '#c79bff', t.x - 110, t.y);
         b.lord.aggro = false;
         break;
       }
@@ -905,6 +936,15 @@ class Game {
     }
     // a rescue's reinforcements wait for the alarm (the general walking free)
     if (spec.kind !== 'rescue') for (const k of unitList(spec.reinforce || {})) this.army.addReserve('enemy', k);
+    // your general (a joined army's, a defended castle's) fights beside you on their boss AI (PLAN 9.2)
+    this.battleGeneral = null;
+    const gen = this.battleFrom === 'map' ? this.war.general(spec.generalId || null) : null;
+    if (gen) {
+      const e = new Enemy(bossEnemyDef(generalBoss(gen, spec.tier)), p.x + (top ? 70 : 60), p.y + (top ? 60 : 70), gen.level, spec.tier);
+      e.boss = generalBoss(gen, spec.tier); e.team = 'player'; e.generalId = gen.id;
+      this.enemies.push(e);
+      this.battleGeneral = e;
+    }
     b.startFoes = this.foeStrength();
     b.startAllies = this.army.live('player') + this.army.reserveCount('player');
     if (spec.kind === 'convoy') b.notes.push(`${b.cargo} gold aboard`);
@@ -981,7 +1021,7 @@ class Game {
             b.lordFled = true;
             b.lord.fleeing = true; b.lord.leader = false;
             b.notes.push(`${b.spec.lordName || 'The Lord'} fled — not recruitable`);
-          } else if (b.lordBeatenFirst) b.notes.push(`${b.spec.lordName || 'The Lord'} beaten first — can be recruited (Phase 10)`);
+          } else if (b.lordBeatenFirst) b.notes.push(`${b.spec.lordName || 'The Lord'} beaten first: Recruit or Release`);
           b.outcome = `${b.spec.name} taken — the throne is destroyed`;
           this.finishBattle('win'); return;
         }
@@ -1045,10 +1085,12 @@ class Game {
   /** Rescue: the cell opens; the general joins the knight's side and follows them out. */
   private freeGeneral() {
     const b = this.battle, c = b.cell!;
-    const g = new Enemy(ENEMIES.bruiser, c.x, c.y + 40, WAR.testFieldLevel + 2, b.spec.tier, WAR.commanderMult);
+    const real = this.battleFrom === 'map' ? this.war.general(b.spec.rescueId || null) : null;
+    const g = real ? new Enemy(bossEnemyDef(generalBoss(real, b.spec.tier)), c.x, c.y + 40, real.level, b.spec.tier) : new Enemy(ENEMIES.bruiser, c.x, c.y + 40, WAR.testFieldLevel + 2, b.spec.tier, WAR.commanderMult);
     g.team = 'player';
     g.escort = true;
-    g.def = { ...g.def, name: b.spec.generalName || 'General', color: '#2d4f7a', accent: PAL.ally };
+    if (real) { g.boss = generalBoss(real, b.spec.tier); g.generalId = real.id; }
+    else g.def = { ...g.def, name: b.spec.generalName || 'General', color: '#2d4f7a', accent: PAL.ally };
     this.enemies.push(g);
     b.general = g;
     c.hp = 0;
@@ -1081,6 +1123,7 @@ class Game {
       const fielded = emptyReserve(), share = emptyReserve();
       for (const src of [b.spec.foes, b.spec.reinforce || {}]) for (const k of UNIT_ORDER) fielded[k] += (src as Partial<Reserve>)[k] || 0;
       for (const k of UNIT_ORDER) share[k] = fielded[k] ? clamp(theirs[k] / fielded[k], 0, 1) : 1;
+      if (b.spec.generalId) this.war.liveGenerals.add(b.spec.generalId);
       if (b.spec.fightId !== undefined) {
         // a joined fight: its armies and the node carry on from here (PLAN 7.3)
         const node = this.war.resolveJoin(b.spec.fightId, result, ally, share, b.wear());
@@ -1090,6 +1133,24 @@ class Game {
         this.war.resolveIntercept(b.spec.armyId, result, share);
         if (result === 'win') b.notes.push('the Dominion army is broken');
       }
+      this.war.liveGenerals.clear();
+      if (b.spec.generalId) {
+        const g = this.war.general(b.spec.generalId)!;
+        b.notes.push(result === 'win' ? `${g.name}: loyalty ${Math.round(g.loyalty)} (fought beside you)` : result === 'lose' ? `${g.name} is taken` : `${g.name} withdraws with you`);
+      }
+      // a castle taken live: its Lord, beaten first, may be recruited (PLAN 9.1); its cells open
+      if (result === 'win' && b.spec.kind === 'castle' && b.spec.nodeId !== undefined) {
+        const lord = this.war.general(b.spec.lordId || null);
+        if (lord && b.lordBeatenFirst) { this.pendingRecruit = lord.id; this.recruitPick = 0; }
+        if (lord) { lord.status = 'gone'; lord.at = -1; }
+        for (const c of this.war.captivesAt(b.spec.nodeId)) { this.war.rescue(c); b.notes.push(`${c.name} freed from the cells`); }
+      }
+      // a rescue raid that got them out
+      if (result === 'win' && b.spec.rescueId) {
+        const g = this.war.general(b.spec.rescueId);
+        if (g) { this.war.rescue(g); b.outcome = `${g.name} is out — rescued (loyalty +${WAR.loyaltyRescued})`; }
+      }
+      this.save();
     }
     if (!b.outcome) b.outcome = result === 'win' ? 'Victory' : result === 'lose' ? 'You fell. Back to camp — the warband is lost, the node unchanged.' : 'You left the field. The attack is abandoned.';
     else if (result === 'lose' && !p.alive) b.outcome = 'You fell. Back to camp — the warband is lost, the node unchanged.';
@@ -1097,7 +1158,7 @@ class Game {
       const kills = b.kills.byKnight + b.kills.byArmy + b.kills.elites;
       b.spoils.gold = Math.round((WAR.spoilGold[b.spec.kind] || 0) * b.spec.tier + kills * WAR.spoilGoldPerKill);
       if (b.spec.kind === 'convoy') { b.spoils.gold += b.cargo; b.notes = b.notes.filter((s) => !/aboard/.test(s)); b.notes.push(`cargo taken: ${b.cargo} gold`); }
-      if (b.spec.kind === 'rescue') b.notes.push(`${b.spec.generalName || 'The general'} rescued (loyalty +25 with Phase 10)`);
+      if (b.spec.kind === 'rescue' && !b.spec.rescueId) b.notes.push(`${b.spec.generalName || 'The general'} rescued`);
       if (b.spec.nodeId !== undefined && b.spec.fightId === undefined && this.battleFrom === 'map') {
         // PLAN 5.3: the node is yours, a level down from the fighting
         const n = this.camp.nodes[b.spec.nodeId];
@@ -1119,6 +1180,28 @@ class Game {
       // the war remembers a lost or abandoned battle too (the warband's fate)
       if (this.battleFrom === 'map') this.save();
     }
+  }
+
+  /** Recruit the Lord you beat (loyalty 50, or 30 if they'd defected before), or let them go for double spoils. */
+  decideRecruit(recruit: boolean) {
+    const g = this.war.general(this.pendingRecruit), b = this.battle, p = this.player;
+    this.pendingRecruit = null;
+    if (!g) return;
+    if (recruit) {
+      this.war.recruit(g);
+      b.notes.push(generalLine(g, 'recruit'));
+      this.banner(`${g.name.toUpperCase()} JOINS YOU`, `level ${g.level}  ·  loyalty ${g.loyalty}`, '#4fe08a');
+    } else {
+      // Release: the spoils again
+      p.gold += b.spoils.gold;
+      for (const m of Object.keys(b.spoils.mats) as MatId[]) p.inv[m] = (p.inv[m] || 0) + (b.spoils.mats[m] || 0);
+      b.spoils.gold *= 2;
+      for (const m of Object.keys(b.spoils.mats) as MatId[]) b.spoils.mats[m] = (b.spoils.mats[m] || 0) * 2;
+      b.notes.push(`${g.name} released: double spoils`);
+    }
+    this.sfx.levelUp();
+    this.battle.resultT = 0.3;   // a moment before Enter leaves
+    this.save();
   }
 
   /* ------------------------------------------------------------ autopilot */
@@ -1288,6 +1371,17 @@ class Game {
       this.updateVfx(dt);
       this.syncMusic();
       const tap = this.input.takeTap();
+      if (this.pendingRecruit) {
+        // PLAN 9.1: Recruit the beaten Lord, or Release them for double spoils
+        const inp = this.input;
+        if (inp.wasPressed('left') || inp.wasPressed('right')) { this.recruitPick = 1 - this.recruitPick; this.sfx.guard(); }
+        let choose = -1;
+        if (tap) for (let i = 0; i < 2; i++) { const r = RECRUIT_BTN; const x = r.x0 + i * (r.w + r.gap); if (tap.x >= x && tap.x <= x + r.w && tap.y >= r.y && tap.y <= r.y + r.h) choose = i; }
+        if (this.battle.resultT > 0.6 && (inp.wasPressed('confirm') || inp.wasPressed('attack'))) choose = this.recruitPick;
+        if (choose >= 0) this.decideRecruit(choose === 0);
+        this.input.endTick();
+        return;
+      }
       if (this.battle.resultT > 0.6 && (tap || this.input.wasPressed('confirm') || this.input.wasPressed('attack') || this.input.wasPressed('restart'))) {
         const b = this.battle;
         if (this.battleFrom === 'sandbox') this.enterSandbox();
@@ -1298,7 +1392,7 @@ class Game {
             // back on the map, looking at the node that was fought over
             const n = this.camp.nodes[b.spec.nodeId];
             this.mapSel = n.id; this.mapX = n.x; this.mapY = n.y; this.clampMap();
-            if (b.result === 'win') {
+            if (b.result === 'win' && b.spec.kind !== 'defense' && !b.spec.rescueId) {
               const t = this.camp.territories[n.territory];
               this.banner(`${n.name.toUpperCase()} TAKEN`, n.type === 'castle' ? `${t.name} is yours` : 'the frontier moves', '#4fe08a');
             }
@@ -2350,6 +2444,7 @@ class Game {
 
   /** No EXP and no field drops in v2: spoils are paid on the results screen (Phase 4+). */
   onEnemyDeath(e: Enemy) {
+    if (e.generalId) this.banner(`${e.def.name.toUpperCase()} IS DOWN`, 'win, and they get back up', '#ffb070');
     const b = this.battle;
     if (e.team === 'enemy') b.kills.elites++; else b.losses.elites++;
     if (e === b.lord && b.throne && b.throne.alive && !b.result) {

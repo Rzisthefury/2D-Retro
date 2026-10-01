@@ -71,7 +71,7 @@ type Action =
   | 'up' | 'down' | 'left' | 'right'
   | 'confirm' | 'cancel'
   | 'spell1' | 'spell2' | 'spell3' | 'spell4' | 'spell5'
-  | 'item' | 'pause' | 'debug' | 'restart' | 'mute' | 'back' | 'command' | 'zoom';
+  | 'item' | 'pause' | 'debug' | 'restart' | 'mute' | 'back' | 'command' | 'zoom' | 'generals';
 
 const KEYMAP: Record<string, Action> = {
   KeyJ: 'attack', Space: 'jump', KeyK: 'jump', KeyL: 'lock',
@@ -79,7 +79,7 @@ const KEYMAP: Record<string, Action> = {
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
   Enter: 'confirm', Escape: 'cancel', Backspace: 'cancel',
   Digit1: 'spell1', Digit2: 'spell2', Digit3: 'spell3', Digit4: 'spell4', Digit5: 'spell5',
-  KeyE: 'item', KeyQ: 'command', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back', KeyZ: 'zoom',
+  KeyE: 'item', KeyQ: 'command', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back', KeyZ: 'zoom', KeyG: 'generals',
 };
 
 // Movement is read separately so WASD can coexist with the arrow-key menu.
