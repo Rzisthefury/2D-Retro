@@ -1046,7 +1046,7 @@ class Game {
             b.lordFled = true;
             b.lord.fleeing = true; b.lord.leader = false;
             b.notes.push(`${b.spec.lordName || 'The Lord'} fled — not recruitable`);
-          } else if (b.lordBeatenFirst && b.spec.lordId) b.notes.push(`${b.spec.lordName || 'The Lord'} beaten first: Recruit or Release`);
+          } else if (b.lordBeatenFirst && !b.spec.warlord) b.notes.push(`${b.spec.lordName || 'The Lord'} beaten first: Recruit or Release`);
           b.outcome = `${b.spec.name} taken — the throne is destroyed`;
           this.finishBattle('win'); return;
         }
@@ -2529,7 +2529,7 @@ class Game {
       // PLAN 10.2: beating the Lord before the throne falls allows recruiting
       b.lordBeatenFirst = true;
       if (b.spec.warlord) this.banner(`${(b.spec.lordName || 'the warlord').toUpperCase()} FALLS`, 'now the throne', '#ffd54a');
-      else this.banner(`${(b.spec.lordName || 'the Lord').toUpperCase()} YIELDS`, b.spec.kind === 'castle' && b.spec.lordId ? 'beaten first: can be recruited  ·  now the throne' : b.spec.kind === 'castle' ? 'now the throne' : 'the castle is leaderless', '#4fe08a');
+      else this.banner(`${(b.spec.lordName || 'the Lord').toUpperCase()} YIELDS`, b.spec.kind === 'castle' ? 'beaten first: can be recruited  ·  now the throne' : 'the castle is leaderless', '#4fe08a');
     } else if (e === b.captain && !b.result) {
       this.banner(`${(b.spec.captainName || 'the Captain').toUpperCase()} FALLS`, b.gates.some((s) => s.alive) ? 'now break the gate' : '', '#4fe08a');
     } else if (e === b.leader && !b.result) {
