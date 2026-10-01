@@ -40,7 +40,7 @@ async function desktop(browser) {
 
   // ---- the map stub offers every type, and Enter on each row starts it at its PLAN 10.2 size
   const rows = await page.evaluate(() => GAME.campaignRows().map((r) => r.spec ? r.spec.kind : null));
-  check('map stub: one row per battle type + test field + back', rows.join(',') === 'village,outpost,keep,castle,convoy,field,defense,rescue,test,', rows.join(','));
+  check('map stub: one row per battle type + the warlord (Phase 11) + test field + back', rows.join(',') === 'village,outpost,keep,castle,convoy,field,defense,rescue,castle,test,', rows.join(','));
   const size = { outpost: [2000, 1200], keep: [2000, 1600], castle: [3200, 1800], convoy: [3600, 1000], defense: [2400, 1400], rescue: [3200, 1800] };
   for (const [k, [w, h]] of Object.entries(size)) {
     const i = rows.indexOf(k);

@@ -11,7 +11,8 @@ const state = (page) => page.evaluate(() => ({ screen: GAME.screen, kind: GAME.b
 
 /** From the campaign stub, start row i. */
 async function start(page, i) {
-  await page.evaluate((i) => { GAME.enterSandbox(); GAME.campIndex = i; }, i);
+  // a row index, or a label prefix (the list grows: Phase 11 added the warlord)
+  await page.evaluate((i) => { GAME.enterSandbox(); GAME.campIndex = typeof i === 'number' ? i : GAME.campaignRows().findIndex((r) => r.label.startsWith(i)); }, i);
   await wait(100);
   await page.keyboard.press('Enter'); await wait(300);
 }
@@ -42,7 +43,7 @@ async function desktop(browser) {
   // ---- title -> campaign stub
   await page.keyboard.press('Enter'); await wait(300);
   const camp = await page.evaluate(() => ({ screen: GAME.screen, rows: GAME.campaignRows().map((r) => r.label) }));
-  check('New game lands on the campaign map; the battle list has every type', camp.screen === 'campaign' && camp.rows.length === 10, JSON.stringify(camp));
+  check('New game lands on the campaign map; the battle list has every type', camp.screen === 'campaign' && ['Village', 'Outpost', 'Keep', 'Castle', 'Convoy', 'Field', 'Defense', 'Rescue', 'Test field'].every((k) => camp.rows.some((r) => r.startsWith(k))), JSON.stringify(camp));
 
   // ---- village raid: layout
   await start(page, 0);
@@ -205,7 +206,7 @@ async function desktop(browser) {
 
   // ---- the test field still works from the stub
   await page.evaluate(() => GAME.enterSandbox());
-  await start(page, 8);
+  await start(page, 'Test field');
   const tst = await page.evaluate(() => ({ kind: GAME.battle.spec.kind, foes: GAME.foesAlive() }));
   check('test field still reachable from the stub', tst.kind === 'test' && tst.foes > 0, JSON.stringify(tst));
 
@@ -226,7 +227,8 @@ async function phone(browser) {
   const camp = await page.evaluate(() => GAME.screen);
   await page.evaluate(() => GAME.enterSandbox()); await wait(200);
   // tap the Field battle row
-  s = pt(490 + 200, 170 + 25); await page.touchscreen.tap(s.x, s.y); await wait(1200);
+  const fr = await page.evaluate(() => { const i = GAME.campaignRows().findIndex((r) => r.label.startsWith('Field')), a = GAME.campRowAt(i); return { x: a.x + CAMP_ROW.w / 2, y: a.y + CAMP_ROW.h / 2 }; });
+  s = pt(fr.x, fr.y); await page.touchscreen.tap(s.x, s.y); await wait(1200);
   const st = await state(page);
   check('phone: Start -> map; battle list -> tap Field battle', camp === 'campaign' && st.screen === 'battle' && st.kind === 'field', JSON.stringify({ camp, st }));
   await page.screenshot({ path: OUT + '/p4-phone-field.png' });
