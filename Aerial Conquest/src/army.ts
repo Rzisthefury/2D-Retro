@@ -52,6 +52,8 @@ class Army {
   private nextUid = 1;
   private frame = 0;
   liveCount = [0, 0];
+  routedCount = [0, 0];               // units that fled off the field (not kills)
+  private tmpBody = { x: 0, y: 0, radius: 0 };
 
   // reserves (PLAN 10.1): units past the live cap wait here and stream in from their side's edge
   reserve: Reserve[] = [emptyReserve(), emptyReserve()];
@@ -104,6 +106,7 @@ class Army {
       this.freeList.push(i);
     }
     this.liveCount[0] = this.liveCount[1] = 0;
+    this.routedCount[0] = this.routedCount[1] = 0;
     this.arrows = 0;
     this.head.fill(-1);
     this.reserve = [emptyReserve(), emptyReserve()];
@@ -199,6 +202,25 @@ class Army {
     return (this.refs[i] = new MinionRef(this, i, this.uid[i]));
   }
 
+  /** Rout (PLAN 10.1): every live unit of the side flees; its reserve never comes on. */
+  routSide(side: Team) {
+    const t = teamIndex(side);
+    for (let i = 0; i < this.cap; i++) {
+      if (!this.alive[i] || this.team[i] !== t) continue;
+      this.state[i] = ST_FLEE; this.wind[i] = 0; this.tgt[i] = null;
+    }
+    this.reserve[t] = emptyReserve();
+  }
+
+  /** Remove a unit without a death (it fled off the field). */
+  private despawn(i: number) {
+    if (!this.alive[i]) return;
+    this.alive[i] = 0; this.used[i] = 0; this.tgt[i] = null;
+    this.liveCount[this.team[i]]--;
+    this.routedCount[this.team[i]]++;
+    this.freeList.push(i);
+  }
+
   /** Hold: every player-side unit's anchor becomes where it stands now. */
   anchorAll(side: Team) {
     const t = teamIndex(side);
@@ -292,6 +314,12 @@ class Army {
       const r = this.def(i).radius;
       this.x[i] = clamp(this.x[i], f.x + r, f.x + f.w - r);
       this.y[i] = clamp(this.y[i], f.y + r, f.y + f.h - r);
+      if (g.battle.structures.length) {
+        // houses and walls are solid
+        const o = this.tmpBody; o.x = this.x[i]; o.y = this.y[i]; o.radius = r;
+        g.battle.collide(o);
+        this.x[i] = o.x; this.y[i] = o.y;
+      }
     }
     this.updateArrows(g, dt);
   }
@@ -368,7 +396,11 @@ class Army {
     if (!d.ignoresUnits) {
       const ft = order === 'focus' ? g.focusTarget() : null;
       if (ft) t = this.tgt[i] = ft;
-      else if (due) t = this.tgt[i] = zone ? this.pickIn(g, i, zone[0], zone[1], zone[2]) : this.pick(g, i);
+      else if (due) {
+        const found = zone ? this.pickIn(g, i, zone[0], zone[1], zone[2]) : this.pick(g, i);
+        // no unit in sight: keep working on a structure rather than dropping it (and its windup) every re-pick
+        if (found || !(t instanceof Structure) || !t.alive) t = this.tgt[i] = found;
+      }
       // a target that has dragged the fight out of the order's area is let go
       if (t && zone && (t.x - zone[0]) ** 2 + (t.y - zone[1]) ** 2 > (zone[2] + 40) ** 2) t = this.tgt[i] = null;
     }
@@ -385,8 +417,10 @@ class Army {
     const halt = () => { this.vx[i] *= 0.7; this.vy[i] *= 0.7; };
 
     if (this.state[i] === ST_FLEE) {
-      const c = this.centre[1 - own];
-      steer(this.x[i] * 2 - c.x, this.y[i] * 2 - c.y, 1.1);
+      // routed: run for the side's own edge and leave the field there
+      const e = this.edge[own];
+      steer(e.x, this.y[i], 1.2);
+      if (Math.abs(this.x[i] - e.x) < d.radius + 8) this.despawn(i);
       return;
     }
 
@@ -404,7 +438,12 @@ class Army {
         if (dist(this.x[i], this.y[i], this.anchorX[i], this.anchorY[i]) > 10) steer(this.anchorX[i], this.anchorY[i], 1); else halt();
         return;
       }
-      // Charge, or nothing in sight: march on the enemy's centre (rams always do)
+      // Charge with no unit in sight: go for the objective (PLAN 11.4), if there is one
+      if (own === TEAM_PLAYER && (order === 'charge' || order === 'focus' || d.ignoresUnits)) {
+        const st = g.battle.nearestStructure('player', this.x[i], this.y[i]);
+        if (st) { this.tgt[i] = st; return; }
+      }
+      // otherwise march on the enemy's centre (rams always do)
       const c = this.centre[1 - own];
       if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40) steer(c.x, c.y, 1); else halt();
       return;

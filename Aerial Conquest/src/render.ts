@@ -70,6 +70,7 @@ class Renderer {
     const showPlayer = g.screen !== 'title' && (g.player.alive || g.deathT < 2);
     if (showPlayer) drawables.push({ y: g.player.y, fn: () => this.drawPlayer(c, g.player, g) });
     for (const p of g.projectiles) drawables.push({ y: p.y, fn: () => this.drawProjectile(c, p) });
+    for (const s of g.battle.structures) if (onScreen(s.x, s.y)) drawables.push({ y: s.y, fn: () => this.drawStructure(c, s, g) });
     drawables.sort((a, b) => a.y - b.y);
 
     for (const e of g.enemies) {
@@ -233,6 +234,122 @@ class Renderer {
     }
   }
 
+  /** Battle HUD (PLAN 13): the objective, a progress bar, and an exit marker on your edge. */
+  private drawObjective(c: CanvasRenderingContext2D, g: Game) {
+    const b = g.battle;
+    const w = 300, x = (VIEW_W - w) / 2, y = 14;
+    c.save();
+    c.fillStyle = 'rgba(10,14,28,0.72)';
+    this.roundRect(c, x, y, w, 36, 8); c.fill();
+    c.textAlign = 'center';
+    c.font = '800 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = '#ffd54a';
+    c.fillText(b.objective.toUpperCase(), VIEW_W / 2, y + 15);
+    this.bar(c, x + 14, y + 22, w - 28, 6, b.progress(g), '#ff9d4a', 'rgba(0,0,0,0.55)');
+    c.restore();
+    // the way out: your own edge, while you are near it
+    const p = g.player, sx0 = g.field.x - g.camX;
+    if (sx0 > -40 && p.x - g.field.x < 400) {
+      c.save();
+      c.globalAlpha = 0.55 + Math.sin(g.time * 4) * 0.2;
+      c.fillStyle = '#8fb4ff';
+      c.font = '800 11px ui-monospace, Menlo, Consolas, monospace';
+      c.textAlign = 'left';
+      c.fillText('\u25C0 LEAVE', Math.max(6, sx0 + 6), clamp(p.y - g.camY - 40, 140, VIEW_H - 140));
+      c.restore();
+    }
+  }
+
+  /** The results screen (PLAN 10.1): outcome, time, kills, losses, spoils. */
+  private drawResults(c: CanvasRenderingContext2D, g: Game) {
+    const b = g.battle;
+    const a = clamp(b.resultT / 0.4, 0, 1);
+    c.save();
+    c.fillStyle = `rgba(6,8,14,${0.9 * a})`;
+    c.fillRect(0, 0, VIEW_W, VIEW_H);
+    c.globalAlpha = a;
+    const title = b.result === 'win' ? 'VICTORY' : b.result === 'lose' ? 'DEFEAT' : 'WITHDRAWN';
+    const col = b.result === 'win' ? '#ffd54a' : b.result === 'lose' ? '#ff6b6b' : '#8fb4ff';
+    c.textAlign = 'center';
+    c.font = '900 44px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = col;
+    c.fillText(title, VIEW_W / 2, 92);
+    c.font = '700 14px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.text;
+    const sub = b.result === 'win'
+      ? (b.spec.kind === 'village' ? `${b.spec.name} burned — the node is yours (ownership arrives with the map)` : b.routed ? 'The Dominion army routed' : 'The Dominion army is destroyed')
+      : b.result === 'lose' ? 'You fell. Back to camp — the warband is lost, the node unchanged.' : 'You left the field. The attack is abandoned.';
+    c.fillText(sub, VIEW_W / 2, 120);
+
+    const left = VIEW_W / 2 - 250, right = VIEW_W / 2 + 30;
+    const row = (x: number, y: number, k: string, v: string, vc = PAL.text) => {
+      c.textAlign = 'left'; c.fillStyle = PAL.dim; c.font = '600 13px ui-monospace, Menlo, Consolas, monospace'; c.fillText(k, x, y);
+      c.textAlign = 'right'; c.fillStyle = vc; c.font = '700 13px ui-monospace, Menlo, Consolas, monospace'; c.fillText(v, x + 220, y);
+    };
+    let y = 170;
+    row(left, y, 'Time', fmtTime(b.time)); y += 22;
+    row(left, y, 'Killed by you', String(b.kills.byKnight)); y += 22;
+    row(left, y, 'Killed by your army', String(b.kills.byArmy)); y += 22;
+    row(left, y, 'Elites felled', String(b.kills.elites)); y += 22;
+    row(left, y, 'Dominion routed', String(g.army.routedCount[TEAM_ENEMY])); y += 22;
+    row(left, y, 'Your troops lost', String(b.losses.troops), b.losses.troops ? '#ff9d9d' : PAL.text); y += 22;
+    y = 170;
+    c.textAlign = 'left'; c.fillStyle = '#ffd54a'; c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
+    c.fillText('SPOILS', right, y); y += 22;
+    if (b.result === 'win') {
+      row(right, y, 'Gold', `+${b.spoils.gold}`, '#ffd54a'); y += 22;
+      for (const m of Object.keys(b.spoils.mats) as MatId[]) { row(right, y, MATS[m].name, `+${b.spoils.mats[m]}`, MATS[m].color); y += 22; }
+    } else {
+      c.fillStyle = PAL.dim; c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
+      c.fillText('none — spoils come with victory', right, y); y += 22;
+    }
+    row(right, y + 8, 'Treasury', String(g.player.gold), '#ffd54a');
+    c.textAlign = 'center';
+    c.fillStyle = PAL.dim;
+    c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+    if (b.resultT > 0.6) c.fillText(IS_TOUCH ? 'tap to return to the map' : 'ENTER to return to the map', VIEW_W / 2, VIEW_H - 40);
+    c.restore();
+  }
+
+  /** The campaign stub (Phase 4): a list of battles until the map exists (Phase 6). */
+  private drawCampaign(c: CanvasRenderingContext2D, g: Game) {
+    c.save();
+    c.fillStyle = 'rgba(6,8,14,0.9)';
+    c.fillRect(0, 0, VIEW_W, VIEW_H);
+    c.textAlign = 'center';
+    c.font = '900 30px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.mpCharge;
+    c.fillText('THE VERDANT REACH', VIEW_W / 2, 92);
+    c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.dim;
+    c.fillText('campaign map stub — the illustrated map arrives in Phase 6', VIEW_W / 2, 116);
+    c.fillStyle = '#ffd54a';
+    c.fillText(`treasury ${g.player.gold} gold  ·  warband ${g.warbandCap()}`, VIEW_W / 2, 140);
+    const rows = g.campaignRows();
+    for (let i = 0; i < rows.length; i++) {
+      const y = CAMP_ROW.y0 + i * (CAMP_ROW.h + CAMP_ROW.gap);
+      const on = i === g.campIndex;
+      c.fillStyle = on ? 'rgba(80,140,255,0.26)' : 'rgba(19,23,40,0.75)';
+      this.roundRect(c, CAMP_ROW.x, y, CAMP_ROW.w, CAMP_ROW.h, 8); c.fill();
+      c.strokeStyle = on ? '#6f9bff' : 'rgba(120,150,220,0.22)'; c.lineWidth = on ? 2 : 1.4;
+      this.roundRect(c, CAMP_ROW.x, y, CAMP_ROW.w, CAMP_ROW.h, 8); c.stroke();
+      c.textAlign = 'left';
+      c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = on ? '#ffffff' : PAL.text;
+      c.fillText(rows[i].label, CAMP_ROW.x + 18, y + (rows[i].sub ? 22 : 31));
+      if (rows[i].sub) {
+        c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.dim;
+        c.fillText(rows[i].sub, CAMP_ROW.x + 18, y + 40);
+      }
+    }
+    c.textAlign = 'center';
+    c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.dim;
+    c.fillText(IS_TOUCH ? 'tap a battle to start it' : '\u2191\u2193 choose  ·  ENTER start  ·  ESC title', VIEW_W / 2, VIEW_H - 30);
+    c.restore();
+  }
+
   /** The order wheel: four slices around the knight (Q / LB) or under the thumb (CMD). */
   private drawWheel(c: CanvasRenderingContext2D, g: Game) {
     const cx = clamp(g.wheelX, 90, VIEW_W - 90), cy = clamp(g.wheelY, 90, VIEW_H - 90);
@@ -282,13 +399,17 @@ class Renderer {
    * Aerial Conquest; nothing here comes from Aerial Finisher's regions.
    */
   private drawField(c: CanvasRenderingContext2D, g: Game, cam: { x: number; y: number }) {
+    this.pal = SCENERY[g.battle.spec.scenery];
     this.paintField(c, g.field, cam, VIEW_W, VIEW_H);
+    this.drawDecor(c, g, cam);
   }
+
+  private pal = SCENERY.forest;
 
   /** Paint the field (and the treeline around it) for the view rectangle at `cam`, `vw` x `vh`. */
   private paintField(c: CanvasRenderingContext2D, f: { x: number; y: number; w: number; h: number }, cam: { x: number; y: number }, vw: number, vh: number) {
     // beyond the field: dark forest
-    c.fillStyle = '#16241a';
+    c.fillStyle = this.pal.forest;
     c.fillRect(cam.x - 10, cam.y - 10, vw + 20, vh + 20);
     // grass, in broad mown bands
     const band = 96;
@@ -296,7 +417,7 @@ class Renderer {
     for (let b = b0; b <= b1; b++) {
       const y = f.y + b * band;
       if (y >= f.y + f.h) break;
-      c.fillStyle = b % 2 ? '#3f6a3a' : '#43703d';
+      c.fillStyle = b % 2 ? this.pal.grassA : this.pal.grassB;
       c.fillRect(Math.max(f.x, cam.x - 10), y, Math.min(f.w, vw + 20), Math.min(band, f.y + f.h - y));
     }
     // per-cell details
@@ -308,12 +429,12 @@ class Renderer {
       const x = f.x + cx * cell, y = f.y + cy * cell;
       if (h % 23 === 0) {
         // a worn dirt patch
-        c.fillStyle = 'rgba(122,96,60,0.55)';
+        c.fillStyle = this.pal.dirt;
         c.beginPath(); c.ellipse(x + 32, y + 32, 26 + (h % 9), 14 + (h % 5), (h % 7) * 0.4, 0, Math.PI * 2); c.fill();
       }
       // grass tufts
       const tufts = h % 4;
-      c.strokeStyle = (h >> 3) % 2 ? '#5c8f4c' : '#335a30';
+      c.strokeStyle = (h >> 3) % 2 ? this.pal.tuftA : this.pal.tuftB;
       c.lineWidth = 1.5;
       for (let k = 0; k < tufts; k++) {
         const tx = x + ((h >> (k * 3)) % cell), ty = y + ((h >> (k * 3 + 5)) % cell);
@@ -342,9 +463,9 @@ class Renderer {
       if (tx < cam.x - 60 || tx > cam.x + vw + 60 || ty < cam.y - 60 || ty > cam.y + vh + 60) return;
       c.fillStyle = 'rgba(0,0,0,0.25)';
       c.beginPath(); c.ellipse(tx + 4, ty + 10, s * 0.9, s * 0.4, 0, 0, Math.PI * 2); c.fill();
-      c.fillStyle = '#254a2a';
+      c.fillStyle = this.pal.tree;
       c.beginPath(); c.arc(tx, ty - s * 0.3, s, 0, Math.PI * 2); c.fill();
-      c.fillStyle = '#2f5d33';
+      c.fillStyle = this.pal.treeHi;
       c.beginPath(); c.arc(tx - s * 0.3, ty - s * 0.6, s * 0.6, 0, Math.PI * 2); c.fill();
     };
     for (let x = f.x; x <= f.x + f.w; x += 44) {
@@ -356,6 +477,117 @@ class Renderer {
       const h = this.cellHash(3, y);
       tree(f.x - 14, y, 20 + (h % 8));
       tree(f.x + f.w + 14, y + 22, 20 + ((h >> 3) % 8));
+    }
+  }
+
+  /** Roads, crop plots, fences, the well, rocks and bushes (ground level, not solid). */
+  private drawDecor(c: CanvasRenderingContext2D, g: Game, cam: { x: number; y: number }) {
+    const vis = (d: Decor) => d.x + d.w > cam.x - 40 && d.x - d.w < cam.x + VIEW_W + 40 && d.y + d.h > cam.y - 40 && d.y - d.h < cam.y + VIEW_H + 40;
+    for (const d of g.battle.decor) {
+      if (d.kind === 'road') {
+        c.fillStyle = 'rgba(150,120,80,0.55)';
+        c.fillRect(Math.max(d.x, cam.x - 10), d.y, Math.min(d.w, VIEW_W + 20), d.h);
+        c.fillStyle = 'rgba(110,86,56,0.35)';
+        c.fillRect(Math.max(d.x, cam.x - 10), d.y + 8, Math.min(d.w, VIEW_W + 20), 3);
+        c.fillRect(Math.max(d.x, cam.x - 10), d.y + d.h - 11, Math.min(d.w, VIEW_W + 20), 3);
+        continue;
+      }
+      if (!vis(d)) continue;
+      if (d.kind === 'crops') {
+        c.fillStyle = '#6b5a33';
+        c.fillRect(d.x - d.w / 2, d.y - d.h / 2, d.w, d.h);
+        c.strokeStyle = '#a3b24f'; c.lineWidth = 3;
+        c.beginPath();
+        for (let yy = d.y - d.h / 2 + 8; yy < d.y + d.h / 2; yy += 12) { c.moveTo(d.x - d.w / 2 + 6, yy); c.lineTo(d.x + d.w / 2 - 6, yy); }
+        c.stroke();
+      } else if (d.kind === 'fence') {
+        c.strokeStyle = '#7a5a36'; c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(d.x - d.w / 2, d.y - 8); c.lineTo(d.x + d.w / 2, d.y - 8);
+        c.moveTo(d.x - d.w / 2, d.y - 3); c.lineTo(d.x + d.w / 2, d.y - 3);
+        for (let xx = d.x - d.w / 2; xx <= d.x + d.w / 2; xx += 15) { c.moveTo(xx, d.y); c.lineTo(xx, d.y - 12); }
+        c.stroke();
+      } else if (d.kind === 'well') {
+        c.fillStyle = '#7d7f86'; c.beginPath(); c.ellipse(d.x, d.y, d.w / 2, d.w / 3, 0, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#1c2a3a'; c.beginPath(); c.ellipse(d.x, d.y - 2, d.w / 3, d.w / 5, 0, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#6b4a2b'; c.lineWidth = 3;
+        c.beginPath(); c.moveTo(d.x - d.w / 2 + 2, d.y); c.lineTo(d.x - d.w / 2 + 2, d.y - 26); c.lineTo(d.x + d.w / 2 - 2, d.y - 26); c.lineTo(d.x + d.w / 2 - 2, d.y); c.stroke();
+      } else if (d.kind === 'rock') {
+        c.fillStyle = '#7b7f78'; c.beginPath(); c.ellipse(d.x, d.y, d.w / 2, d.h / 2, 0, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#9a9e95'; c.beginPath(); c.ellipse(d.x - 2, d.y - 2, d.w / 3, d.h / 3, 0, 0, Math.PI * 2); c.fill();
+      } else {
+        c.fillStyle = this.pal.tree; c.beginPath(); c.arc(d.x, d.y, d.w / 2, 0, Math.PI * 2); c.fill();
+        c.fillStyle = this.pal.treeHi; c.beginPath(); c.arc(d.x - 3, d.y - 3, d.w / 3, 0, Math.PI * 2); c.fill();
+      }
+    }
+  }
+
+  /** A house (timber and thatch), smoking when hurt, a burned shell when destroyed. */
+  private drawStructure(c: CanvasRenderingContext2D, s: Structure, g: Game) {
+    const x0 = s.x - s.w / 2, y1 = s.y, wallH = s.h * 0.55;
+    const flash = s.flash > 0;
+    if (s.kind !== 'building') return;   // gates, thrones, wagons, rings and cells are drawn in Phase 5
+    c.fillStyle = 'rgba(0,0,0,0.3)';
+    c.fillRect(x0 + 6, y1 - 4, s.w, 10);
+    if (!s.alive) {
+      // charred frame and embers
+      c.fillStyle = '#2a2420'; c.fillRect(x0, y1 - wallH * 0.5, s.w, wallH * 0.5);
+      c.strokeStyle = '#141110'; c.lineWidth = 4;
+      c.beginPath();
+      c.moveTo(x0 + 8, y1); c.lineTo(x0 + 14, y1 - wallH * 1.1);
+      c.moveTo(x0 + s.w - 8, y1); c.lineTo(x0 + s.w - 18, y1 - wallH * 0.9);
+      c.moveTo(x0 + s.w * 0.45, y1); c.lineTo(x0 + s.w * 0.55, y1 - wallH * 1.3);
+      c.stroke();
+      const glow = Math.max(0, 1 - s.burnT / 8);
+      if (glow > 0) {
+        for (let k = 0; k < 6; k++) {
+          const fx = x0 + 10 + ((k * 37 + Math.floor(g.time * 10)) % (s.w - 20)), fy = y1 - 6 - (k % 3) * 8;
+          c.fillStyle = `rgba(255,${120 + (k % 3) * 40},40,${0.5 * glow})`;
+          c.beginPath(); c.arc(fx, fy - Math.sin(g.time * 6 + k) * 4, 4 + (k % 2) * 2, 0, Math.PI * 2); c.fill();
+        }
+      }
+      return;
+    }
+    // walls
+    c.fillStyle = flash ? '#ffffff' : '#c9b48a';
+    c.fillRect(x0, y1 - wallH, s.w, wallH);
+    c.strokeStyle = flash ? '#ffffff' : '#5e4026'; c.lineWidth = 3;
+    c.strokeRect(x0, y1 - wallH, s.w, wallH);
+    c.beginPath();
+    for (let k = 1; k < 4; k++) { c.moveTo(x0 + (s.w * k) / 4, y1 - wallH); c.lineTo(x0 + (s.w * k) / 4, y1); }
+    c.stroke();
+    // door and window
+    c.fillStyle = '#3d2716'; c.fillRect(s.x - 9, y1 - 26, 18, 26);
+    c.fillStyle = '#ffd58a'; c.fillRect(x0 + 12, y1 - wallH + 10, 14, 11);
+    // thatched roof
+    c.fillStyle = flash ? '#ffffff' : '#a07a3c';
+    c.beginPath();
+    c.moveTo(x0 - 8, y1 - wallH + 2); c.lineTo(s.x, y1 - s.h - 12); c.lineTo(x0 + s.w + 8, y1 - wallH + 2);
+    c.closePath(); c.fill();
+    c.strokeStyle = '#7a5a2a'; c.lineWidth = 1.5;
+    c.beginPath();
+    for (let k = 1; k < 6; k++) { const t = k / 6; c.moveTo(x0 - 8 + (s.x - x0 + 8) * t, y1 - wallH + 2 - (s.h + 14 - wallH) * t); c.lineTo(x0 + s.w + 8 - (x0 + s.w + 8 - s.x) * t, y1 - wallH + 2 - (s.h + 14 - wallH) * t); }
+    c.stroke();
+    // damage: smoke, then flames, as HP falls
+    const hurt = 1 - s.hp / s.maxHp;
+    if (hurt > 0.25) {
+      for (let k = 0; k < 3; k++) {
+        const t = (g.time * 0.6 + k / 3) % 1;
+        c.fillStyle = `rgba(60,60,60,${0.35 * (1 - t)})`;
+        c.beginPath(); c.arc(s.x - 20 + k * 20 + Math.sin(t * 6) * 6, y1 - s.h - 10 - t * 60, 8 + t * 14, 0, Math.PI * 2); c.fill();
+      }
+    }
+    if (hurt > 0.55) {
+      for (let k = 0; k < 4; k++) {
+        const fx = x0 + 14 + k * (s.w - 28) / 3, fy = y1 - wallH - 6;
+        c.fillStyle = k % 2 ? '#ff9d4a' : '#ffd54a';
+        c.beginPath(); c.moveTo(fx - 6, fy + 6); c.quadraticCurveTo(fx, fy - 18 - Math.sin(g.time * 12 + k) * 5, fx + 6, fy + 6); c.fill();
+      }
+    }
+    // HP bar once hurt
+    if (s.hp < s.maxHp) {
+      c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(s.x - 40, y1 - s.h - 30, 80, 6);
+      c.fillStyle = '#ff9d4a'; c.fillRect(s.x - 40, y1 - s.h - 30, 80 * (s.hp / s.maxHp), 6);
     }
   }
 
@@ -1463,6 +1695,9 @@ class Renderer {
 
   private drawHud(c: CanvasRenderingContext2D, g: Game) {
     if (g.screen === 'title') { this.drawTitle(c, g); return; }
+    if (g.screen === 'campaign') { this.drawCampaign(c, g); return; }
+    // full-screen results: nothing of the HUD underneath (PLAN 16: early-return under overlays)
+    if (g.battle.result) { this.drawResults(c, g); return; }
     const p = g.player;
 
     // ---- top-left: HP, MP
@@ -1493,15 +1728,18 @@ class Renderer {
     // ---- top-right: where you are and what is happening
     c.save();
     c.textAlign = 'right';
+    const b = g.battle, test = b.spec.kind === 'test';
     c.font = '800 18px ui-monospace, Menlo, Consolas, monospace';
-    c.fillStyle = '#8fb4ff';
-    c.fillText('TEST FIELD', VIEW_W - 18, 30);
+    c.fillStyle = test ? '#8fb4ff' : '#ffd54a';
+    c.fillText(test ? 'TEST FIELD' : b.spec.name.toUpperCase(), VIEW_W - 18, 30);
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
     const allies = g.alliesAlive();
     const resE = g.army.reserveCount('enemy'), resP = g.army.reserveCount('player');
-    c.fillText(`groups cleared ${g.groupsCleared}  ·  foes ${g.foesAlive() - resE}${resE ? ` +${resE} reserve` : ''}  ·  allies ${allies}${resP ? ` +${resP}` : ''}`, VIEW_W - 18, 48);
+    const counts = `foes ${g.foesAlive() - resE}${resE ? ` +${resE} reserve` : ''}  ·  allies ${allies}${resP ? ` +${resP}` : ''}`;
+    c.fillText(test ? `groups cleared ${g.groupsCleared}  ·  ${counts}` : `${fmtTime(b.time)}  ·  ${counts}`, VIEW_W - 18, 48);
     c.restore();
+    if (!test) this.drawObjective(c, g);
 
     // equipped gear, small, under the bars
     c.save();
@@ -1589,6 +1827,7 @@ class Renderer {
     if (!p.alive) this.drawGameOver(c, g);
     if (g.paused) this.drawPause(c);
     if (g.menuOpen) this.drawBigMenu(c, g);
+    if (g.fadeT > 0) { c.fillStyle = `rgba(0,0,0,${clamp(g.fadeT / WAR.fadeTime, 0, 1)})`; c.fillRect(0, 0, VIEW_W, VIEW_H); }
   }
 
   /** Trim a string with an ellipsis so it fits `w` pixels in the current font. */

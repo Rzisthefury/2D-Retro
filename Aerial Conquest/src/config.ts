@@ -418,6 +418,17 @@ const WAR = {
   wheelDeadZone: 22,         // touch radial: drag this far (logical px) to pick a slice
   orderBanner: 0.9,          // seconds the "ORDER: CHARGE" banner shows
 
+  // battles (Phase 4, PLAN 10)
+  houseHp: 600,              // village house HP at tier 1 (x tier HP scale): ~7 knight combos
+  routThreshold: 0.4,        // a leaderless side under this share of its starting strength flees
+  routCheckEvery: 0.5,       // seconds between rout checks
+  fadeTime: 0.6,             // battle entry fade
+  deathToResults: 1.6,       // seconds after the knight falls before the results screen
+  spoilGold: { field: 120, village: 90, test: 0 } as Record<string, number>,   // x tier, on a win
+  spoilGoldPerKill: 1,       // plus this per Dominion unit killed
+  spoilMats: [1, 3] as [number, number],   // common materials won (PLAN 12.3), x tier
+  exitPushTime: 0.35,        // seconds pushing into your own edge before you leave the field
+
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
   testFieldTier: 1,
@@ -475,6 +486,7 @@ const MENU_TABS = 4;  // gear · forge · talents · status
 const SYNTH_ROW_H = 20;  // the recipe list is long now, so its rows are tighter
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
+const CAMP_ROW = { x: 250, y0: 190, w: 460, h: 52, gap: 10 };   // the campaign stub's battle list
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
 
 /* ------------------------------------------------------ hero and blade */

@@ -60,6 +60,12 @@ const IS_TOUCH = (() => {
   } catch { return false; }
 })();
 
+/** Seconds -> m:ss. */
+function fmtTime(t: number): string {
+  const s = Math.max(0, Math.floor(t));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 type Action =
   | 'attack' | 'jump' | 'lock' | 'dash' | 'menu' | 'magic'
   | 'up' | 'down' | 'left' | 'right'

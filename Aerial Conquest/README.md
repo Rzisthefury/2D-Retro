@@ -22,11 +22,117 @@ No dependencies, no bundler, nothing to install.
 | `src/core.ts` | math, buffered input (keyboard, gamepad, touch), WebAudio SFX |
 | `src/items.ts` | materials, weapon/armour tiers, recipes |
 | `src/talents.ts` | Blade / Arcana / Survival talents, bought with skill points |
-| `src/army.ts` | the minion sim: typed-array slots, uniform grid, minion AI, arrows, `MinionRef` |
+| `src/army.ts` | the minion sim: typed-array slots, uniform grid, minion AI, arrows, `MinionRef`, reserves, orders, rout |
+| `src/battle.ts` | battles: spec, seeded layouts, `Structure`, objectives, scenery palettes, the stub's battle list |
 | `src/music.ts` | AF's adaptive score |
 | `src/entities.ts` | `Player`, `Enemy` (with boss AI), `Projectile`, `Pickup` |
 | `src/render.ts` | battlefield, characters, VFX, HUD, pause menu, title |
-| `src/main.ts` | `Game`: loop, screens (`title`, `battle`), test field, team-aware damage (`hostilesOf`), menus, save, debug panel |
+| `src/main.ts` | `Game`: loop, screens (`title`, `campaign` stub, `battle`), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
+
+# Phase 4: battle framework, Field battle, Village raid
+
+**What changed**
+
+- **New `src/battle.ts`** (PLAN 10.1):
+  - A `Battle` holds its spec (kind, node name, tier, territory scenery,
+    seed, both armies), a seeded layout, its structures, a timer, tallies
+    (kills by you, by your army, elites, troops lost, routed) and the spoils.
+  - `Structure` covers every kind the plan lists (gate, building, throne,
+    wagon, capture ring, cell), each with HP and a hit radius. Houses, gates
+    and wagons are solid: the knight, elites and minions are pushed out of
+    them, and every shot and arrow stops on them.
+  - Damage multipliers follow PLAN 10.1: the knight does ×1 to buildings
+    and ×0.3 to gates and thrones; Fire does ×2 to buildings; rams do ×4 to
+    gates and can't hurt thrones.
+- **Screens:** `title → campaign → battle`. The campaign screen is a **stub**
+  until the illustrated map in Phase 6: a list of Village raid (Millbrook),
+  Field battle (Dominion column) and the Test field. New Game and Continue
+  land on it, and every battle's results screen returns to it.
+- **Entering a battle:** a 0.6 s fade plus a banner with the node and its
+  objective. The knight starts at the left edge with the warband (12); the
+  Dominion holds the right edge, and units past the live cap wait in
+  reserve there.
+- **The two battle types (PLAN 10.2):**
+  - **Village raid** (2400×1400): 4 houses in the far half along a road,
+    with crops, fences and a well. Garrison: 40 minions + 2 Shades.
+    **Win:** burn every house (`WAR.houseHp` 600 × tier). Houses smoke, then
+    burn as they lose HP, and leave charred, glowing frames.
+  - **Field battle** (2800×1400): open coastal ground with rocks and
+    bushes. A Dominion column of 70 minions + 2 Shades, led by a
+    **commander** (a stronger bruiser). On the stub, a sent army of 26 joins
+    your warband. **Win:** rout or destroy the army.
+- **Rout:** checked every 0.5 s. A side whose leader is down (or has none)
+  and is under 40% of its starting strength flees: its units run for their
+  own edge and leave the field there (counted as routed, not killed), and
+  its reserve never comes on. On the player's side the knight is the
+  leader, so it never routes while you live.
+- **Losing and leaving:**
+  - If the knight falls, the results screen shows after 1.6 s, then you're
+    back at camp: warband lost, node unchanged.
+  - Pushing into your own (left) edge for 0.35 s withdraws, abandoning the
+    attack. A "◀ LEAVE" marker shows when you're near it.
+- **Results screen:** outcome, time, kills by you and by your army, elites
+  felled, Dominion routed, your troops lost, and spoils. A win pays gold
+  (`WAR.spoilGold` × tier + 1 per kill) and 1–3 common materials × tier. The
+  gold goes into a new `gold` save field, the treasury until Phase 7.
+- **Orders and structures:** under Charge (or Focus with no lock-on), a
+  minion with no enemy unit in sight goes for the nearest hostile
+  structure. Focus with no lock-on now points at the nearest structure,
+  per PLAN 11.4. Allied elites' swings and minions' strikes damage
+  structures by the same rules.
+- **Battle HUD:** the node name, timer and live/reserve counts top right;
+  the objective with a progress bar top centre.
+- **Scenery** (`SCENERY` in battle.ts): forest, coast and ruins palettes for
+  grass, tufts, dirt and trees. Phase 6 picks one per territory.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13, Phase 4
+suite 24/24:
+
+- **Done-when, village raid:**
+  - Won by burning all 4 houses (progress bar at 1, +132 gold). The gold
+    reached the saved file.
+  - Lost when the knight fell: the results screen, then back to the stub
+    with the knight on their feet.
+- **Done-when, field battle:**
+  - Won by rout: with the commander alive there was no rout even at 21/73
+    strength; once the commander fell, the army routed and the battle was won.
+  - Won by destroying the whole army.
+  - Lost when the knight fell.
+- **Done-when, exit edge:** walking left off the start withdrew from the
+  battle, with no spoils.
+- **Done-when, results screen:** shown on win, loss and withdrawal; Enter or
+  a tap returns to the stub.
+- **Structure rules:** the knight's slash did 20 to a house and 6 to a gate
+  (×0.3). Fire did 48 normally and 96 to a house. A ram's 10 became 40 on a
+  gate.
+- Houses are solid: walking north into one, the knight stopped at its wall.
+- Focus with no lock-on picked a structure. Under Charge, with the
+  garrison gone, the warband burned houses (2284 → 2078 HP in 9 s).
+- The village layout is identical each time the node is played (seeded).
+- 57 routed Dominion units ran off at their edge, counted as routed with
+  0 extra kills.
+- Phone: Start → map stub → tap Field battle → win → tap the results → back
+  to the map.
+
+**Bugs found and fixed:**
+- Minions told to attack a house never landed a hit. The 10-frame re-pick
+  found no enemy unit, dropped the house, and reset the 25-frame windup.
+  A re-pick that finds nothing now keeps a live structure target.
+- The results screen let the HUD and the last banner show through. The
+  HUD now returns early under it (PLAN 16: alpha bleed).
+
+**Regression runs:** Phase 0, 1 and 3 suites green; Phase 4 suite 24/24.
+The Phase 2 phone check (120 units, must stay above 55 fps) failed in 2 of
+3 runs, at 53.2–53.5 fps. Measured side by side, the Phase 3 and Phase 4
+builds are identical (desktop 2.2–2.6 ms frame work, phone 58–59 fps in
+both). This container is simply slower now than when Phase 2 was measured
+(1.13 ms then, about 1.9 ms now for both builds), so it isn't a code
+regression. Frame work stays far inside budget (p99 under 5 ms of the
+16.7 ms).
+
+**Assumed / not checked:** how long real play takes. The 2–4 minute bands
+are checked in Phase 5 (for all types) and tuned in Phase 14; these tests
+drive the outcomes directly.
 
 # Phase 3: warband, orders, streaming
 

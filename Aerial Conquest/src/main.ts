@@ -14,14 +14,15 @@ type SynthState = 'owned' | 'ready' | 'lack';
 interface SynthEntry { kind: 'w' | 'a'; id: string; name: string; recipe: Recipe; state: SynthState; }
 
 /**
- * title   — the front menu
- * battle  — a scrolling battlefield (Phase 0: the test field)
- * campaign and victory arrive in later phases.
+ * title     — the front menu
+ * campaign  — the campaign map (Phase 4: a stub menu of battles; the real map is Phase 6)
+ * battle    — a scrolling battlefield, ending in its results screen
+ * victory arrives in a later phase.
  */
-type GameScreen = 'title' | 'battle';
+type GameScreen = 'title' | 'campaign' | 'battle';
 
 interface SaveData {
-  skillPoints: number; upgrades: KnightUpgrades;
+  skillPoints: number; upgrades: KnightUpgrades; gold: number;
   inv: Inventory; weapons: string[]; armors: string[];
   weapon: string; armor: string; talents: TalentSet;
   potions: number; ethers: number;
@@ -34,7 +35,7 @@ const SAVE_KEY = 'aerial-conquest-slot1';
 
 function freshSave(): SaveData {
   return {
-    skillPoints: WAR.startSkillPoints, upgrades: freshUpgrades(),
+    skillPoints: WAR.startSkillPoints, upgrades: freshUpgrades(), gold: 0,
     inv: {}, weapons: ['w1'], armors: ['a1'],
     weapon: 'w1', armor: 'a1', talents: {},
     potions: 3, ethers: 2,
@@ -55,6 +56,7 @@ function loadSave(): SaveData {
         }
       }
       d.potions = Math.max(0, j.potions | 0);
+      d.gold = Math.max(0, j.gold | 0);
       d.ethers = Math.max(0, j.ethers | 0);
       if (j.inv && typeof j.inv === 'object') {
         for (const k of MAT_ORDER) d.inv[k] = Math.max(0, (j.inv[k] | 0) || 0);
@@ -84,6 +86,7 @@ function loadSave(): SaveData {
 /** Push a save blob onto a player instance. */
 function applySave(p: Player, d: SaveData) {
   p.skillPoints = d.skillPoints;
+  p.gold = d.gold;
   p.upgrades = { ...d.upgrades };
   p.inv = { ...d.inv };
   p.ownedWeapons = d.weapons.slice();
@@ -117,6 +120,11 @@ class Game {
   pickups: Pickup[] = [];
 
   army = new Army();
+  battle: Battle = new Battle(testSpec());
+  campIndex = 0;               // row picked on the campaign stub
+  fadeT = 0;                   // battle entry fade
+  private exitPushT = 0;       // how long the knight has pushed into their own edge
+  private routT = 0;
 
   // orders (PLAN 11.4)
   order: Order = 'follow';
@@ -288,11 +296,11 @@ class Game {
     switch (label) {
       case 'Continue':
       case 'Start':
-        this.enterBattle();
+        this.enterCampaign();
         break;
       case 'New Game':
         this.resetSave();
-        this.enterBattle();
+        this.enterCampaign();
         break;
       case 'Options':
         this.titleMode = 'options'; this.optionIndex = 0;
@@ -310,13 +318,183 @@ class Game {
     }
   }
 
-  /** Into the test battlefield (the campaign map replaces this in Phase 6). */
-  enterBattle() {
+  /* ------------------------------------------------------ campaign stub */
+
+  /** The campaign map stub (Phase 4): pick a battle. Phase 6 replaces it with the real map. */
+  enterCampaign() {
     this.titleMode = 'root';
-    this.screen = 'battle';
-    this.startTestField();
+    this.screen = 'campaign';
+    this.menuOpen = false;
+    this.paused = false;
+    this.input.suppressMove = false;
+    // whatever happened out there, the knight is back on their feet at camp
+    const keepHero = this.heroStyle, keepBlade = this.bladeStyle;
+    this.player = new Player();
+    applySave(this.player, loadSave());
+    this.heroStyle = keepHero; this.bladeStyle = keepBlade;
+    this.enemies.length = 0; this.projectiles.length = 0; this.pickups.length = 0; this.army.clear();
+    this.deathT = 0;
     this.input.clearBuffer();
   }
+
+  /** The battles on offer until the map exists. */
+  campaignRows(): { label: string; sub: string; spec: BattleSpec | null; act?: () => void }[] {
+    return [
+      { label: 'Village raid — Millbrook', sub: 'tier 1  ·  burn 4 houses  ·  ~2 min', spec: villageSpec() },
+      { label: 'Field battle — Dominion column', sub: 'tier 1  ·  rout or destroy the army  ·  2-3 min', spec: fieldSpec() },
+      { label: 'Test field', sub: 'endless groups, combat sandbox', spec: testSpec() },
+      { label: 'Back to title', sub: '', spec: null, act: () => { this.screen = 'title'; this.titleIndex = 0; } },
+    ];
+  }
+
+  private handleCampaign() {
+    const inp = this.input;
+    const rows = this.campaignRows();
+    const tap = inp.takeTap();
+    let activate = false;
+    if (tap) {
+      for (let i = 0; i < rows.length; i++) {
+        const ry = CAMP_ROW.y0 + i * (CAMP_ROW.h + CAMP_ROW.gap);
+        if (tap.x >= CAMP_ROW.x && tap.x <= CAMP_ROW.x + CAMP_ROW.w && tap.y >= ry && tap.y <= ry + CAMP_ROW.h) {
+          if (this.campIndex === i || IS_TOUCH) activate = true;
+          this.campIndex = i;
+        }
+      }
+    }
+    if (inp.wasPressed('down')) { this.campIndex = (this.campIndex + 1) % rows.length; this.sfx.guard(); }
+    if (inp.wasPressed('up')) { this.campIndex = (this.campIndex - 1 + rows.length) % rows.length; this.sfx.guard(); }
+    if (inp.wasPressed('cancel')) { this.screen = 'title'; return; }
+    if (activate || inp.wasPressed('confirm') || inp.wasPressed('attack')) {
+      const r = rows[this.campIndex];
+      this.sfx.cast(560);
+      if (r.spec) this.startBattle(r.spec); else if (r.act) r.act();
+    }
+  }
+
+  /* ------------------------------------------------------------- battles */
+
+  /**
+   * Lay out and populate a battle: field, structures, the knight at their
+   * edge with the warband, the Dominion at theirs (past the live cap: reserve).
+   */
+  startBattle(spec: BattleSpec) {
+    const p = this.player;
+    this.screen = 'battle';
+    this.battle = new Battle(spec);
+    const b = this.battle;
+    this.field = { x: 0, y: 0, w: b.w, h: b.h };
+    this.enemies.length = 0; this.projectiles.length = 0; this.pickups.length = 0;
+    this.army.clear();
+    this.army.streamTier = spec.tier;
+    p.lock = null;
+    this.order = 'follow';
+    this.wheelOpen = false; this.wheelTouch = false; this.input.suppressMove = false;
+    this.paused = false; this.menuOpen = false;
+    this.exitPushT = 0; this.routT = 0;
+    p.refreshStats(true);
+    p.potions = Math.max(p.potions, 3);
+    p.ethers = Math.max(p.ethers, 2);
+    this.input.clearBuffer();
+
+    if (spec.kind === 'test') {
+      this.startTestField();
+      this.fadeT = WAR.fadeTime;
+      return;
+    }
+
+    // the knight's edge is the left, the Dominion's the right
+    p.x = 110; p.y = b.h / 2; p.vx = p.vy = 0; p.z = 0; p.facing = 0;
+    this.army.setEdge('player', 40, b.h / 2, b.h * 0.3);
+    this.army.setEdge('enemy', b.w - 40, b.h / 2, b.h * 0.3);
+    this.spawnBlock(this.mixOf(this.warbandCap()), 'player', 190, b.h / 2, spec.tier);
+    const allies = unitList(spec.allies);
+    if (allies.length) this.spawnBlock(allies, 'player', 300, b.h / 2, spec.tier);
+
+    const foes = unitList(spec.foes);
+    if (spec.kind === 'village') {
+      // the garrison stands among the houses
+      const hx = b.structures.reduce((s, h) => s + h.x, 0) / Math.max(1, b.structures.length);
+      this.spawnBlock(foes, 'enemy', hx - 120, b.h / 2, spec.tier);
+    } else {
+      this.spawnBlock(foes, 'enemy', b.w * 0.7, b.h / 2, spec.tier);
+    }
+    const ex = spec.kind === 'village' ? b.w * 0.6 : b.w * 0.66;
+    spec.foeElites.forEach((id, k) => {
+      const e = new Enemy(ENEMIES[id], ex, b.h / 2 + (k - (spec.foeElites.length - 1) / 2) * 120, WAR.testFieldLevel, spec.tier);
+      this.enemies.push(e);
+    });
+    if (spec.commander) {
+      const c = new Enemy(ENEMIES[spec.commander], b.w * 0.74, b.h / 2, WAR.testFieldLevel + 2, spec.tier, 1.6);
+      c.leader = true;
+      this.enemies.push(c);
+      b.leader = c;
+    }
+    b.startFoes = this.foeStrength();
+    b.startAllies = this.army.live('player') + this.army.reserveCount('player');
+    this.waveIntro = Math.max(0, TUNING.waveIntro);
+    this.fadeT = WAR.fadeTime;
+    this.follow(true);
+    this.banner(spec.name.toUpperCase(), b.objective, '#ffd54a');
+  }
+
+  /** Dominion strength still in the fight: live units, reserve and elites. */
+  foeStrength(): number {
+    return this.army.live('enemy') + this.army.reserveCount('enemy')
+      + this.enemies.filter((e) => e.alive && e.team === 'enemy' && !e.fleeing).length;
+  }
+
+  /** Win / lose / rout / exit checks for a real battle (not the test field). */
+  private updateBattleState(dt: number) {
+    const b = this.battle, p = this.player;
+    if (b.result) return;
+    // walking off your own edge leaves the battle
+    const pushingOut = this.input.moveVector().x < -0.3 && p.x <= this.field.x + p.radius + 4;
+    this.exitPushT = pushingOut ? this.exitPushT + dt : 0;
+    if (this.exitPushT >= WAR.exitPushTime) { this.finishBattle('retreat'); return; }
+    // objectives
+    if (b.spec.kind === 'village') {
+      if (b.structures.filter((s) => s.kind === 'building').every((s) => !s.alive)) { this.finishBattle('win'); return; }
+    } else if (b.spec.kind === 'field') {
+      if (this.foeStrength() === 0) { this.finishBattle('win'); return; }
+    }
+    // rout (PLAN 10.1): leader down (or none) and under 40% strength -> the side flees
+    this.routT -= dt;
+    if (this.routT <= 0 && !b.routed) {
+      this.routT = WAR.routCheckEvery;
+      const leaderDown = !b.leader || !b.leader.alive;
+      if (leaderDown && b.startFoes > 0 && this.foeStrength() < b.startFoes * WAR.routThreshold) {
+        b.routed = 'enemy';
+        this.army.routSide('enemy');
+        for (const e of this.enemies) if (e.alive && e.team === 'enemy') e.fleeing = true;
+        this.banner('THE DOMINION ROUTS', b.spec.kind === 'field' ? 'the field is yours' : 'the garrison flees  ·  burn what is left', '#4fe08a');
+        this.sfx.wave();
+        if (b.spec.kind === 'field') { this.finishBattle('win'); return; }
+      }
+    }
+  }
+
+  /** Decide the battle: tally spoils on a win and show the results screen. */
+  finishBattle(result: BattleResult) {
+    const b = this.battle, p = this.player;
+    if (b.result) return;
+    b.result = result;
+    b.resultT = 0;
+    this.wheelOpen = false; this.input.suppressMove = false;
+    if (result === 'win') {
+      const kills = b.kills.byKnight + b.kills.byArmy + b.kills.elites;
+      b.spoils.gold = Math.round((WAR.spoilGold[b.spec.kind] || 0) * b.spec.tier + kills * WAR.spoilGoldPerKill);
+      const commons: MatId[] = ['shard', 'plate', 'sigil', 'ember'];
+      const n = rndInt(WAR.spoilMats[0], WAR.spoilMats[1]) * b.spec.tier;
+      for (let k = 0; k < n; k++) { const m = pick(commons); b.spoils.mats[m] = (b.spoils.mats[m] || 0) + 1; }
+      p.gold += b.spoils.gold;
+      for (const m of Object.keys(b.spoils.mats) as MatId[]) p.inv[m] = (p.inv[m] || 0) + (b.spoils.mats[m] || 0);
+      this.sfx.levelUp();
+      this.save();
+    } else {
+      this.sfx.die();
+    }
+  }
+
 
   /* ----------------------------------------------------------- main loop */
 
@@ -346,22 +524,37 @@ class Game {
   tick(dt: number) {
     this.input.pollPad();
     this.input.pollTouch();
-    this.input.uiMode = this.menuOpen || this.screen === 'title';
+    this.input.uiMode = this.menuOpen || this.screen === 'title' || this.screen === 'campaign' || !!this.battle.result;
 
     if (TUNING.musicVolume !== this.lastMusicVol) {
       this.lastMusicVol = TUNING.musicVolume;
       this.music.setVolume(TUNING.musicVolume);
     }
 
-    if (this.screen === 'title') {
+    if (this.screen === 'title' || this.screen === 'campaign') {
       this.time += dt;
       if (this.bannerT > 0) this.bannerT -= dt;
       this.updateVfx(dt);
       this.syncMusic();
-      this.handleTitle();
+      if (this.screen === 'title') this.handleTitle(); else this.handleCampaign();
       this.input.endTick();
       return;
     }
+
+    // the results screen: the field freezes; any confirm (or a tap) goes back to the map
+    if (this.battle.result) {
+      this.battle.resultT += dt;
+      this.time += dt;
+      this.updateVfx(dt);
+      this.syncMusic();
+      const tap = this.input.takeTap();
+      if (this.battle.resultT > 0.6 && (tap || this.input.wasPressed('confirm') || this.input.wasPressed('attack') || this.input.wasPressed('restart'))) {
+        this.enterCampaign();
+      }
+      this.input.endTick();
+      return;
+    }
+    if (this.fadeT > 0) this.fadeT -= dt;
 
     // Global toggles work even while paused or dead.
     if (this.input.wasPressed('pause') && this.player.alive) this.paused = !this.paused;
@@ -376,7 +569,7 @@ class Game {
     }
     this.syncMusic();
     if (this.menuOpen) { this.handleBigMenu(); this.input.endTick(); return; }
-    if (!this.player.alive && this.deathT > 0.9) {
+    if (!this.player.alive && this.deathT > 0.9 && this.battle.spec.kind === 'test') {
       const tapped = !!this.input.takeTap();
       if (this.input.wasPressed('restart') || tapped || this.input.wasPressed('confirm')) {
         this.recoverFromDeath(); this.input.endTick(); return;
@@ -405,6 +598,8 @@ class Game {
       for (const e of this.enemies) e.update(this, dt);
       this.army.update(this, dt);
       this.cull();
+      // in a real battle the fall ends it: retreat to camp, warband lost, node unchanged (PLAN 10.1)
+      if (this.battle.spec.kind !== 'test' && this.deathT > WAR.deathToResults) this.finishBattle('lose');
       this.input.endTick();
       return;
     }
@@ -437,7 +632,9 @@ class Game {
     for (const p of this.pickups) p.update(this, dt);
 
     this.cull();
-    this.updateTestField(dt);
+    for (const s of this.battle.structures) { if (s.flash > 0) s.flash -= dt; if (!s.alive) s.burnT += dt; }
+    if (this.battle.spec.kind === 'test') this.updateTestField(dt);
+    else { this.battle.time += dt; this.updateBattleState(dt); }
     this.follow(false);
     this.input.endTick();
   }
@@ -508,7 +705,7 @@ class Game {
 
   /**
    * What Focus points everyone at: your lock-on target if you have one,
-   * otherwise the hostile nearest the knight (structures join in Phase 4-5).
+   * otherwise the nearest hostile structure, otherwise the hostile nearest the knight.
    * Worked out once per frame.
    */
   focusTarget(): Combatant | null {
@@ -516,6 +713,7 @@ class Game {
     this.focusFrame = this.input.frame;
     const p = this.player;
     let best: Combatant | null = p.lock && p.lock.alive ? p.lock : null;
+    if (!best) best = this.battle.nearestStructure('player', p.x, p.y);   // PLAN 11.4: "or the nearest structure if none"
     if (!best) {
       let bd = Infinity;
       for (const e of this.enemies) {
@@ -594,6 +792,8 @@ class Game {
   /** A fresh test field: knight in place, full HP/MP, supplies topped up, first group out. */
   startTestField() {
     const p = this.player;
+    if (this.battle.spec.kind !== 'test') this.battle = new Battle(testSpec());
+    this.screen = 'battle';
     this.field = { x: 0, y: 0, w: WAR.testField.w, h: WAR.testField.h };
     this.enemies.length = 0;
     this.projectiles.length = 0;
@@ -645,7 +845,7 @@ class Game {
   warbandCap(): number { return WAR.warbandBase; }
 
   /** Spawn `kinds` as a block of ranks around (cx, cy); archers at the back. Past the live cap they go to reserve. */
-  private spawnBlock(kinds: UnitType[], side: Team, cx: number, cy: number) {
+  private spawnBlock(kinds: UnitType[], side: Team, cx: number, cy: number, tier = WAR.testFieldTier) {
     const f = this.field;
     const sorted = kinds.slice().sort((a, b) => (a === 'archer' ? 1 : 0) - (b === 'archer' ? 1 : 0));
     const perRank = 8, gap = 26, back = side === 'player' ? -1 : 1;
@@ -653,7 +853,7 @@ class Game {
       const rank = Math.floor(idx / perRank), file = idx % perRank;
       const x = clamp(cx + back * rank * gap + rnd(-4, 4), f.x + 30, f.x + f.w - 30);
       const y = clamp(cy + (file - (perRank - 1) / 2) * gap + rnd(-4, 4), f.y + 30, f.y + f.h - 30);
-      if (this.army.spawn(k, side, x, y, WAR.testFieldTier) < 0) this.army.addReserve(side, k);
+      if (this.army.spawn(k, side, x, y, tier) < 0) this.army.addReserve(side, k);
     });
   }
 
@@ -740,6 +940,41 @@ class Game {
     const f = this.field;
     o.x = clamp(o.x, f.x + o.radius, f.x + f.w - o.radius);
     o.y = clamp(o.y, f.y + o.radius, f.y + f.h - o.radius);
+    this.battle.collide(o);
+  }
+
+  /* ----------------------------------------------------------- structures */
+
+  /** The knight's swing (or Whirl tick) against hostile structures in its arc: x1 buildings, x0.3 gates and thrones. */
+  hitStructures(def: AttackDef, p: Player, hits: Set<Structure>) {
+    const reach = p.reach(def);
+    for (const s of this.battle.structures) {
+      if (!s.alive || s.team === 'player' || s.kind === 'captureRing' || hits.has(s)) continue;
+      if (!inArc(p.x, p.y, p.z, p.facing, reach, def.arc, s.x, s.y - s.h / 2, 0, s.radius * 0.8)) continue;
+      hits.add(s);
+      const edge = p.hasT('edge') ? 1.12 : 1;
+      const r = physDamage(def.power * TUNING.playerDamageMult * p.weapon.powerMult * edge, p.stats.str, 0);
+      const dmg = Math.max(1, Math.round(r.dmg * s.mult('knight')));
+      s.damage(this, dmg);
+      this.registerHit();
+      this.floatText(s.x + rnd(-20, 20), s.y - s.h * 0.5, 40, String(dmg), '#ffcf8a', 14);
+      this.burst(s.x + rnd(-s.w / 3, s.w / 3), s.y - s.h * 0.4, 30, 5, '#c89a5a');
+      this.shake(2 * TUNING.shakeScale);
+      if (this.minionSfxT <= 0) { this.sfx.hit(false); this.minionSfxT = 0.05; }
+    }
+  }
+
+  /** A structure fell: houses burn (PLAN 10.2). */
+  onStructureDestroyed(s: Structure) {
+    this.burst(s.x, s.y - s.h / 2, 40, 30, '#ff9d4a');
+    this.ring(s.x, s.y - s.h / 2, 0, 20, s.w, '#ff7a3d');
+    this.shake(8 * TUNING.shakeScale);
+    this.sfx.die();
+    if (s.kind === 'building') {
+      const hs = this.battle.structures.filter((x) => x.kind === 'building');
+      const burned = hs.filter((x) => !x.alive).length;
+      this.banner(`${s.label.toUpperCase()} BURNED`, `${burned} / ${hs.length}`, '#ff9d4a');
+    }
   }
 
   /** The space projectiles may fly in before they are discarded. */
@@ -852,6 +1087,12 @@ class Game {
       if (t instanceof Player) this.unitHitsKnight(e, mult, ang, 240, 22);
       else if (t instanceof Enemy) this.unitHitsUnit(e, t, mult, ang, 160);
     }
+    for (const st of this.battle.structures) {
+      if (!st.alive || st.team === e.team || st.kind === 'captureRing') continue;
+      if (!inArc(e.x, e.y, e.z, e.facing, reach, 1.0, st.x, st.y - st.h / 2, 0, st.radius * 0.8)) continue;
+      hit = true;
+      st.damage(this, Math.max(1, Math.round(physDamage(e.def.power * mult * (e.str / e.def.str), e.str, 0).dmg * st.mult('unit'))));
+    }
     // minions in the arc: an elite's swing mows through them
     const a = this.army, own = teamIndex(e.team);
     a.query(e.x, e.y, reach + 24, (j) => {
@@ -896,6 +1137,19 @@ class Game {
   }
 
   projectileCollide(proj: Projectile) {
+    // walls, houses and gates stop every shot; a hostile one takes the hit (Fire x2 on buildings)
+    for (const st of this.battle.structures) {
+      if (!st.solid || !st.contains(proj.x, proj.y, proj.radius)) continue;
+      proj.dead = true;
+      if (st.team !== proj.team) {
+        const base = proj.owner === 'player' ? magicDamage(proj.power, this.player.stats.mag, 0).dmg : magicDamage(proj.power, proj.mag, 0).dmg;
+        const dmg = Math.max(1, Math.round(base * st.mult(proj.isFire ? 'fire' : 'unit')));
+        st.damage(this, dmg);
+        if (proj.owner === 'player') { this.registerHit(); this.floatText(proj.x, st.y - st.h / 2, 40, String(dmg), proj.color, 15); }
+      }
+      this.burst(proj.x, proj.y, proj.z, 8, proj.color);
+      return;
+    }
     if (proj.owner === 'player') {
       // the knight's spells: Dominion units only
       for (const e of this.enemies) {
@@ -964,6 +1218,11 @@ class Game {
     const d = a.def(i);
     const ang = Math.atan2(t.y - a.y[i], t.x - a.x[i]);
     const power = a.atk[i];
+    if (t instanceof Structure) {
+      if (!t.alive || t.team === teamName(a.team[i])) return;
+      t.damage(this, Math.max(1, Math.round(power * t.mult(d.id === 'ram' ? 'ram' : 'unit'))));
+      return;
+    }
     if (t instanceof MinionRef) {
       if (!t.alive) return;
       const mult = a.def(t.i).beast && d.vsBeast ? d.vsBeast : 1;
@@ -984,6 +1243,11 @@ class Game {
   /** An arrow at slot k: hits the first hostile it touches. Returns true if it is spent. */
   arrowHit(a: Army, k: number): boolean {
     const x = a.ax[k], y = a.ay[k], side = teamName(a.ateam[k]);
+    for (const st of this.battle.structures) {
+      if (!st.solid || !st.contains(x, y)) continue;
+      if (st.team !== side) st.damage(this, Math.max(1, Math.round(a.admg[k] * st.mult('unit'))));
+      return true;
+    }
     const p = this.player;
     if (side === 'enemy' && p.alive && p.z < 40 && dist(x, y, p.x, p.y) < p.radius + 4) {
       if (this.god) return false;
@@ -1045,6 +1309,9 @@ class Game {
 
   /** A minion died. A knight kill adds a hitstop frame, capped per sim frame (PLAN 11.1). */
   onMinionDeath(a: Army, i: number, byKnight: boolean) {
+    const b = this.battle;
+    if (a.team[i] === TEAM_ENEMY) { if (byKnight) b.kills.byKnight++; else b.kills.byArmy++; }
+    else b.losses.troops++;
     const col = a.team[i] === TEAM_PLAYER ? PAL.ally : PAL.dominion;
     this.burst(a.x[i], a.y[i], 12, 6, col);
     if (byKnight && this.minionStop < WAR.minionHitstopCap) {
@@ -1112,7 +1379,7 @@ class Game {
     }
 
     const sp = s.kind === 'pierce' ? 620 : 400;
-    this.projectiles.push(new Projectile({
+    const shot = new Projectile({
       x: p.x + Math.cos(ang) * 20, y: p.y + Math.sin(ang) * 20, z: p.z + 22,
       vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
       radius: s.kind === 'pierce' ? 5 : 8,
@@ -1121,7 +1388,9 @@ class Game {
       homing: s.kind === 'projectile' ? 5 : 0,
       target,
       slowOnHit: s.kind === 'pierce',
-    }));
+    });
+    shot.isFire = s.id === 'fire';
+    this.projectiles.push(shot);
   }
 
   nearestEnemy(x: number, y: number, maxD: number): Enemy | null {
@@ -1319,6 +1588,7 @@ class Game {
 
   /** No EXP and no field drops in v2: spoils are paid on the results screen (Phase 4+). */
   onEnemyDeath(e: Enemy) {
+    if (e.team === 'enemy') this.battle.kills.elites++; else this.battle.losses.elites++;
     this.sfx.die();
     this.burst(e.x, e.y, e.z + e.def.height * 0.5, 22, e.def.accent);
     this.ring(e.x, e.y, e.z, 8, 70, e.def.accent);
@@ -1334,7 +1604,7 @@ class Game {
     this.save();
   }
 
-  /** Back on your feet: the test field starts over. (Phase 4: back to the map, warband lost.) */
+  /** Test field only: back on your feet and the field starts over. (Real battles end in the results screen.) */
   recoverFromDeath() {
     this.player = new Player();
     applySave(this.player, loadSave());
@@ -1404,7 +1674,7 @@ class Game {
   save() {
     const p = this.player;
     writeSave({
-      skillPoints: p.skillPoints, upgrades: p.upgrades,
+      skillPoints: p.skillPoints, upgrades: p.upgrades, gold: p.gold,
       inv: p.inv, weapons: p.ownedWeapons, armors: p.ownedArmors,
       weapon: p.weapon.id, armor: p.armor.id, talents: p.talents,
       potions: p.potions, ethers: p.ethers,
@@ -1582,7 +1852,7 @@ function buildDebugPanel(g: Game) {
           g.toast('+10 SP'); g.save();
           break;
         case 'god': g.god = !g.god; btn.textContent = `God mode: ${g.god ? 'on' : 'off'}`; break;
-        case 'reset': g.resetSave(); if (g.screen !== 'title') g.enterBattle(); break;
+        case 'reset': g.resetSave(); if (g.screen !== 'title') g.enterCampaign(); break;
         case 'defaults':
           for (const k of Object.keys(defaults)) (TUNING as any)[k] = defaults[k];
           panel.querySelectorAll<HTMLInputElement>('input[type=range]').forEach((el) => {

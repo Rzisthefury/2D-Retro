@@ -62,6 +62,7 @@ class Player {
   attackFrame = 0;
   attackHits = new Set<Enemy>();
   minionHits = new Set<number>();   // minion uids already hit by this swing / Whirl tick
+  structHits = new Set<Structure>(); // structures already hit by this swing / Whirl tick
   comboIndex = 0;
   comboAir = false;
   comboTimer = 0;
@@ -95,6 +96,7 @@ class Player {
   // progression: gold upgrades and skill points (PLAN 12.1-12.2)
   upgrades: KnightUpgrades = freshUpgrades();
   skillPoints = WAR.startSkillPoints;   // SP earned so far; spent = apSpent(talents)
+  gold = 0;                             // battle spoils (the real treasury arrives in Phase 7)
 
   // resources
   stats: Stats = statsForKnight(this.upgrades);
@@ -351,7 +353,7 @@ class Player {
     this.attackDef = def;
     this.attackPhase = 'startup';
     this.attackFrame = 0;
-    { this.attackHits.clear(); this.minionHits.clear(); }
+    { this.attackHits.clear(); this.minionHits.clear(); this.structHits.clear(); }
     this.swingT = def.startup + def.active;
 
     if (def.radial) {
@@ -431,7 +433,7 @@ class Player {
       if (def.radial) {
         const into = this.attackFrame - def.startup;
         const per = Math.max(1, Math.floor(def.active / Math.max(1, def.ticks)));
-        if ((into - 1) % per === 0) { this.attackHits.clear(); this.minionHits.clear(); }
+        if ((into - 1) % per === 0) { this.attackHits.clear(); this.minionHits.clear(); this.structHits.clear(); }
         this.facing += def.spinRate;
         if (def.pull) {
           for (const e of g.enemies) {
@@ -494,6 +496,7 @@ class Player {
       g.hitEnemy(e, def, this);
     }
     g.hitMinions(def, this, this.minionHits);
+    g.hitStructures(def, this, this.structHits);
   }
 
   /* --------------------------------------------------------------- magic */
@@ -607,7 +610,7 @@ type EState = 'spawn' | 'idle' | 'chase' | 'reposition' | 'telegraph' | 'attack'
 type Team = 'player' | 'enemy';
 
 /** Anything a unit can fight: the knight, an Enemy entity (elite), or a minion. */
-type Combatant = Player | Enemy | MinionRef;
+type Combatant = Player | Enemy | MinionRef | Structure;
 
 class Enemy {
   def: EnemyDef;
@@ -644,6 +647,8 @@ class Enemy {
   // teams (PLAN 9.2 / 11.1): allies are Enemy entities with team 'player'
   team: Team = 'enemy';
   target: Combatant | null = null;   // the hostile this unit is fighting
+  leader = false;                    // the Dominion side's commander: while alive, the side cannot rout
+  fleeing = false;                   // routed: runs for its own edge and leaves the field
   private retargetT = 0;
 
   // an un-aggro'd enemy idles near home until you come close (garrisons later)
@@ -719,6 +724,17 @@ class Enemy {
     if (--this.retargetT <= 0 || !this.target || !this.target.alive) {
       this.pickTarget(g);
       this.retargetT = WAR.retargetFrames;
+    }
+
+    if (this.fleeing) {
+      // routed: run for the side's edge, gone once there
+      const ex = this.team === 'enemy' ? g.field.x + g.field.w : g.field.x;
+      this.state = 'chase';
+      this.moveToward(ex, this.y, dt, 1.4);
+      this.facing = angleLerp(this.facing, Math.atan2(this.vy, this.vx), clamp(8 * dt, 0, 1));
+      this.physics(g, dt);
+      if (Math.abs(this.x - ex) < this.radius + 6) { this.state = 'dead'; this.deathT = 1; this.hp = 0; }
+      return;
     }
 
     if (!this.aggro) { this.idle(g, dt); this.physics(g, dt); return; }
@@ -1225,6 +1241,7 @@ class Projectile {
   hits = new Set<Enemy>();
   minionHits = new Set<number>();
   slowOnHit = false;
+  isFire = false;     // the Fire spell: x2 against buildings
   mag = 8;            // caster strength behind an enemy bolt
   trail = 0;
   dead = false;
