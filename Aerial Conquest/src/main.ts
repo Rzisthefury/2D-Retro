@@ -15,11 +15,12 @@ interface SynthEntry { kind: 'w' | 'a'; id: string; name: string; recipe: Recipe
 
 /**
  * title     — the front menu
- * campaign  — the campaign map (Phase 4: a stub menu of battles; the real map is Phase 6)
+ * campaign  — the campaign map (Phase 6)
+ * sandbox   — debug: one battle of each type and the test field (the Phase 4-5 stub)
  * battle    — a scrolling battlefield, ending in its results screen
  * victory arrives in a later phase.
  */
-type GameScreen = 'title' | 'campaign' | 'battle';
+type GameScreen = 'title' | 'campaign' | 'battle' | 'sandbox';
 
 interface SaveData {
   skillPoints: number; upgrades: KnightUpgrades; gold: number;
@@ -27,6 +28,7 @@ interface SaveData {
   weapon: string; armor: string; talents: TalentSet;
   potions: number; ethers: number;
   hero: HeroStyle; blade: BladeStyle;
+  war: number[][] | null;            // node owners and levels (Campaign.save); null = a fresh war
 }
 
 // Phase 12 adds the slot picker (slot1..3); until then everything lives in slot 1.
@@ -40,6 +42,7 @@ function freshSave(): SaveData {
     weapon: 'w1', armor: 'a1', talents: {},
     potions: 3, ethers: 2,
     hero: 'wayfarer', blade: 'longsword',
+    war: null,
   };
 }
 
@@ -78,6 +81,7 @@ function loadSave(): SaveData {
       d.skillPoints = Math.max(d.skillPoints, apSpent(d.talents));
       if (HERO_STYLES.some((h) => h.id === j.hero)) d.hero = j.hero;
       if (BLADE_STYLES.some((b) => b.id === j.blade)) d.blade = j.blade;
+      if (Array.isArray(j.war)) d.war = j.war;   // Campaign.load validates it against the continent
     }
   } catch { /* private mode, blocked storage — play on regardless */ }
   return d;
@@ -318,16 +322,22 @@ class Game {
     }
   }
 
-  /* ------------------------------------------------------ campaign stub */
+  /* --------------------------------------------------------- campaign map */
 
-  /** The campaign map stub (Phase 4): pick a battle. Phase 6 replaces it with the real map. */
-  enterCampaign() {
+  camp = new Campaign();
+  /** Where the map is looking (map units, the view's centre) and how close (0 whole continent .. 1 close-up). */
+  mapX = CONTINENT.w / 2; mapY = CONTINENT.h / 2;
+  mapZoom = 0; mapZoomTo = 0;
+  mapSel = -1;                  // selected node, or -1
+  /** Where the last battle was started from: the map, or the debug battle list. */
+  battleFrom: 'map' | 'sandbox' = 'map';
+
+  /** Back to camp after anything: the knight on their feet, inventory from the save. */
+  private freshCamp() {
     this.titleMode = 'root';
-    this.screen = 'campaign';
     this.menuOpen = false;
     this.paused = false;
     this.input.suppressMove = false;
-    // whatever happened out there, the knight is back on their feet at camp
     const keepHero = this.heroStyle, keepBlade = this.bladeStyle;
     this.player = new Player();
     applySave(this.player, loadSave());
@@ -335,7 +345,169 @@ class Game {
     this.enemies.length = 0; this.projectiles.length = 0; this.pickups.length = 0; this.army.clear();
     this.deathT = 0;
     this.input.clearBuffer();
+    this.input.takeClick(); this.input.takePan(); this.input.takeZoom();
   }
+
+  /** The campaign map (PLAN 7.1). */
+  enterCampaign() {
+    this.freshCamp();
+    this.screen = 'campaign';
+    this.battleFrom = 'map';
+    this.camp.load(loadSave().war);
+  }
+
+  /** Debug: the Phase 4-5 list of one battle of each type (and the test field), from the tuning panel. */
+  enterSandbox() {
+    this.freshCamp();
+    this.screen = 'sandbox';
+    this.battleFrom = 'sandbox';
+  }
+
+  /** Screen px per map unit at zoom z (0 = the whole continent fits, 1 = close-up). */
+  mapScale(z = this.mapZoom): number {
+    const fit = Math.min(VIEW_W / CONTINENT.w, VIEW_H / CONTINENT.h);
+    return lerp(fit, WAR.mapZoomNear, z);
+  }
+  mapToScreen(x: number, y: number): { x: number; y: number } {
+    const s = this.mapScale();
+    return { x: (x - this.mapX) * s + VIEW_W / 2, y: (y - this.mapY) * s + VIEW_H / 2 };
+  }
+  screenToMap(x: number, y: number): { x: number; y: number } {
+    const s = this.mapScale();
+    return { x: (x - VIEW_W / 2) / s + this.mapX, y: (y - VIEW_H / 2) / s + this.mapY };
+  }
+  /** Keep the view on the continent (centred on it when it all fits). */
+  private clampMap() {
+    const s = this.mapScale(), hw = VIEW_W / 2 / s, hh = VIEW_H / 2 / s;
+    this.mapX = CONTINENT.w <= hw * 2 ? CONTINENT.w / 2 : clamp(this.mapX, hw, CONTINENT.w - hw);
+    this.mapY = CONTINENT.h <= hh * 2 ? CONTINENT.h / 2 : clamp(this.mapY, hh, CONTINENT.h - hh);
+  }
+
+  /** The node under a screen point (within the tap radius), or -1. */
+  nodeAt(x: number, y: number): number {
+    let best = -1, bd = WAR.mapNodeTap * WAR.mapNodeTap;
+    for (const n of this.camp.nodes) {
+      const p = this.mapToScreen(n.x, n.y), d = (p.x - x) ** 2 + (p.y - y) ** 2;
+      if (d < bd) { bd = d; best = n.id; }
+    }
+    return best;
+  }
+
+  /** The node panel's buttons for the selection (shared by drawing and hit-testing). */
+  mapButtons(): { label: string; enabled: boolean; act: () => void }[] {
+    if (this.mapSel < 0) return [];
+    const n = this.camp.nodes[this.mapSel];
+    const out: { label: string; enabled: boolean; act: () => void }[] = [];
+    if (n.owner === 'enemy') out.push({ label: 'Attack', enabled: this.camp.canAttack(n), act: () => this.attackNode(n) });
+    out.push({ label: 'Close', enabled: true, act: () => { this.mapSel = -1; } });
+    return out;
+  }
+  /** Top-left of panel button i of n. */
+  mapButtonAt(i: number, n: number): { x: number; y: number } {
+    return { x: MAP_PANEL.x + MAP_PANEL.pad, y: MAP_PANEL.y + MAP_PANEL.h - MAP_PANEL.pad - (n - i) * (MAP_BTN.h + MAP_BTN.gap) + MAP_BTN.gap };
+  }
+
+  /** Attack a node: its battle, with your warband (PLAN 7.1). */
+  attackNode(n: MapNode) {
+    if (!this.camp.canAttack(n)) return;
+    this.sfx.cast(560);
+    this.battleFrom = 'map';
+    this.startBattle(this.camp.battleSpec(n));
+  }
+
+  /** Select a node (or none) and bring it into view. */
+  private selectNode(id: number) {
+    this.mapSel = id;
+    if (id < 0) return;
+    this.sfx.guard();
+    const n = this.camp.nodes[id], p = this.mapToScreen(n.x, n.y);
+    // keep it clear of the panel and the edges
+    const s = this.mapScale();
+    if (p.x > MAP_PANEL.x - 30) this.mapX += (p.x - (MAP_PANEL.x - 160)) / s;
+    if (p.x < 60) this.mapX -= (60 - p.x) / s;
+    if (p.y < 80) this.mapY -= (80 - p.y) / s;
+    if (p.y > VIEW_H - 50) this.mapY += (p.y - (VIEW_H - 50)) / s;
+  }
+
+  /** Arrow keys / d-pad: the nearest node roughly that way from the selection. */
+  private stepSelection(dx: number, dy: number) {
+    const ns = this.camp.nodes;
+    if (this.mapSel < 0) {
+      // start from the node nearest the middle of the view
+      const c = this.screenToMap(VIEW_W / 2, VIEW_H / 2);
+      let best = 0, bd = Infinity;
+      for (const n of ns) { const d = dist(n.x, n.y, c.x, c.y); if (d < bd) { bd = d; best = n.id; } }
+      this.selectNode(best); return;
+    }
+    const from = ns[this.mapSel];
+    let best = -1, bs = Infinity;
+    for (const n of ns) {
+      if (n === from) continue;
+      const vx = n.x - from.x, vy = n.y - from.y, d = Math.hypot(vx, vy);
+      const along = (vx * dx + vy * dy) / d;
+      if (along < 0.5) continue;                       // within 60 degrees of the direction
+      const score = d * (2 - along);
+      if (score < bs) { bs = score; best = n.id; }
+    }
+    if (best >= 0) this.selectNode(best);
+  }
+
+  private handleMap(dt: number) {
+    const inp = this.input;
+    // zoom: wheel, pinch, Z / L / LT
+    const z = inp.takeZoom();
+    if (z > 0) this.mapZoomTo = 1; else if (z < 0) this.mapZoomTo = 0;
+    if (inp.wasPressed('zoom') || inp.wasPressed('lock')) this.mapZoomTo = this.mapZoomTo > 0.5 ? 0 : 1;
+    const before = this.mapZoom;
+    this.mapZoom += clamp(this.mapZoomTo - this.mapZoom, -dt / WAR.mapZoomTime, dt / WAR.mapZoomTime);
+    if (before !== this.mapZoom && this.mapSel >= 0) {
+      // zoom about the selection
+      const n = this.camp.nodes[this.mapSel];
+      this.mapX = lerp(this.mapX, n.x, 0.25); this.mapY = lerp(this.mapY, n.y, 0.25);
+    }
+    // pan: drag, stick or WASD
+    const s = this.mapScale();
+    const pan = inp.takePan();
+    this.mapX -= pan.x / s; this.mapY -= pan.y / s;
+    const mv = inp.moveVector();
+    this.mapX += mv.x * WAR.mapPanSpeed * dt * (WAR.mapZoomNear / s) * 0.6;
+    this.mapY += mv.y * WAR.mapPanSpeed * dt * (WAR.mapZoomNear / s) * 0.6;
+    this.clampMap();
+
+    // clicks: panel buttons, then nodes, then empty ground (closes the panel)
+    const click = inp.takeClick();
+    inp.takeTap();
+    if (click) {
+      const btns = this.mapButtons();
+      let used = false;
+      for (let i = 0; i < btns.length; i++) {
+        const b = this.mapButtonAt(i, btns.length);
+        if (click.x >= b.x && click.x <= b.x + MAP_BTN.w && click.y >= b.y && click.y <= b.y + MAP_BTN.h) {
+          used = true;
+          if (btns[i].enabled) btns[i].act(); else { this.sfx.guard(); this.toast(this.mapSel >= 0 ? 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST' : ''); }
+        }
+      }
+      const inPanel = this.mapSel >= 0 && click.x >= MAP_PANEL.x && click.y >= MAP_PANEL.y && click.y <= MAP_PANEL.y + MAP_PANEL.h;
+      if (!used && !inPanel) this.selectNode(this.nodeAt(click.x, click.y));
+      if (this.screen !== 'campaign') return;
+    }
+    if (inp.wasPressed('up')) this.stepSelection(0, -1);
+    if (inp.wasPressed('down')) this.stepSelection(0, 1);
+    if (inp.wasPressed('left')) this.stepSelection(-1, 0);
+    if (inp.wasPressed('right')) this.stepSelection(1, 0);
+    if ((inp.wasPressed('confirm') || inp.wasPressed('attack') || inp.wasPressed('jump')) && this.mapSel >= 0) {
+      const n = this.camp.nodes[this.mapSel];
+      if (n.owner === 'enemy' && this.camp.canAttack(n)) this.attackNode(n);
+      else { this.sfx.guard(); this.toast(n.owner === 'player' ? 'YOURS' : 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST'); }
+      return;
+    }
+    if (inp.wasPressed('cancel')) {
+      if (this.mapSel >= 0) this.mapSel = -1;
+      else { this.screen = 'title'; this.titleIndex = 0; }
+    }
+  }
+
+  /* ------------------------------------------- debug battle list (Phase 4-5) */
 
   /** The battles on offer until the map exists: one of each type. */
   campaignRows(): { label: string; sub: string; spec: BattleSpec | null; act?: () => void }[] {
@@ -359,7 +531,7 @@ class Game {
     return { x: CAMP_ROW.x + col * (CAMP_ROW.w + CAMP_ROW.colGap), y: CAMP_ROW.y0 + r * (CAMP_ROW.h + CAMP_ROW.gap) };
   }
 
-  private handleCampaign() {
+  private handleSandbox() {
     const inp = this.input;
     const rows = this.campaignRows();
     const tap = inp.takeTap();
@@ -681,6 +853,12 @@ class Game {
       b.spoils.gold = Math.round((WAR.spoilGold[b.spec.kind] || 0) * b.spec.tier + kills * WAR.spoilGoldPerKill);
       if (b.spec.kind === 'convoy') { b.spoils.gold += b.cargo; b.notes = [`cargo taken: ${b.cargo} gold`]; }
       if (b.spec.kind === 'rescue') b.notes.push(`${b.spec.generalName || 'The general'} rescued (loyalty +25 with Phase 10)`);
+      if (b.spec.nodeId !== undefined && this.battleFrom === 'map') {
+        // PLAN 5.3: the node is yours, a level down from the fighting
+        const n = this.camp.nodes[b.spec.nodeId];
+        this.camp.capture(n);
+        b.notes.push(n.type === 'castle' ? `${this.camp.territories[n.territory].name} is yours` : `${n.name} is yours (level ${n.level})`);
+      }
       const commons: MatId[] = ['shard', 'plate', 'sigil', 'ember'];
       const n = rndInt(WAR.spoilMats[0], WAR.spoilMats[1]) * b.spec.tier;
       for (let k = 0; k < n; k++) { const m = pick(commons); b.spoils.mats[m] = (b.spoils.mats[m] || 0) + 1; }
@@ -834,19 +1012,22 @@ class Game {
   tick(dt: number) {
     this.input.pollPad();
     this.input.pollTouch();
-    this.input.uiMode = this.menuOpen || this.screen === 'title' || this.screen === 'campaign' || !!this.battle.result;
+    this.input.uiMode = this.menuOpen || this.screen !== 'battle' || !!this.battle.result;
 
     if (TUNING.musicVolume !== this.lastMusicVol) {
       this.lastMusicVol = TUNING.musicVolume;
       this.music.setVolume(TUNING.musicVolume);
     }
 
-    if (this.screen === 'title' || this.screen === 'campaign') {
+    if (this.screen !== 'battle') {
       this.time += dt;
       if (this.bannerT > 0) this.bannerT -= dt;
+      if (this.toastT > 0) this.toastT -= dt;
       this.updateVfx(dt);
       this.syncMusic();
-      if (this.screen === 'title') this.handleTitle(); else this.handleCampaign();
+      if (this.screen === 'title') this.handleTitle();
+      else if (this.screen === 'sandbox') this.handleSandbox();
+      else this.handleMap(dt);
       this.input.endTick();
       return;
     }
@@ -859,7 +1040,20 @@ class Game {
       this.syncMusic();
       const tap = this.input.takeTap();
       if (this.battle.resultT > 0.6 && (tap || this.input.wasPressed('confirm') || this.input.wasPressed('attack') || this.input.wasPressed('restart'))) {
-        this.enterCampaign();
+        const b = this.battle;
+        if (this.battleFrom === 'sandbox') this.enterSandbox();
+        else {
+          this.enterCampaign();
+          if (b.spec.nodeId !== undefined) {
+            // back on the map, looking at the node that was fought over
+            const n = this.camp.nodes[b.spec.nodeId];
+            this.mapSel = n.id; this.mapX = n.x; this.mapY = n.y; this.clampMap();
+            if (b.result === 'win') {
+              const t = this.camp.territories[n.territory];
+              this.banner(`${n.name.toUpperCase()} TAKEN`, n.type === 'castle' ? `${t.name} is yours` : 'the frontier moves', '#4fe08a');
+            }
+          }
+        }
       }
       this.input.endTick();
       return;
@@ -2007,11 +2201,14 @@ class Game {
       weapon: p.weapon.id, armor: p.armor.id, talents: p.talents,
       potions: p.potions, ethers: p.ethers,
       hero: this.heroStyle, blade: this.bladeStyle,
+      war: this.camp.save(),
     });
   }
 
   resetSave() {
     writeSave(freshSave());
+    this.camp.reset();
+    this.mapSel = -1; this.mapZoom = this.mapZoomTo = 0;
     this.enemies.length = 0;
     this.player = new Player();
     applySave(this.player, loadSave());
@@ -2123,6 +2320,7 @@ function buildDebugPanel(g: Game) {
     + '<button data-act="upgrade">+1 rank all upgrades</button>'
     + '<button data-act="kill">Clear enemies</button>'
     + '<button data-act="mass">100 v 100 minions</button>'
+    + '<button data-act="sandbox">Battle list (one of each)</button>'
     + '<button data-act="mats">+50 all materials</button>'
     + '<button data-act="sp">+10 SP</button>'
     + '<button data-act="god">God mode: off</button>'
@@ -2171,6 +2369,7 @@ function buildDebugPanel(g: Game) {
           for (const e of g.enemies) if (e.alive && e.team === 'enemy') e.applyDamage(g, 999999, 0, 0, 0, 0);
           for (let i = 0; i < g.army.cap; i++) if (g.army.alive[i] && g.army.team[i] === TEAM_ENEMY) g.army.hurt(g, i, 999999, 0, 0, false);
           break;
+        case 'sandbox': g.enterSandbox(); break;
         case 'mass': if (g.screen === 'battle') g.massTest(100); else g.toast('START A BATTLE FIRST'); break;
         case 'mats':
           for (const m of MAT_ORDER) g.player.inv[m] = (g.player.inv[m] || 0) + 50;

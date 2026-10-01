@@ -452,6 +452,28 @@ const WAR = {
   lordStats: { hp: 640, attack: 15, defense: 10 },     // castle Lord
   commanderMult: 1.6,        // field / defense commander
 
+  // the campaign map (Phase 6, PLAN 4 / 5 / 7)
+  startTerritory: 0,         // the Last Camp
+  capitalTerritory: 11,      // the warlord's seat
+  castleStartLevel: [1, 2, 2, 3, 3],   // Dominion castle level by territory tier 1-5
+  nodeStartLevel: [1, 1, 2, 2, 3],     // ...keeps and villages (outposts don't level)
+  villageGarrison: 30,       // village defenders at level 1 (*default*)...
+  villageGarrisonPerLevel: 10,         // ...+ this per level above 1
+  outpostGarrison: 50,       // (*default*)
+  keepGarrison: 50,          // keep defenders before its level bonus (*default*)...
+  keepDefenders: [0, 10, 20],          // ...+ PLAN 5.2's L1/L2/L3 bonus
+  castleGarrison: [40, 80, 140],       // PLAN 5.2 garrison cap by castle level
+  keepGarrisonBonus: 0.5,    // the castle's +50% while the Dominion holds the keep
+  thinPerNode: 0.15,         // garrison thinning per village/outpost you hold in the territory...
+  thinMax: 0.6,              // ...up to this
+  castleGateLevel: [1, 1.5, 2.2],      // castle gate HP x by level (PLAN 5.2)
+  mapCoastSteps: 16, mapCoastWiggle: 46,     // how drawn the coast looks: points per edge, wiggle (map units)
+  mapBorderSteps: 9, mapBorderWiggle: 22,    // ...and the inland borders
+  mapZoomNear: 0.95,         // close-up zoom (screen px per map unit); "whole continent" fits the view
+  mapPanSpeed: 900,          // map units / s from the stick or WASD at close-up zoom
+  mapZoomTime: 0.25,         // seconds to glide between the two zooms
+  mapNodeTap: 26,            // tap radius around a node (screen px)
+
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
   testFieldTier: 1,
@@ -509,6 +531,11 @@ const MENU_TABS = 4;  // gear · forge · talents · status
 const SYNTH_ROW_H = 20;  // the recipe list is long now, so its rows are tighter
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
+/** The campaign map's node panel and its buttons (render and hit-testing share these). */
+const MAP_PANEL = { x: 640, y: 62, w: 306, h: 412, pad: 14 };
+const MAP_BTN = { w: 278, h: 46, gap: 8 };
+const MAP_BAR = { h: 44 };             // the top bar: treasury, warband, skill points, territories
+
 const CAMP_ROW = { x: 70, y0: 170, w: 400, h: 50, gap: 8, colGap: 20, perCol: 5 };   // the campaign stub's battle list: two columns
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
 

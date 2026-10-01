@@ -496,6 +496,27 @@ const WAR = {
     captainStats: { hp: 2000, attack: 14, defense: 8 }, // keep Captain (boss data, tier 1; scaled like AF bosses)
     lordStats: { hp: 640, attack: 15, defense: 10 }, // castle Lord
     commanderMult: 1.6, // field / defense commander
+    // the campaign map (Phase 6, PLAN 4 / 5 / 7)
+    startTerritory: 0, // the Last Camp
+    capitalTerritory: 11, // the warlord's seat
+    castleStartLevel: [1, 2, 2, 3, 3], // Dominion castle level by territory tier 1-5
+    nodeStartLevel: [1, 1, 2, 2, 3], // ...keeps and villages (outposts don't level)
+    villageGarrison: 30, // village defenders at level 1 (*default*)...
+    villageGarrisonPerLevel: 10, // ...+ this per level above 1
+    outpostGarrison: 50, // (*default*)
+    keepGarrison: 50, // keep defenders before its level bonus (*default*)...
+    keepDefenders: [0, 10, 20], // ...+ PLAN 5.2's L1/L2/L3 bonus
+    castleGarrison: [40, 80, 140], // PLAN 5.2 garrison cap by castle level
+    keepGarrisonBonus: 0.5, // the castle's +50% while the Dominion holds the keep
+    thinPerNode: 0.15, // garrison thinning per village/outpost you hold in the territory...
+    thinMax: 0.6, // ...up to this
+    castleGateLevel: [1, 1.5, 2.2], // castle gate HP x by level (PLAN 5.2)
+    mapCoastSteps: 16, mapCoastWiggle: 46, // how drawn the coast looks: points per edge, wiggle (map units)
+    mapBorderSteps: 9, mapBorderWiggle: 22, // ...and the inland borders
+    mapZoomNear: 0.95, // close-up zoom (screen px per map unit); "whole continent" fits the view
+    mapPanSpeed: 900, // map units / s from the stick or WASD at close-up zoom
+    mapZoomTime: 0.25, // seconds to glide between the two zooms
+    mapNodeTap: 26, // tap radius around a node (screen px)
     // the Phase 0 test battlefield
     testField: { w: 1920, h: 1200 },
     testFieldTier: 1,
@@ -540,6 +561,10 @@ const MENU_TABS = 4; // gear · forge · talents · status
 const SYNTH_ROW_H = 20; // the recipe list is long now, so its rows are tighter
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
+/** The campaign map's node panel and its buttons (render and hit-testing share these). */
+const MAP_PANEL = { x: 640, y: 62, w: 306, h: 412, pad: 14 };
+const MAP_BTN = { w: 278, h: 46, gap: 8 };
+const MAP_BAR = { h: 44 }; // the top bar: treasury, warband, skill points, territories
 const CAMP_ROW = { x: 70, y0: 170, w: 400, h: 50, gap: 8, colGap: 20, perCol: 5 }; // the campaign stub's battle list: two columns
 const TOUCH_MENU = { x: 916, y: 118, r: 22 };
 // How the hero and the sword are drawn. Colours still come from the
@@ -648,7 +673,7 @@ const KEYMAP = {
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     Enter: 'confirm', Escape: 'cancel', Backspace: 'cancel',
     Digit1: 'spell1', Digit2: 'spell2', Digit3: 'spell3', Digit4: 'spell4', Digit5: 'spell5',
-    KeyE: 'item', KeyQ: 'command', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back',
+    KeyE: 'item', KeyQ: 'command', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back', KeyZ: 'zoom',
 };
 // Movement is read separately so WASD can coexist with the arrow-key menu.
 const MOVE_KEYS = { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'] };
@@ -676,6 +701,12 @@ class InputState {
         this.radial = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
         /** Set on release of the touch radial: the final offset from where it opened. Game consumes it. */
         this.radialRelease = null;
+        // map gestures (Phase 6): drag to pan, pinch or wheel to zoom; a click is a press and release that barely moved
+        this.ptrs = new Map();
+        this.pinchD = 0;
+        this.pan = { x: 0, y: 0 }; // drag since last read (logical px)
+        this.zoomSteps = 0; // wheel notches / pinch steps since last read: + in, - out
+        this.lastClick = null;
         /** Debug autopilot's stick (Game.botDrive), when it is driving. */
         this.bot = null;
     }
@@ -726,6 +757,11 @@ class InputState {
         canvas.addEventListener('pointerdown', (e) => {
             const p = this.toLogical(e);
             this.lastTap = { x: p.x, y: p.y };
+            this.ptrs.set(e.pointerId, { x: p.x, y: p.y, sx: p.x, sy: p.y, moved: false });
+            if (this.ptrs.size === 2) {
+                const [a, b] = [...this.ptrs.values()];
+                this.pinchD = Math.hypot(a.x - b.x, a.y - b.y);
+            }
             if (this.uiMode)
                 return; // menus read lastTap instead
             if (e.pointerType === 'mouse' && !IS_TOUCH)
@@ -770,6 +806,34 @@ class InputState {
             }
         }, { passive: false });
         const move = (e) => {
+            const tp = this.ptrs.get(e.pointerId);
+            if (tp) {
+                const p = this.toLogical(e);
+                if (this.ptrs.size === 1) {
+                    if (Math.hypot(p.x - tp.sx, p.y - tp.sy) > 8)
+                        tp.moved = true;
+                    if (tp.moved && this.uiMode) {
+                        this.pan.x += p.x - tp.x;
+                        this.pan.y += p.y - tp.y;
+                    }
+                }
+                else if (this.ptrs.size === 2) {
+                    tp.moved = true;
+                    tp.x = p.x;
+                    tp.y = p.y;
+                    const [a, b] = [...this.ptrs.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+                    if (this.pinchD > 0 && d / this.pinchD > 1.3) {
+                        this.zoomSteps++;
+                        this.pinchD = d;
+                    }
+                    else if (this.pinchD > 0 && d / this.pinchD < 0.77) {
+                        this.zoomSteps--;
+                        this.pinchD = d;
+                    }
+                }
+                tp.x = p.x;
+                tp.y = p.y;
+            }
             if (this.radial.active && e.pointerId === this.radial.id) {
                 const p = this.toLogical(e);
                 this.radial.dx = p.x - this.radial.ox;
@@ -801,6 +865,14 @@ class InputState {
         };
         canvas.addEventListener('pointermove', move, { passive: false });
         const up = (e) => {
+            const tp = this.ptrs.get(e.pointerId);
+            if (tp) {
+                if (!tp.moved && this.ptrs.size === 1)
+                    this.lastClick = { x: tp.x, y: tp.y };
+                this.ptrs.delete(e.pointerId);
+                if (this.ptrs.size < 2)
+                    this.pinchD = 0;
+            }
             if (this.radial.active && e.pointerId === this.radial.id) {
                 this.radialRelease = { dx: this.radial.dx, dy: this.radial.dy };
                 this.radial.active = false;
@@ -822,6 +894,12 @@ class InputState {
         canvas.addEventListener('pointerup', up);
         canvas.addEventListener('pointercancel', up);
         canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        canvas.addEventListener('wheel', (e) => {
+            if (!this.uiMode)
+                return;
+            e.preventDefault();
+            this.zoomSteps += e.deltaY < 0 ? 1 : -1;
+        }, { passive: false });
     }
     /** Holding ATK keeps the combo going without machine-gun tapping. */
     pollTouch() {
@@ -834,6 +912,10 @@ class InputState {
             this.press('dash');
     }
     touchHeld(id) { return this.litBtns.has(id); }
+    /** Read and clear the drag, zoom steps and click since last read (the campaign map). */
+    takePan() { const p = { ...this.pan }; this.pan.x = this.pan.y = 0; return p; }
+    takeZoom() { const z = this.zoomSteps; this.zoomSteps = 0; return z; }
+    takeClick() { const c = this.lastClick; this.lastClick = null; return c; }
     /** Read and clear the most recent tap, for whichever UI is on screen. */
     takeTap() {
         const t = this.lastTap;
@@ -2459,7 +2541,7 @@ class Battle {
         this.wallH(ox, this.w, top, t);
         this.wallH(ox, this.w, bot, t);
         const iron = this.spec.ironGate ? WAR.ironGateMult : 1;
-        const gateHp = Math.round(WAR.gateHp * iron * TIER_SCALING.hpMultiplier(this.spec.tier));
+        const gateHp = Math.round(WAR.gateHp * iron * (this.spec.gateMult || 1) * TIER_SCALING.hpMultiplier(this.spec.tier));
         const outer = new Structure('gate', 'enemy', ox, cy + gap / 2, t + 8, gap, gateHp, 'Outer gate');
         const inner = new Structure('gate', 'enemy', ix, cy + gap / 2, t + 8, gap, gateHp, 'Inner gate');
         this.structures.push(outer, inner);
@@ -2651,6 +2733,378 @@ function unitList(counts) {
         [out[k], out[r]] = [out[r], out[k]];
     }
     return out;
+}
+/* =========================================================================
+ * campaign.ts — the continent (PLAN 4, 5, 7): territories, nodes, roads,
+ * who holds what, and the battle each node gives when attacked.
+ *
+ * The layout is hand-authored data (CONTINENT): a 5x4 grid of border
+ * vertices, twelve territories between them, the nodes inside each and the
+ * roads joining them. Borders and coast get a fixed wiggle per edge so they
+ * read as drawn lines, not a grid; the wiggle is a function of the edge,
+ * so both sides of a border always agree.
+ * ========================================================================= */
+const CONTINENT = {
+    w: 2400, h: 1500,
+    vertices: [
+        [190, 270], [690, 150], [1240, 200], [1760, 130], [2230, 250],
+        [130, 610], [730, 540], [1200, 610], [1800, 520], [2290, 630],
+        [170, 1010], [650, 1000], [1280, 960], [1720, 1040], [2260, 990],
+        [260, 1330], [700, 1400], [1230, 1360], [1810, 1390], [2170, 1300],
+    ],
+    territories: [
+        { id: 0, name: "Last Camp", tier: 1, scenery: 'forest', corners: [10, 11, 16, 15] },
+        { id: 1, name: "Millbrook Vale", tier: 1, scenery: 'forest', corners: [11, 12, 17, 16] },
+        { id: 2, name: "Greywatch March", tier: 1, scenery: 'coast', corners: [5, 6, 11, 10] },
+        { id: 3, name: "Saltmarsh", tier: 2, scenery: 'coast', corners: [12, 13, 18, 17] },
+        { id: 4, name: "Hollin Reach", tier: 2, scenery: 'forest', corners: [6, 7, 12, 11] },
+        { id: 5, name: "Thornwall", tier: 2, scenery: 'coast', corners: [0, 1, 6, 5] },
+        { id: 6, name: "Ashfen", tier: 3, scenery: 'coast', corners: [13, 14, 19, 18] },
+        { id: 7, name: "Briarholt", tier: 3, scenery: 'forest', corners: [7, 8, 13, 12] },
+        { id: 8, name: "Ravenmoor", tier: 3, scenery: 'ruins', corners: [1, 2, 7, 6] },
+        { id: 9, name: "Stonecrown", tier: 4, scenery: 'ruins', corners: [8, 9, 14, 13] },
+        { id: 10, name: "Duskhollow", tier: 4, scenery: 'ruins', corners: [2, 3, 8, 7] },
+        { id: 11, name: "Thorne's Seat", tier: 5, scenery: 'ruins', corners: [3, 4, 9, 8] },
+    ],
+    // [id, type, territory, x, y, name]
+    nodes: [
+        [0, 'castle', 0, 444, 1178, "The Last Camp"],
+        [1, 'village', 0, 534, 1279, "Emberfield"],
+        [2, 'castle', 1, 977, 1163, "Millbrook Castle"],
+        [3, 'keep', 1, 810, 1118, "Millbrook Keep"],
+        [4, 'outpost', 1, 1135, 1057, "Millbrook Watch"],
+        [5, 'village', 1, 855, 1300, "Ashby"],
+        [6, 'village', 1, 1088, 1251, "Fennick"],
+        [7, 'castle', 2, 420, 790, "Greywatch Castle"],
+        [8, 'keep', 2, 283, 717, "Greywatch Keep"],
+        [9, 'outpost', 2, 586, 654, "Greywatch Watch"],
+        [10, 'village', 2, 283, 908, "Oakhurst"],
+        [11, 'village', 2, 538, 887, "Corran"],
+        [12, 'village', 2, 438, 651, "Hale"],
+        [13, 'castle', 3, 1531, 1205, "Saltmarsh Castle"],
+        [14, 'keep', 3, 1406, 1269, "Saltmarsh Keep"],
+        [15, 'outpost', 3, 1647, 1302, "Saltmarsh Watch"],
+        [16, 'village', 3, 1391, 1089, "Wyle"],
+        [17, 'village', 3, 1631, 1129, "Brackwater"],
+        [18, 'village', 3, 1504, 1075, "Elmstead"],
+        [19, 'castle', 4, 975, 850, "Hollin Castle"],
+        [20, 'keep', 4, 1094, 706, "Hollin Keep"],
+        [21, 'outpost', 4, 824, 651, "Hollin Watch"],
+        [22, 'village', 4, 1140, 900, "Pellow"],
+        [23, 'village', 4, 800, 905, "Rook's End"],
+        [24, 'village', 4, 955, 647, "Tamsin"],
+        [25, 'castle', 5, 424, 380, "Thornwall Castle"],
+        [26, 'keep', 5, 575, 300, "Thornwall Keep"],
+        [27, 'outpost', 5, 292, 321, "Thornwall Watch"],
+        [28, 'village', 5, 548, 478, "Larkfield"],
+        [29, 'village', 5, 308, 484, "Dunmore"],
+        [30, 'castle', 6, 1972, 1196, "Ashfen Castle"],
+        [31, 'keep', 6, 2071, 1243, "Ashfen Keep"],
+        [32, 'outpost', 6, 1894, 1292, "Ashfen Watch"],
+        [33, 'village', 6, 2108, 1093, "Kestrel"],
+        [34, 'village', 6, 1864, 1130, "Morrow"],
+        [35, 'village', 6, 1990, 1081, "Westerby"],
+        [36, 'castle', 7, 1489, 765, "Briarholt Castle"],
+        [37, 'keep', 7, 1643, 695, "Briarholt Keep"],
+        [38, 'outpost', 7, 1342, 675, "Briarholt Watch"],
+        [39, 'village', 7, 1595, 913, "Hollowmere"],
+        [40, 'village', 7, 1393, 863, "Brindle"],
+        [41, 'castle', 8, 965, 375, "Ravenmoor Castle"],
+        [42, 'keep', 8, 1096, 309, "Ravenmoor Keep"],
+        [43, 'outpost', 8, 816, 248, "Ravenmoor Watch"],
+        [44, 'village', 8, 1092, 496, "Cobb's Ford"],
+        [45, 'village', 8, 847, 455, "Ilsley"],
+        [46, 'village', 8, 954, 246, "Marrow"],
+        [47, 'castle', 9, 1995, 812, "Stonecrown Castle"],
+        [48, 'keep', 9, 2110, 899, "Stonecrown Keep"],
+        [49, 'outpost', 9, 1875, 922, "Stonecrown Watch"],
+        [50, 'village', 9, 2151, 714, "Ventry"],
+        [51, 'village', 9, 1897, 691, "Quell"],
+        [52, 'village', 9, 2034, 663, "Sorrel"],
+        [53, 'castle', 10, 1489, 351, "Duskhollow Castle"],
+        [54, 'keep', 10, 1642, 273, "Duskhollow Keep"],
+        [55, 'outpost', 10, 1349, 274, "Duskhollow Watch"],
+        [56, 'village', 10, 1616, 460, "Aldmoor"],
+        [57, 'village', 10, 1373, 463, "Glint"],
+        [58, 'castle', 11, 2020, 382, "The Black Seat"],
+        [59, 'keep', 11, 2150, 300, "Thorne's Keep"],
+        [60, 'outpost', 11, 1873, 242, "Thorne's Watch"],
+        [61, 'village', 11, 2185, 560, "Harrow"],
+        [62, 'village', 11, 1916, 448, "Yarrow"],
+        [63, 'village', 11, 1995, 257, "Wren"],
+    ],
+    roads: [
+        [0, 1], [0, 11], [1, 3], [2, 3], [2, 5], [2, 6], [3, 23], [4, 6], [6, 14], [7, 8],
+        [7, 10], [7, 11], [7, 12], [9, 12], [11, 23], [12, 28], [13, 14], [13, 16], [13, 17], [13, 18],
+        [15, 17], [17, 34], [18, 39], [19, 20], [19, 22], [19, 23], [19, 24], [21, 24], [22, 40], [24, 44],
+        [25, 26], [25, 28], [25, 29], [27, 29], [28, 45], [30, 31], [30, 33], [30, 34], [30, 35], [32, 34],
+        [33, 48], [36, 37], [36, 39], [36, 40], [37, 51], [37, 56], [38, 40], [41, 42], [41, 44], [41, 45],
+        [41, 46], [43, 46], [44, 57], [47, 48], [47, 50], [47, 51], [47, 52], [49, 51], [52, 61], [53, 54],
+        [53, 56], [53, 57], [55, 57], [56, 62], [58, 59], [58, 61], [58, 62], [58, 63], [60, 63],
+    ],
+    /** Rivers, as polylines from the hills to the sea. */
+    rivers: [
+        [[1250, 640], [1190, 790], [1250, 930], [1185, 1110], [1240, 1260], [1215, 1440]],
+        [[1810, 690], [1930, 560], [2020, 420], [2140, 300], [2290, 170]],
+        [[560, 420], [420, 520], [330, 640], [190, 700], [80, 720]],
+    ],
+};
+/** Name parts for castle Lords and keep Captains (placeholders, PLAN 17). */
+const LORD_NAMES = ['Edric', 'Maud', 'Osric', 'Ysolde', 'Cedran', 'Aveline', 'Garrow', 'Brannoc', 'Sabine', 'Torvald', 'Rhoswen', 'Garrick'];
+const CAPTAIN_NAMES = ['Varn', 'Hesk', 'Mora', 'Dain', 'Ulla', 'Breck', 'Sorn', 'Kett', 'Ivo', 'Teal', 'Grue', 'Nell'];
+class Campaign {
+    constructor() {
+        this.territories = [];
+        this.nodes = [];
+        this.roads = CONTINENT.roads;
+        /** Road graph: neighbours of each node. */
+        this.links = [];
+        /** Coast edges (border edges with sea on one side), as wiggled polylines. */
+        this.coast = [];
+        /** Inner borders, as wiggled polylines with the two territories they part. */
+        this.borders = [];
+        const V = CONTINENT.vertices;
+        // which territories use each edge
+        const edgeUse = new Map();
+        const key = (a, b) => a < b ? `${a}-${b}` : `${b}-${a}`;
+        for (const t of CONTINENT.territories) {
+            for (let k = 0; k < 4; k++) {
+                const a = t.corners[k], b = t.corners[(k + 1) % 4], kk = key(a, b);
+                if (!edgeUse.has(kk))
+                    edgeUse.set(kk, []);
+                edgeUse.get(kk).push(t.id);
+            }
+        }
+        const edgePts = new Map();
+        for (const [kk, users] of edgeUse) {
+            const [a, b] = kk.split('-').map(Number);
+            const pts = Campaign.wiggle(V[a], V[b], a * 31 + b * 17, users.length === 1);
+            edgePts.set(kk, pts);
+            if (users.length === 1)
+                this.coast.push(pts);
+            else
+                this.borders.push({ pts, a: users[0], b: users[1] });
+        }
+        for (const t of CONTINENT.territories) {
+            const poly = [];
+            for (let k = 0; k < 4; k++) {
+                const a = t.corners[k], b = t.corners[(k + 1) % 4];
+                let pts = edgePts.get(key(a, b));
+                if (a > b)
+                    pts = pts.slice().reverse();
+                for (let i = 0; i < pts.length - 1; i++)
+                    poly.push(pts[i]);
+            }
+            const cx = t.corners.reduce((s, v) => s + V[v][0], 0) / 4, cy = t.corners.reduce((s, v) => s + V[v][1], 0) / 4;
+            const neighbors = [];
+            for (const [, users] of edgeUse)
+                if (users.length === 2 && users.includes(t.id))
+                    neighbors.push(users[0] === t.id ? users[1] : users[0]);
+            this.territories.push({ id: t.id, name: t.name, tier: t.tier, scenery: t.scenery, corners: t.corners, poly, cx, cy, nodes: [], neighbors });
+        }
+        for (const [id, type, tr, x, y, name] of CONTINENT.nodes) {
+            const n = { id, type, territory: tr, x, y, name, owner: 'enemy', level: 1 };
+            this.nodes.push(n);
+            this.territories[tr].nodes.push(n);
+        }
+        // label spots: where the name's box (as drawn at the whole-continent zoom) covers the fewest node
+        // icons, then nearest the middle. ~7 px a letter at 10 px bold Georgia; icons ~15 px across at that zoom.
+        const fit = Math.min(VIEW_W / CONTINENT.w, VIEW_H / CONTINENT.h);
+        for (const t of this.territories) {
+            const hw = (t.name.length * 7 + 8) / fit / 2, hh = 22 / fit / 2, icon = 15 / fit;
+            let best = { x: t.cx, y: t.cy }, bs = Infinity;
+            for (let i = -8; i <= 8; i++)
+                for (let j = -8; j <= 8; j++) {
+                    const x = t.cx + i * 28, y = t.cy + j * 24;
+                    if (![[x - hw, y - hh], [x + hw, y - hh], [x - hw, y + hh], [x + hw, y + hh]].every(([px, py]) => Campaign.inPoly(px, py, t.poly)))
+                        continue;
+                    let hits = 0;
+                    for (const n of this.nodes) {
+                        const dx = Math.max(0, Math.abs(n.x - x) - hw), dy = Math.max(0, Math.abs(n.y - 4 - y) - hh);
+                        if (dx * dx + dy * dy < icon * icon)
+                            hits++;
+                    }
+                    // ...and, softly, away from the border (so a name never reads as its neighbour's)
+                    let edge = Infinity;
+                    for (const q of t.poly)
+                        edge = Math.min(edge, Math.hypot((q.x - x) * 0.5, q.y - y));
+                    const score = hits * 1e6 + Math.hypot(x - t.cx, y - t.cy) - 3 * Math.min(edge, 160);
+                    if (score < bs) {
+                        bs = score;
+                        best = { x, y };
+                    }
+                }
+            t.cx = best.x;
+            t.cy = best.y;
+        }
+        // roads: adjacency, then all-pairs shortest paths
+        const N = this.nodes.length;
+        this.links = this.nodes.map(() => []);
+        this.dist = new Float32Array(N * N).fill(Infinity);
+        this.hop = new Int16Array(N * N).fill(-1);
+        for (let i = 0; i < N; i++) {
+            this.dist[i * N + i] = 0;
+            this.hop[i * N + i] = i;
+        }
+        for (const [a, b] of this.roads) {
+            this.links[a].push(b);
+            this.links[b].push(a);
+            const d = dist(this.nodes[a].x, this.nodes[a].y, this.nodes[b].x, this.nodes[b].y);
+            this.dist[a * N + b] = this.dist[b * N + a] = d;
+            this.hop[a * N + b] = b;
+            this.hop[b * N + a] = a;
+        }
+        for (let k = 0; k < N; k++)
+            for (let i = 0; i < N; i++) {
+                const ik = this.dist[i * N + k];
+                if (ik === Infinity)
+                    continue;
+                for (let j = 0; j < N; j++) {
+                    const d = ik + this.dist[k * N + j];
+                    if (d < this.dist[i * N + j]) {
+                        this.dist[i * N + j] = d;
+                        this.hop[i * N + j] = this.hop[i * N + k];
+                    }
+                }
+            }
+        this.reset();
+    }
+    /** Is (x, y) inside the polygon? */
+    static inPoly(x, y, poly) {
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const a = poly[i], b = poly[j];
+            if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x)
+                inside = !inside;
+        }
+        return inside;
+    }
+    /**
+     * An edge from a to b with a fixed wiggle: two sines seeded by the edge,
+     * tapering to zero at the ends so neighbouring edges meet. The coast
+     * wiggles more than inland borders.
+     */
+    static wiggle(a, b, seed, coast) {
+        const n = coast ? WAR.mapCoastSteps : WAR.mapBorderSteps, amp = coast ? WAR.mapCoastWiggle : WAR.mapBorderWiggle;
+        const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len, ny = dx / len;
+        const p1 = (seed * 0.731) % 6.283, p2 = (seed * 1.913) % 6.283, f1 = 2 + (seed % 3), f2 = 5 + (seed % 4);
+        const out = [];
+        for (let i = 0; i <= n; i++) {
+            const t = i / n;
+            const o = amp * Math.sin(Math.PI * t) * (Math.sin(Math.PI * f1 * t + p1) * 0.65 + Math.sin(Math.PI * f2 * t + p2) * 0.35);
+            out.push({ x: a[0] + dx * t + nx * o, y: a[1] + dy * t + ny * o });
+        }
+        return out;
+    }
+    /** PLAN 4: you hold the Last Camp (a level-1 castle and its village); the Dominion holds the rest. */
+    reset() {
+        for (const n of this.nodes) {
+            const t = this.territories[n.territory];
+            n.owner = t.id === WAR.startTerritory ? 'player' : 'enemy';
+            n.level = n.type === 'outpost' ? 1 : n.owner === 'player' ? 1
+                : clamp(n.type === 'castle' ? WAR.castleStartLevel[t.tier - 1] : WAR.nodeStartLevel[t.tier - 1], 1, 3);
+        }
+    }
+    castleOf(t) { return this.territories[t].nodes.find((n) => n.type === 'castle'); }
+    /** Holding the castle is holding the territory (PLAN 5.1). */
+    holds(t, side) { return this.castleOf(t).owner === side; }
+    territoriesHeld(side) { return this.territories.filter((t) => this.holds(t.id, side)).length; }
+    /**
+     * PLAN 5.1, the frontier rule: an enemy node can be attacked if you hold
+     * any node in its territory, or hold a territory bordering it.
+     */
+    canAttack(n) {
+        if (n.owner === 'player')
+            return false;
+        const t = this.territories[n.territory];
+        if (t.nodes.some((m) => m.owner === 'player'))
+            return true;
+        return t.neighbors.some((k) => this.holds(k, 'player'));
+    }
+    /** Small nodes (villages, outposts) the player holds in a territory. */
+    thinned(t) {
+        return this.territories[t].nodes.filter((m) => m.owner === 'player' && (m.type === 'village' || m.type === 'outpost')).length;
+    }
+    /** The defenders a node fields when attacked (PLAN 5.1 / 5.2), before battle reinforcements. */
+    garrison(n) {
+        const t = this.territories[n.territory];
+        const keep = t.nodes.find((m) => m.type === 'keep');
+        switch (n.type) {
+            case 'village': return WAR.villageGarrison + WAR.villageGarrisonPerLevel * (n.level - 1);
+            case 'outpost': return WAR.outpostGarrison;
+            case 'keep': return WAR.keepGarrison + WAR.keepDefenders[n.level - 1];
+            case 'castle': {
+                let g = WAR.castleGarrison[n.level - 1];
+                if (keep && keep.owner !== 'player')
+                    g *= 1 + WAR.keepGarrisonBonus; // the keep still stands for them: +50%
+                g *= 1 - Math.min(WAR.thinMax, WAR.thinPerNode * this.thinned(n.territory)); // garrison thinning
+                return Math.round(g);
+            }
+        }
+    }
+    /** Battle tier for a node: its territory's, +1 for a castle or keep while the Dominion holds the outpost. */
+    battleTier(n) {
+        const t = this.territories[n.territory];
+        const op = t.nodes.find((m) => m.type === 'outpost');
+        const up = (n.type === 'castle' || n.type === 'keep') && op && op.owner !== 'player' ? 1 : 0;
+        return clamp(t.tier + up, 1, 5);
+    }
+    /** The battle type attacking a node starts (PLAN 5.1). */
+    static battleKind(n) {
+        return n.type === 'castle' ? 'castle' : n.type === 'keep' ? 'keep' : n.type === 'outpost' ? 'outpost' : 'village';
+    }
+    /** Everything a battle needs to attack this node. */
+    battleSpec(n) {
+        const t = this.territories[n.territory];
+        const kind = Campaign.battleKind(n), tier = this.battleTier(n);
+        const keep = t.nodes.find((m) => m.type === 'keep');
+        const elites = ['shade', 'caster', 'flyer', 'bruiser', 'shade'].slice(0, 1 + Math.floor(tier / 2));
+        const spec = {
+            kind, name: n.name, tier, scenery: t.scenery, seed: 1000 + n.id * 7919,
+            foes: foeMix(this.garrison(n)), foeElites: elites, commander: null, allies: {},
+            reinforce: foeMix(WAR.battleReinforce[kind]),
+            nodeId: n.id,
+        };
+        if (kind === 'village')
+            spec.houses = 2 + n.level;
+        if (kind === 'keep')
+            spec.captainName = `Captain ${CAPTAIN_NAMES[t.id % CAPTAIN_NAMES.length]}`;
+        if (kind === 'castle') {
+            spec.lordName = t.id === WAR.capitalTerritory ? 'Warlord Garrick Thorne' : `Lord ${LORD_NAMES[t.id % LORD_NAMES.length]} of ${t.name}`;
+            spec.ironGate = !!keep && keep.owner !== 'player';
+            spec.gateMult = WAR.castleGateLevel[n.level - 1];
+        }
+        return spec;
+    }
+    /** PLAN 5.3: a captured node flips to you at max(1, level - 1). */
+    capture(n) {
+        n.owner = 'player';
+        n.level = Math.max(1, n.level - 1);
+    }
+    /** War state for the save: [owner (1 = player), level] per node. */
+    save() { return this.nodes.map((n) => [n.owner === 'player' ? 1 : 0, n.level]); }
+    /** Restore from a save, ignoring anything that doesn't fit this continent. */
+    load(s) {
+        this.reset();
+        if (!Array.isArray(s) || s.length !== this.nodes.length)
+            return;
+        s.forEach((row, i) => {
+            if (!Array.isArray(row))
+                return;
+            const n = this.nodes[i];
+            n.owner = row[0] === 1 ? 'player' : 'enemy';
+            n.level = n.type === 'outpost' ? 1 : clamp(row[1] | 0, 1, 3);
+        });
+    }
+    /** Every node reachable from every other by road? (PLAN 14, Phase 6) */
+    connected() {
+        const N = this.nodes.length;
+        for (let j = 0; j < N; j++)
+            if (this.dist[j] === Infinity)
+                return false;
+        return true;
+    }
 }
 /* =========================================================================
  * music.ts — the score. An orchestral, melody-first soundtrack in the
@@ -4971,6 +5425,9 @@ class Renderer {
         this.bladeStyle = 'longsword';
         /* --------------------------------------------------------- minions */
         this.minionOrder = new Int32Array(WAR.unitCapacity);
+        /* ------------------------------------------------------------ the map */
+        /** The map's unchanging art (sea, land, forests, mountains, rivers, borders, roads), drawn once. */
+        this.mapLayer = null;
         this.pal = SCENERY.forest;
         this.previewHero = null;
         this.canvas = canvas;
@@ -4996,6 +5453,10 @@ class Renderer {
         this.bladeStyle = g.bladeStyle;
         c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         c.clearRect(0, 0, VIEW_W, VIEW_H);
+        if (g.screen === 'campaign') {
+            this.drawMap(c, g);
+            return;
+        }
         c.save();
         const sh = g.shakeAmount;
         if (sh > 0.1)
@@ -5334,18 +5795,563 @@ class Renderer {
             c.fillText(IS_TOUCH ? 'tap to return to the map' : 'ENTER to return to the map', VIEW_W / 2, VIEW_H - 40);
         c.restore();
     }
-    /** The campaign stub (Phase 4): a list of battles until the map exists (Phase 6). */
-    drawCampaign(c, g) {
+    buildMapLayer(camp) {
+        const K = Renderer.MAP_RES;
+        const cv = document.createElement('canvas');
+        cv.width = Math.ceil(CONTINENT.w * K);
+        cv.height = Math.ceil(CONTINENT.h * K);
+        const c = cv.getContext('2d');
+        c.scale(K, K);
+        const rng = seededRng(424242);
+        const path = (poly) => { c.beginPath(); poly.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); c.closePath(); };
+        const line = (pts) => { c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); };
+        // sea, with wave marks
+        const sea = c.createLinearGradient(0, 0, 0, CONTINENT.h);
+        sea.addColorStop(0, '#1b3550');
+        sea.addColorStop(1, '#22496a');
+        c.fillStyle = sea;
+        c.fillRect(0, 0, CONTINENT.w, CONTINENT.h);
+        c.strokeStyle = 'rgba(160,200,230,0.18)';
+        c.lineWidth = 2.2;
+        for (let k = 0; k < 260; k++) {
+            const x = rng() * CONTINENT.w, y = rng() * CONTINENT.h;
+            c.beginPath();
+            c.arc(x, y, 9, Math.PI * 1.15, Math.PI * 1.85);
+            c.arc(x + 17, y, 9, Math.PI * 1.15, Math.PI * 1.85);
+            c.stroke();
+        }
+        // shallows around the coast
+        for (const w of [70, 44, 22]) {
+            c.strokeStyle = `rgba(110,170,195,${w === 70 ? 0.12 : w === 44 ? 0.16 : 0.22})`;
+            c.lineWidth = w;
+            c.lineJoin = 'round';
+            for (const t of camp.territories) {
+                path(t.poly);
+                c.stroke();
+            }
+        }
+        // land, by scenery
+        const land = { forest: ['#6d8a4b', '#5f7c42'], coast: ['#93a462', '#86985a'], ruins: ['#8c8467', '#7e7759'] };
+        for (const t of camp.territories) {
+            path(t.poly);
+            c.fillStyle = land[t.scenery][0];
+            c.fill();
+            c.save();
+            path(t.poly);
+            c.clip();
+            // speckled ground
+            c.fillStyle = land[t.scenery][1];
+            for (let k = 0; k < 500; k++) {
+                c.beginPath();
+                c.arc(t.cx + (rng() - 0.5) * 760, t.cy + (rng() - 0.5) * 560, 2 + rng() * 6, 0, Math.PI * 2);
+                c.fill();
+            }
+            c.restore();
+        }
+        // a spot for decor: inside its territory, clear of nodes and roads
+        const nearRoad = (x, y, r) => camp.roads.some(([a, b]) => {
+            const A = camp.nodes[a], B = camp.nodes[b], vx = B.x - A.x, vy = B.y - A.y, L = vx * vx + vy * vy;
+            const t = clamp(((x - A.x) * vx + (y - A.y) * vy) / L, 0, 1);
+            return (A.x + vx * t - x) ** 2 + (A.y + vy * t - y) ** 2 < r * r;
+        });
+        const spot = (t, clear) => {
+            for (let tries = 0; tries < 40; tries++) {
+                const x = t.cx + (rng() - 0.5) * 640, y = t.cy + (rng() - 0.5) * 480;
+                if (!Campaign.inPoly(x, y, t.poly))
+                    continue;
+                if (t.poly.some((p) => (p.x - x) ** 2 + (p.y - y) ** 2 < 40 * 40))
+                    continue;
+                if (camp.nodes.some((n) => (n.x - x) ** 2 + (n.y - y) ** 2 < clear * clear))
+                    continue;
+                if (nearRoad(x, y, 34))
+                    continue;
+                return { x, y };
+            }
+            return null;
+        };
+        // rivers, under everything that stands up
+        for (const r of CONTINENT.rivers) {
+            const pts = r.map(([x, y]) => ({ x, y }));
+            for (let i = 0; i < pts.length - 1; i++) {
+                c.strokeStyle = '#3f7ea3';
+                c.lineCap = 'round';
+                c.lineWidth = 6 + i * 2.2;
+                line([pts[i], pts[i + 1]]);
+                c.stroke();
+                c.strokeStyle = 'rgba(170,215,235,0.45)';
+                c.lineWidth = 2;
+                line([pts[i], pts[i + 1]]);
+                c.stroke();
+            }
+        }
+        // mountains (ruins and the borders' high ground) and forests
+        const mountain = (x, y, s) => {
+            c.fillStyle = '#6b6252';
+            c.beginPath();
+            c.moveTo(x - s, y);
+            c.lineTo(x, y - s * 1.25);
+            c.lineTo(x + s, y);
+            c.closePath();
+            c.fill();
+            c.fillStyle = '#8f8670';
+            c.beginPath();
+            c.moveTo(x - s, y);
+            c.lineTo(x, y - s * 1.25);
+            c.lineTo(x - s * 0.1, y);
+            c.closePath();
+            c.fill();
+            c.fillStyle = '#ece9df';
+            c.beginPath();
+            c.moveTo(x - s * 0.32, y - s * 0.85);
+            c.lineTo(x, y - s * 1.25);
+            c.lineTo(x + s * 0.32, y - s * 0.85);
+            c.lineTo(x + s * 0.08, y - s * 0.78);
+            c.closePath();
+            c.fill();
+            c.strokeStyle = 'rgba(40,34,26,0.55)';
+            c.lineWidth = 2;
+            c.beginPath();
+            c.moveTo(x - s, y);
+            c.lineTo(x, y - s * 1.25);
+            c.lineTo(x + s, y);
+            c.stroke();
+        };
+        const tree = (x, y, s) => {
+            c.fillStyle = 'rgba(20,30,15,0.35)';
+            c.beginPath();
+            c.ellipse(x + 2, y + s * 0.7, s, s * 0.45, 0, 0, Math.PI * 2);
+            c.fill();
+            c.fillStyle = '#2f5a2c';
+            c.beginPath();
+            c.arc(x, y, s, 0, Math.PI * 2);
+            c.fill();
+            c.fillStyle = '#3f7339';
+            c.beginPath();
+            c.arc(x - s * 0.3, y - s * 0.3, s * 0.55, 0, Math.PI * 2);
+            c.fill();
+        };
+        for (const t of camp.territories) {
+            const ranges = t.scenery === 'ruins' ? 4 : t.scenery === 'forest' ? 1 : 1;
+            const woods = t.scenery === 'forest' ? 6 : t.scenery === 'coast' ? 3 : 2;
+            const peaks = [];
+            for (let k = 0; k < ranges; k++) {
+                const p = spot(t, 120);
+                if (!p)
+                    continue;
+                const n = 3 + Math.floor(rng() * 4), ang = rng() * Math.PI;
+                for (let m = 0; m < n; m++) {
+                    const d = (m - n / 2) * 34;
+                    const x = p.x + Math.cos(ang) * d + (rng() - 0.5) * 16, y = p.y + Math.sin(ang) * d * 0.5 + (rng() - 0.5) * 12;
+                    if (Campaign.inPoly(x, y, t.poly) && !camp.nodes.some((nd) => (nd.x - x) ** 2 + (nd.y - y) ** 2 < 70 * 70) && !nearRoad(x, y, 28))
+                        peaks.push({ x, y, s: 20 + rng() * 16 });
+                }
+            }
+            const trees = [];
+            for (let k = 0; k < woods; k++) {
+                const p = spot(t, 90);
+                if (!p)
+                    continue;
+                for (let m = 0; m < 14; m++) {
+                    const x = p.x + (rng() - 0.5) * 120, y = p.y + (rng() - 0.5) * 80;
+                    if (Campaign.inPoly(x, y, t.poly) && !camp.nodes.some((nd) => (nd.x - x) ** 2 + (nd.y - y) ** 2 < 55 * 55) && !nearRoad(x, y, 22))
+                        trees.push({ x, y, s: 8 + rng() * 6 });
+                }
+            }
+            // back to front
+            const all = [...peaks.map((p) => ({ ...p, m: true })), ...trees.map((p) => ({ ...p, m: false }))].sort((a, b) => a.y - b.y);
+            for (const d of all)
+                if (d.m)
+                    mountain(d.x, d.y, d.s);
+                else
+                    tree(d.x, d.y, d.s);
+        }
+        // inland borders: dashed ink
+        c.setLineDash([14, 10]);
+        c.lineCap = 'round';
+        for (const b of camp.borders) {
+            c.strokeStyle = 'rgba(52,38,24,0.55)';
+            c.lineWidth = 4;
+            line(b.pts);
+            c.stroke();
+        }
+        c.setLineDash([]);
+        // coastline
+        c.strokeStyle = '#2d2a20';
+        c.lineWidth = 4;
+        c.lineJoin = 'round';
+        for (const p of camp.coast) {
+            line(p);
+            c.stroke();
+        }
+        // roads: packed earth with a darker edge, gently bowed
+        for (const pass of [0, 1]) {
+            for (const [a, b] of camp.roads) {
+                const A = camp.nodes[a], B = camp.nodes[b];
+                const mx = (A.x + B.x) / 2 + (B.y - A.y) * 0.08, my = (A.y + B.y) / 2 - (B.x - A.x) * 0.08;
+                c.beginPath();
+                c.moveTo(A.x, A.y);
+                c.quadraticCurveTo(mx, my, B.x, B.y);
+                c.strokeStyle = pass ? '#c9ad7a' : '#5e4a2e';
+                c.lineWidth = pass ? 6 : 10;
+                c.stroke();
+            }
+        }
+        return cv;
+    }
+    /** The campaign map (PLAN 7.1): the continent, who holds what, the nodes and the selected node's panel. */
+    drawMap(c, g) {
+        const camp = g.camp;
+        if (!this.mapLayer)
+            this.mapLayer = this.buildMapLayer(camp);
+        const s = g.mapScale(), K = Renderer.MAP_RES;
+        c.fillStyle = '#1b3550';
+        c.fillRect(0, 0, VIEW_W, VIEW_H);
+        const o = g.mapToScreen(0, 0);
+        c.drawImage(this.mapLayer, o.x, o.y, CONTINENT.w * s, CONTINENT.h * s);
+        void K;
+        c.save();
+        c.translate(o.x, o.y);
+        c.scale(s, s);
+        // who holds each territory (its castle): a wash of their colour
+        for (const t of camp.territories) {
+            const mine = camp.holds(t.id, 'player');
+            c.beginPath();
+            t.poly.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y));
+            c.closePath();
+            c.fillStyle = mine ? 'rgba(70,140,255,0.26)' : 'rgba(170,30,45,0.14)';
+            c.fill();
+            // the frontier: territories you can strike into get a bright edge
+            if (!mine && t.nodes.some((n) => camp.canAttack(n))) {
+                c.strokeStyle = `rgba(255,213,74,${0.45 + Math.sin(g.time * 3) * 0.2})`;
+                c.lineWidth = 3 / s;
+                c.stroke();
+            }
+        }
+        c.restore();
+        // territory names
+        c.save();
+        c.textAlign = 'center';
+        for (const t of camp.territories) {
+            const p = g.mapToScreen(t.cx, t.cy);
+            const size = Math.round(lerp(10, 17, g.mapZoom));
+            c.font = `800 ${size}px Georgia, 'Times New Roman', serif`;
+            c.lineWidth = 3;
+            c.strokeStyle = 'rgba(25,20,12,0.7)';
+            const label = t.name.toUpperCase();
+            c.strokeText(label, p.x, p.y);
+            c.fillStyle = 'rgba(245,232,200,0.92)';
+            c.fillText(label, p.x, p.y);
+            c.font = `600 ${size - 3}px Georgia, serif`;
+            c.fillStyle = 'rgba(245,232,200,0.75)';
+            c.strokeText(`tier ${t.tier}`, p.x, p.y + size);
+            c.fillText(`tier ${t.tier}`, p.x, p.y + size);
+        }
+        c.restore();
+        // nodes
+        for (const n of camp.nodes)
+            this.drawMapNode(c, g, n);
+        this.drawMapHud(c, g);
+    }
+    /** One node icon: type by shape, owner by colour, level by pips; attackable ones pulse. */
+    drawMapNode(c, g, n) {
+        const p = g.mapToScreen(n.x, n.y);
+        if (p.x < -40 || p.x > VIEW_W + 40 || p.y < -40 || p.y > VIEW_H + 40)
+            return;
+        const k = lerp(0.7, 1.25, g.mapZoom);
+        const mine = n.owner === 'player';
+        const body = mine ? '#4f8fe0' : '#b83a44', dark = mine ? '#1d3b66' : '#4a1418', hi = mine ? '#9fd0ff' : '#ff9a8a';
+        const attackable = g.camp.canAttack(n);
+        c.save();
+        c.translate(p.x, p.y);
+        c.scale(k, k);
+        if (attackable) {
+            c.strokeStyle = `rgba(255,213,74,${0.5 + Math.sin(g.time * 4 + n.id) * 0.3})`;
+            c.lineWidth = 2.5;
+            c.beginPath();
+            c.arc(0, 0, 17, 0, Math.PI * 2);
+            c.stroke();
+        }
+        if (g.mapSel === n.id) {
+            c.strokeStyle = '#ffffff';
+            c.lineWidth = 3;
+            c.beginPath();
+            c.arc(0, 0, 21, 0, Math.PI * 2);
+            c.stroke();
+        }
+        c.fillStyle = 'rgba(0,0,0,0.35)';
+        c.beginPath();
+        c.ellipse(0, 9, 14, 5, 0, 0, Math.PI * 2);
+        c.fill();
+        c.strokeStyle = dark;
+        c.lineWidth = 1.6;
+        c.lineJoin = 'round';
+        const box = (x, y, w, h) => { c.fillRect(x, y, w, h); c.strokeRect(x, y, w, h); };
+        c.fillStyle = body;
+        switch (n.type) {
+            case 'castle': {
+                box(-12, -10, 24, 18);
+                box(-15, -18, 8, 26);
+                box(7, -18, 8, 26);
+                c.fillStyle = hi;
+                c.fillRect(-15, -20, 8, 3);
+                c.fillRect(7, -20, 8, 3);
+                c.fillStyle = dark;
+                c.fillRect(-3, -1, 6, 9);
+                // banner
+                c.strokeStyle = '#2a1e10';
+                c.lineWidth = 1.5;
+                c.beginPath();
+                c.moveTo(0, -10);
+                c.lineTo(0, -28);
+                c.stroke();
+                c.fillStyle = mine ? '#ffd54a' : '#1a1a1a';
+                c.beginPath();
+                c.moveTo(0, -28);
+                c.lineTo(13, -24);
+                c.lineTo(0, -20);
+                c.fill();
+                break;
+            }
+            case 'keep':
+                box(-10, -12, 20, 20);
+                c.fillStyle = hi;
+                for (let x = -10; x < 10; x += 6)
+                    c.fillRect(x, -15, 4, 3);
+                c.fillStyle = dark;
+                c.fillRect(-3, 0, 6, 8);
+                break;
+            case 'village':
+                box(-13, -4, 11, 10);
+                box(2, -7, 12, 13);
+                c.fillStyle = mine ? '#c9e4ff' : '#e0b070';
+                c.beginPath();
+                c.moveTo(-15, -4);
+                c.lineTo(-7.5, -11);
+                c.lineTo(0, -4);
+                c.closePath();
+                c.fill();
+                c.stroke();
+                c.beginPath();
+                c.moveTo(0, -7);
+                c.lineTo(8, -15);
+                c.lineTo(16, -7);
+                c.closePath();
+                c.fill();
+                c.stroke();
+                break;
+            case 'outpost':
+                box(-5, -20, 10, 28);
+                c.fillStyle = hi;
+                c.fillRect(-7, -23, 14, 4);
+                c.fillStyle = dark;
+                c.fillRect(-2, -12, 4, 5);
+                break;
+        }
+        // level pips
+        if (n.type !== 'outpost') {
+            for (let i = 0; i < n.level; i++) {
+                c.fillStyle = '#ffd54a';
+                c.strokeStyle = '#3a2a08';
+                c.lineWidth = 1;
+                c.beginPath();
+                c.arc(-6 + i * 6, 14, 2.4, 0, Math.PI * 2);
+                c.fill();
+                c.stroke();
+            }
+        }
+        c.restore();
+        // names when close (or selected); far out, the territory names do the talking
+        if (g.mapZoom > 0.5 || g.mapSel === n.id) {
+            c.save();
+            c.textAlign = 'center';
+            c.font = `700 ${n.type === 'castle' ? 11 : 10}px ui-monospace, Menlo, Consolas, monospace`;
+            c.lineWidth = 3;
+            c.strokeStyle = 'rgba(0,0,0,0.75)';
+            c.strokeText(n.name, p.x, p.y + 28 * k);
+            c.fillStyle = mine ? '#cfe6ff' : '#ffe1d6';
+            c.fillText(n.name, p.x, p.y + 28 * k);
+            c.restore();
+        }
+    }
+    /** Toasts and banners (battle HUD and map). */
+    drawNotices(c, g) {
+        // ---- toast
+        if (g.toastT > 0) {
+            c.save();
+            c.globalAlpha = clamp(g.toastT / 0.5, 0, 1);
+            c.textAlign = 'center';
+            c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
+            c.fillStyle = '#ffd54a';
+            c.fillText(g.toastMsg, VIEW_W / 2, VIEW_H - 150);
+            c.restore();
+        }
+        // ---- wave banner
+        if (g.bannerT > 0) {
+            c.save();
+            const t = clamp(g.bannerT / 1.6, 0, 1);
+            c.globalAlpha = Math.min(1, t * 2);
+            c.textAlign = 'center';
+            c.font = '900 46px ui-monospace, Menlo, Consolas, monospace';
+            c.strokeStyle = 'rgba(0,0,0,0.8)';
+            c.lineWidth = 7;
+            c.strokeText(g.bannerMsg, VIEW_W / 2, VIEW_H / 2 - 40);
+            c.fillStyle = g.bannerColor;
+            c.fillText(g.bannerMsg, VIEW_W / 2, VIEW_H / 2 - 40);
+            if (g.bannerSub) {
+                c.font = '700 15px ui-monospace, Menlo, Consolas, monospace';
+                c.fillStyle = PAL.text;
+                c.fillText(g.bannerSub, VIEW_W / 2, VIEW_H / 2 - 10);
+            }
+            c.restore();
+        }
+    }
+    /** The map's top bar, help line and the selected node's panel. */
+    drawMapHud(c, g) {
+        const p = g.player, camp = g.camp;
+        c.save();
+        c.fillStyle = 'rgba(10,14,28,0.82)';
+        c.fillRect(0, 0, VIEW_W, MAP_BAR.h);
+        c.textAlign = 'left';
+        c.font = '900 17px Georgia, serif';
+        c.fillStyle = '#ffd54a';
+        c.fillText('THE VERDANT REACH', 16, 28);
+        c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
+        const items = [
+            ['gold', String(p.gold)], ['warband', `${g.warbandCap()}`], ['SP', String(p.skillPoints)], ['territories', `${camp.territoriesHeld('player')} / ${camp.territories.length}`],
+        ];
+        let x = 260;
+        for (const [k, v] of items) {
+            c.fillStyle = PAL.dim;
+            c.fillText(k, x, 27);
+            x += c.measureText(k).width + 6;
+            c.fillStyle = PAL.text;
+            c.fillText(v, x, 27);
+            x += c.measureText(v).width + 22;
+        }
+        c.textAlign = 'center';
+        c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = 'rgba(232,236,247,0.75)';
+        const help = IS_TOUCH ? 'drag to pan  ·  pinch to zoom  ·  tap a node' : 'drag / WASD pan  ·  wheel / Z zoom  ·  arrows pick a node  ·  ENTER attack  ·  ESC title';
+        c.fillStyle = 'rgba(10,14,28,0.6)';
+        c.fillRect(0, VIEW_H - 24, VIEW_W, 24);
+        c.fillStyle = 'rgba(232,236,247,0.75)';
+        c.fillText(help, VIEW_W / 2, VIEW_H - 8);
+        c.restore();
+        if (g.mapSel >= 0)
+            this.drawNodePanel(c, g, camp.nodes[g.mapSel]);
+        this.drawNotices(c, g);
+    }
+    /** The selected node's panel (PLAN 7.1). Buttons come from Game.mapButtons so taps and drawing agree. */
+    drawNodePanel(c, g, n) {
+        const camp = g.camp, t = camp.territories[n.territory];
+        const P = MAP_PANEL;
+        c.save();
+        c.fillStyle = 'rgba(12,16,30,0.92)';
+        this.roundRect(c, P.x, P.y, P.w, P.h, 10);
+        c.fill();
+        c.strokeStyle = n.owner === 'player' ? '#5f9bff' : '#d0505a';
+        c.lineWidth = 2;
+        this.roundRect(c, P.x, P.y, P.w, P.h, 10);
+        c.stroke();
+        let y = P.y + P.pad + 18;
+        const x = P.x + P.pad;
+        c.textAlign = 'left';
+        c.font = '900 18px Georgia, serif';
+        c.fillStyle = '#ffffff';
+        c.fillText(n.name, x, y);
+        y += 20;
+        const typeName = { castle: 'Castle', keep: 'Keep', village: 'Village', outpost: 'Outpost' }[n.type];
+        c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = n.owner === 'player' ? '#9fc8ff' : '#ff9a8a';
+        c.fillText(`${typeName}${n.type !== 'outpost' ? ` · level ${n.level}` : ''} · ${n.owner === 'player' ? 'yours' : 'Dominion'}`, x, y);
+        y += 17;
+        c.fillStyle = PAL.dim;
+        c.fillText(`${t.name} · tier ${t.tier}`, x, y);
+        y += 24;
+        const row = (k, v, col = PAL.text) => {
+            c.fillStyle = PAL.dim;
+            c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+            c.fillText(k, x, y);
+            c.textAlign = 'right';
+            c.fillStyle = col;
+            c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+            c.fillText(v, P.x + P.w - P.pad, y);
+            c.textAlign = 'left';
+            y += 19;
+        };
+        const note = (s, col = '#c7b8ff') => {
+            // wrapped to the panel (measured, PLAN 16)
+            c.fillStyle = col;
+            c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+            let lineText = '';
+            for (const w of s.split(' ')) {
+                const tryText = lineText ? lineText + ' ' + w : w;
+                if (c.measureText(tryText).width > P.w - P.pad * 2 && lineText) {
+                    c.fillText(lineText, x, y);
+                    y += 15;
+                    lineText = w;
+                }
+                else
+                    lineText = tryText;
+            }
+            if (lineText) {
+                c.fillText(lineText, x, y);
+                y += 17;
+            }
+        };
+        if (n.owner === 'enemy') {
+            const kind = Campaign.battleKind(n), tier = camp.battleTier(n);
+            const names = { castle: 'Castle siege', keep: 'Keep assault', village: 'Village raid', outpost: 'Outpost capture' };
+            row('Battle', names[kind]);
+            row('Battle tier', String(tier), tier > t.tier ? '#ff9a8a' : PAL.text);
+            row('Defenders', String(camp.garrison(n)));
+            row('Reinforcements', `+${WAR.battleReinforce[kind]}`);
+            y += 4;
+            const keep = t.nodes.find((m) => m.type === 'keep'), op = t.nodes.find((m) => m.type === 'outpost');
+            if (n.type === 'castle') {
+                if (keep && keep.owner !== 'player')
+                    note('+50% garrison and an iron gate: their keep stands');
+                const thin = t.nodes.filter((m) => m.owner === 'player' && (m.type === 'village' || m.type === 'outpost')).length;
+                if (thin)
+                    note(`garrison thinned ${Math.round(Math.min(WAR.thinMax, WAR.thinPerNode * thin) * 100)}% by ${thin} node${thin > 1 ? 's' : ''} you hold`, '#9fe8b0');
+            }
+            if ((n.type === 'castle' || n.type === 'keep') && op && op.owner !== 'player')
+                note('+1 tier of defenders: their watchtower stands');
+            if (!camp.canAttack(n))
+                note('out of reach: take a bordering territory first', '#ff9a8a');
+        }
+        else {
+            row('Held by', 'you');
+            note('garrison, income, upgrades and armies', PAL.dim);
+            note('arrive with the war economy (Phase 7-8)', PAL.dim);
+        }
+        // buttons
+        const btns = g.mapButtons();
+        btns.forEach((b, i) => {
+            const at = g.mapButtonAt(i, btns.length);
+            const main = b.label === 'Attack';
+            c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : main ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
+            this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8);
+            c.fill();
+            c.textAlign = 'center';
+            c.font = `900 ${main ? 16 : 14}px ui-monospace, Menlo, Consolas, monospace`;
+            c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
+            c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+        });
+        c.restore();
+    }
+    /** Debug battle list (the Phase 4-5 stub): one battle of each type. */
+    drawSandbox(c, g) {
         c.save();
         c.fillStyle = 'rgba(6,8,14,0.9)';
         c.fillRect(0, 0, VIEW_W, VIEW_H);
         c.textAlign = 'center';
         c.font = '900 30px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.mpCharge;
-        c.fillText('THE VERDANT REACH', VIEW_W / 2, 92);
+        c.fillText('BATTLE LIST', VIEW_W / 2, 92);
         c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
-        c.fillText('campaign map stub — the illustrated map arrives in Phase 6', VIEW_W / 2, 116);
+        c.fillText('debug: one battle of each type (the campaign map is New Game / Continue)', VIEW_W / 2, 116);
         c.fillStyle = '#ffd54a';
         c.fillText(`treasury ${g.player.gold} gold  ·  warband ${g.warbandCap()}`, VIEW_W / 2, 140);
         const rows = g.campaignRows();
@@ -7500,8 +8506,8 @@ class Renderer {
             this.drawTitle(c, g);
             return;
         }
-        if (g.screen === 'campaign') {
-            this.drawCampaign(c, g);
+        if (g.screen === 'sandbox') {
+            this.drawSandbox(c, g);
             return;
         }
         // full-screen results: nothing of the HUD underneath (PLAN 16: early-return under overlays)
@@ -7581,35 +8587,7 @@ class Renderer {
             c.fillText(s, VIEW_W / 2, 92);
             c.restore();
         }
-        // ---- toast
-        if (g.toastT > 0) {
-            c.save();
-            c.globalAlpha = clamp(g.toastT / 0.5, 0, 1);
-            c.textAlign = 'center';
-            c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
-            c.fillStyle = '#ffd54a';
-            c.fillText(g.toastMsg, VIEW_W / 2, VIEW_H - 150);
-            c.restore();
-        }
-        // ---- wave banner
-        if (g.bannerT > 0) {
-            c.save();
-            const t = clamp(g.bannerT / 1.6, 0, 1);
-            c.globalAlpha = Math.min(1, t * 2);
-            c.textAlign = 'center';
-            c.font = '900 46px ui-monospace, Menlo, Consolas, monospace';
-            c.strokeStyle = 'rgba(0,0,0,0.8)';
-            c.lineWidth = 7;
-            c.strokeText(g.bannerMsg, VIEW_W / 2, VIEW_H / 2 - 40);
-            c.fillStyle = g.bannerColor;
-            c.fillText(g.bannerMsg, VIEW_W / 2, VIEW_H / 2 - 40);
-            if (g.bannerSub) {
-                c.font = '700 15px ui-monospace, Menlo, Consolas, monospace';
-                c.fillStyle = PAL.text;
-                c.fillText(g.bannerSub, VIEW_W / 2, VIEW_H / 2 - 10);
-            }
-            c.restore();
-        }
+        this.drawNotices(c, g);
         if (g.orderT > 0 && p.alive) {
             c.save();
             c.globalAlpha = clamp(g.orderT / 0.3, 0, 1);
@@ -8475,6 +9453,7 @@ class Renderer {
         return v.some((n) => Number.isNaN(n)) ? [128, 128, 128] : v;
     }
 }
+Renderer.MAP_RES = 0.75; // layer px per map unit
 /* =========================================================================
  * main.ts — the Game: fixed-timestep loop, screens, progression, saving
  * and glue.
@@ -8493,6 +9472,7 @@ function freshSave() {
         weapon: 'w1', armor: 'a1', talents: {},
         potions: 3, ethers: 2,
         hero: 'wayfarer', blade: 'longsword',
+        war: null,
     };
 }
 function loadSave() {
@@ -8540,6 +9520,8 @@ function loadSave() {
                 d.hero = j.hero;
             if (BLADE_STYLES.some((b) => b.id === j.blade))
                 d.blade = j.blade;
+            if (Array.isArray(j.war))
+                d.war = j.war; // Campaign.load validates it against the continent
         }
     }
     catch { /* private mode, blocked storage — play on regardless */ }
@@ -8643,6 +9625,16 @@ class Game {
         this.bannerColor = '#ffd54a';
         this.bannerT = 0;
         this.deathT = 0;
+        /* --------------------------------------------------------- campaign map */
+        this.camp = new Campaign();
+        /** Where the map is looking (map units, the view's centre) and how close (0 whole continent .. 1 close-up). */
+        this.mapX = CONTINENT.w / 2;
+        this.mapY = CONTINENT.h / 2;
+        this.mapZoom = 0;
+        this.mapZoomTo = 0;
+        this.mapSel = -1; // selected node, or -1
+        /** Where the last battle was started from: the map, or the debug battle list. */
+        this.battleFrom = 'map';
         /* ------------------------------------------------------------ autopilot */
         /**
          * Debug autopilot: plays the knight through a battle with plain intent (walk
@@ -8798,15 +9790,12 @@ class Game {
                 break;
         }
     }
-    /* ------------------------------------------------------ campaign stub */
-    /** The campaign map stub (Phase 4): pick a battle. Phase 6 replaces it with the real map. */
-    enterCampaign() {
+    /** Back to camp after anything: the knight on their feet, inventory from the save. */
+    freshCamp() {
         this.titleMode = 'root';
-        this.screen = 'campaign';
         this.menuOpen = false;
         this.paused = false;
         this.input.suppressMove = false;
-        // whatever happened out there, the knight is back on their feet at camp
         const keepHero = this.heroStyle, keepBlade = this.bladeStyle;
         this.player = new Player();
         applySave(this.player, loadSave());
@@ -8818,7 +9807,209 @@ class Game {
         this.army.clear();
         this.deathT = 0;
         this.input.clearBuffer();
+        this.input.takeClick();
+        this.input.takePan();
+        this.input.takeZoom();
     }
+    /** The campaign map (PLAN 7.1). */
+    enterCampaign() {
+        this.freshCamp();
+        this.screen = 'campaign';
+        this.battleFrom = 'map';
+        this.camp.load(loadSave().war);
+    }
+    /** Debug: the Phase 4-5 list of one battle of each type (and the test field), from the tuning panel. */
+    enterSandbox() {
+        this.freshCamp();
+        this.screen = 'sandbox';
+        this.battleFrom = 'sandbox';
+    }
+    /** Screen px per map unit at zoom z (0 = the whole continent fits, 1 = close-up). */
+    mapScale(z = this.mapZoom) {
+        const fit = Math.min(VIEW_W / CONTINENT.w, VIEW_H / CONTINENT.h);
+        return lerp(fit, WAR.mapZoomNear, z);
+    }
+    mapToScreen(x, y) {
+        const s = this.mapScale();
+        return { x: (x - this.mapX) * s + VIEW_W / 2, y: (y - this.mapY) * s + VIEW_H / 2 };
+    }
+    screenToMap(x, y) {
+        const s = this.mapScale();
+        return { x: (x - VIEW_W / 2) / s + this.mapX, y: (y - VIEW_H / 2) / s + this.mapY };
+    }
+    /** Keep the view on the continent (centred on it when it all fits). */
+    clampMap() {
+        const s = this.mapScale(), hw = VIEW_W / 2 / s, hh = VIEW_H / 2 / s;
+        this.mapX = CONTINENT.w <= hw * 2 ? CONTINENT.w / 2 : clamp(this.mapX, hw, CONTINENT.w - hw);
+        this.mapY = CONTINENT.h <= hh * 2 ? CONTINENT.h / 2 : clamp(this.mapY, hh, CONTINENT.h - hh);
+    }
+    /** The node under a screen point (within the tap radius), or -1. */
+    nodeAt(x, y) {
+        let best = -1, bd = WAR.mapNodeTap * WAR.mapNodeTap;
+        for (const n of this.camp.nodes) {
+            const p = this.mapToScreen(n.x, n.y), d = (p.x - x) ** 2 + (p.y - y) ** 2;
+            if (d < bd) {
+                bd = d;
+                best = n.id;
+            }
+        }
+        return best;
+    }
+    /** The node panel's buttons for the selection (shared by drawing and hit-testing). */
+    mapButtons() {
+        if (this.mapSel < 0)
+            return [];
+        const n = this.camp.nodes[this.mapSel];
+        const out = [];
+        if (n.owner === 'enemy')
+            out.push({ label: 'Attack', enabled: this.camp.canAttack(n), act: () => this.attackNode(n) });
+        out.push({ label: 'Close', enabled: true, act: () => { this.mapSel = -1; } });
+        return out;
+    }
+    /** Top-left of panel button i of n. */
+    mapButtonAt(i, n) {
+        return { x: MAP_PANEL.x + MAP_PANEL.pad, y: MAP_PANEL.y + MAP_PANEL.h - MAP_PANEL.pad - (n - i) * (MAP_BTN.h + MAP_BTN.gap) + MAP_BTN.gap };
+    }
+    /** Attack a node: its battle, with your warband (PLAN 7.1). */
+    attackNode(n) {
+        if (!this.camp.canAttack(n))
+            return;
+        this.sfx.cast(560);
+        this.battleFrom = 'map';
+        this.startBattle(this.camp.battleSpec(n));
+    }
+    /** Select a node (or none) and bring it into view. */
+    selectNode(id) {
+        this.mapSel = id;
+        if (id < 0)
+            return;
+        this.sfx.guard();
+        const n = this.camp.nodes[id], p = this.mapToScreen(n.x, n.y);
+        // keep it clear of the panel and the edges
+        const s = this.mapScale();
+        if (p.x > MAP_PANEL.x - 30)
+            this.mapX += (p.x - (MAP_PANEL.x - 160)) / s;
+        if (p.x < 60)
+            this.mapX -= (60 - p.x) / s;
+        if (p.y < 80)
+            this.mapY -= (80 - p.y) / s;
+        if (p.y > VIEW_H - 50)
+            this.mapY += (p.y - (VIEW_H - 50)) / s;
+    }
+    /** Arrow keys / d-pad: the nearest node roughly that way from the selection. */
+    stepSelection(dx, dy) {
+        const ns = this.camp.nodes;
+        if (this.mapSel < 0) {
+            // start from the node nearest the middle of the view
+            const c = this.screenToMap(VIEW_W / 2, VIEW_H / 2);
+            let best = 0, bd = Infinity;
+            for (const n of ns) {
+                const d = dist(n.x, n.y, c.x, c.y);
+                if (d < bd) {
+                    bd = d;
+                    best = n.id;
+                }
+            }
+            this.selectNode(best);
+            return;
+        }
+        const from = ns[this.mapSel];
+        let best = -1, bs = Infinity;
+        for (const n of ns) {
+            if (n === from)
+                continue;
+            const vx = n.x - from.x, vy = n.y - from.y, d = Math.hypot(vx, vy);
+            const along = (vx * dx + vy * dy) / d;
+            if (along < 0.5)
+                continue; // within 60 degrees of the direction
+            const score = d * (2 - along);
+            if (score < bs) {
+                bs = score;
+                best = n.id;
+            }
+        }
+        if (best >= 0)
+            this.selectNode(best);
+    }
+    handleMap(dt) {
+        const inp = this.input;
+        // zoom: wheel, pinch, Z / L / LT
+        const z = inp.takeZoom();
+        if (z > 0)
+            this.mapZoomTo = 1;
+        else if (z < 0)
+            this.mapZoomTo = 0;
+        if (inp.wasPressed('zoom') || inp.wasPressed('lock'))
+            this.mapZoomTo = this.mapZoomTo > 0.5 ? 0 : 1;
+        const before = this.mapZoom;
+        this.mapZoom += clamp(this.mapZoomTo - this.mapZoom, -dt / WAR.mapZoomTime, dt / WAR.mapZoomTime);
+        if (before !== this.mapZoom && this.mapSel >= 0) {
+            // zoom about the selection
+            const n = this.camp.nodes[this.mapSel];
+            this.mapX = lerp(this.mapX, n.x, 0.25);
+            this.mapY = lerp(this.mapY, n.y, 0.25);
+        }
+        // pan: drag, stick or WASD
+        const s = this.mapScale();
+        const pan = inp.takePan();
+        this.mapX -= pan.x / s;
+        this.mapY -= pan.y / s;
+        const mv = inp.moveVector();
+        this.mapX += mv.x * WAR.mapPanSpeed * dt * (WAR.mapZoomNear / s) * 0.6;
+        this.mapY += mv.y * WAR.mapPanSpeed * dt * (WAR.mapZoomNear / s) * 0.6;
+        this.clampMap();
+        // clicks: panel buttons, then nodes, then empty ground (closes the panel)
+        const click = inp.takeClick();
+        inp.takeTap();
+        if (click) {
+            const btns = this.mapButtons();
+            let used = false;
+            for (let i = 0; i < btns.length; i++) {
+                const b = this.mapButtonAt(i, btns.length);
+                if (click.x >= b.x && click.x <= b.x + MAP_BTN.w && click.y >= b.y && click.y <= b.y + MAP_BTN.h) {
+                    used = true;
+                    if (btns[i].enabled)
+                        btns[i].act();
+                    else {
+                        this.sfx.guard();
+                        this.toast(this.mapSel >= 0 ? 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST' : '');
+                    }
+                }
+            }
+            const inPanel = this.mapSel >= 0 && click.x >= MAP_PANEL.x && click.y >= MAP_PANEL.y && click.y <= MAP_PANEL.y + MAP_PANEL.h;
+            if (!used && !inPanel)
+                this.selectNode(this.nodeAt(click.x, click.y));
+            if (this.screen !== 'campaign')
+                return;
+        }
+        if (inp.wasPressed('up'))
+            this.stepSelection(0, -1);
+        if (inp.wasPressed('down'))
+            this.stepSelection(0, 1);
+        if (inp.wasPressed('left'))
+            this.stepSelection(-1, 0);
+        if (inp.wasPressed('right'))
+            this.stepSelection(1, 0);
+        if ((inp.wasPressed('confirm') || inp.wasPressed('attack') || inp.wasPressed('jump')) && this.mapSel >= 0) {
+            const n = this.camp.nodes[this.mapSel];
+            if (n.owner === 'enemy' && this.camp.canAttack(n))
+                this.attackNode(n);
+            else {
+                this.sfx.guard();
+                this.toast(n.owner === 'player' ? 'YOURS' : 'OUT OF REACH: TAKE A BORDERING TERRITORY FIRST');
+            }
+            return;
+        }
+        if (inp.wasPressed('cancel')) {
+            if (this.mapSel >= 0)
+                this.mapSel = -1;
+            else {
+                this.screen = 'title';
+                this.titleIndex = 0;
+            }
+        }
+    }
+    /* ------------------------------------------- debug battle list (Phase 4-5) */
     /** The battles on offer until the map exists: one of each type. */
     campaignRows() {
         return [
@@ -8839,7 +10030,7 @@ class Game {
         const col = Math.floor(i / CAMP_ROW.perCol), r = i % CAMP_ROW.perCol;
         return { x: CAMP_ROW.x + col * (CAMP_ROW.w + CAMP_ROW.colGap), y: CAMP_ROW.y0 + r * (CAMP_ROW.h + CAMP_ROW.gap) };
     }
-    handleCampaign() {
+    handleSandbox() {
         const inp = this.input;
         const rows = this.campaignRows();
         const tap = inp.takeTap();
@@ -9248,6 +10439,12 @@ class Game {
             }
             if (b.spec.kind === 'rescue')
                 b.notes.push(`${b.spec.generalName || 'The general'} rescued (loyalty +25 with Phase 10)`);
+            if (b.spec.nodeId !== undefined && this.battleFrom === 'map') {
+                // PLAN 5.3: the node is yours, a level down from the fighting
+                const n = this.camp.nodes[b.spec.nodeId];
+                this.camp.capture(n);
+                b.notes.push(n.type === 'castle' ? `${this.camp.territories[n.territory].name} is yours` : `${n.name} is yours (level ${n.level})`);
+            }
             const commons = ['shard', 'plate', 'sigil', 'ember'];
             const n = rndInt(WAR.spoilMats[0], WAR.spoilMats[1]) * b.spec.tier;
             for (let k = 0; k < n; k++) {
@@ -9450,21 +10647,25 @@ class Game {
     tick(dt) {
         this.input.pollPad();
         this.input.pollTouch();
-        this.input.uiMode = this.menuOpen || this.screen === 'title' || this.screen === 'campaign' || !!this.battle.result;
+        this.input.uiMode = this.menuOpen || this.screen !== 'battle' || !!this.battle.result;
         if (TUNING.musicVolume !== this.lastMusicVol) {
             this.lastMusicVol = TUNING.musicVolume;
             this.music.setVolume(TUNING.musicVolume);
         }
-        if (this.screen === 'title' || this.screen === 'campaign') {
+        if (this.screen !== 'battle') {
             this.time += dt;
             if (this.bannerT > 0)
                 this.bannerT -= dt;
+            if (this.toastT > 0)
+                this.toastT -= dt;
             this.updateVfx(dt);
             this.syncMusic();
             if (this.screen === 'title')
                 this.handleTitle();
+            else if (this.screen === 'sandbox')
+                this.handleSandbox();
             else
-                this.handleCampaign();
+                this.handleMap(dt);
             this.input.endTick();
             return;
         }
@@ -9476,7 +10677,24 @@ class Game {
             this.syncMusic();
             const tap = this.input.takeTap();
             if (this.battle.resultT > 0.6 && (tap || this.input.wasPressed('confirm') || this.input.wasPressed('attack') || this.input.wasPressed('restart'))) {
-                this.enterCampaign();
+                const b = this.battle;
+                if (this.battleFrom === 'sandbox')
+                    this.enterSandbox();
+                else {
+                    this.enterCampaign();
+                    if (b.spec.nodeId !== undefined) {
+                        // back on the map, looking at the node that was fought over
+                        const n = this.camp.nodes[b.spec.nodeId];
+                        this.mapSel = n.id;
+                        this.mapX = n.x;
+                        this.mapY = n.y;
+                        this.clampMap();
+                        if (b.result === 'win') {
+                            const t = this.camp.territories[n.territory];
+                            this.banner(`${n.name.toUpperCase()} TAKEN`, n.type === 'castle' ? `${t.name} is yours` : 'the frontier moves', '#4fe08a');
+                        }
+                    }
+                }
             }
             this.input.endTick();
             return;
@@ -10833,10 +12051,14 @@ class Game {
             weapon: p.weapon.id, armor: p.armor.id, talents: p.talents,
             potions: p.potions, ethers: p.ethers,
             hero: this.heroStyle, blade: this.bladeStyle,
+            war: this.camp.save(),
         });
     }
     resetSave() {
         writeSave(freshSave());
+        this.camp.reset();
+        this.mapSel = -1;
+        this.mapZoom = this.mapZoomTo = 0;
         this.enemies.length = 0;
         this.player = new Player();
         applySave(this.player, loadSave());
@@ -10943,6 +12165,7 @@ function buildDebugPanel(g) {
         + '<button data-act="upgrade">+1 rank all upgrades</button>'
         + '<button data-act="kill">Clear enemies</button>'
         + '<button data-act="mass">100 v 100 minions</button>'
+        + '<button data-act="sandbox">Battle list (one of each)</button>'
         + '<button data-act="mats">+50 all materials</button>'
         + '<button data-act="sp">+10 SP</button>'
         + '<button data-act="god">God mode: off</button>'
@@ -10994,6 +12217,9 @@ function buildDebugPanel(g) {
                     for (let i = 0; i < g.army.cap; i++)
                         if (g.army.alive[i] && g.army.team[i] === TEAM_ENEMY)
                             g.army.hurt(g, i, 999999, 0, 0, false);
+                    break;
+                case 'sandbox':
+                    g.enterSandbox();
                     break;
                 case 'mass':
                     if (g.screen === 'battle')

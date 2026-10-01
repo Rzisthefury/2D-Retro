@@ -23,11 +23,162 @@ No dependencies, no bundler, nothing to install.
 | `src/items.ts` | materials, weapon/armour tiers, recipes |
 | `src/talents.ts` | Blade / Arcana / Survival talents, bought with skill points |
 | `src/army.ts` | the minion sim: typed-array slots, uniform grid, minion AI, arrows, `MinionRef`, reserves, orders, rout |
+| `src/campaign.ts` | the continent: territories, nodes, roads (data), borders, road paths, ownership, the frontier rule, garrisons and each node's battle spec |
 | `src/battle.ts` | battles: spec, seeded layouts for all eight types, `Structure` (houses, walls, gates, throne, wagons, rings, cell), zones and doors for walled layouts, objectives, scenery palettes, the stub's battle list |
 | `src/music.ts` | AF's adaptive score |
 | `src/entities.ts` | `Player`, `Enemy` (with boss AI), `Projectile`, `Pickup` |
-| `src/render.ts` | battlefield, characters, VFX, HUD, pause menu, title |
-| `src/main.ts` | `Game`: loop, screens (`title`, `campaign` stub, `battle`), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
+| `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
+| `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
+
+# Phase 6: the campaign map
+
+**What changed**
+
+- **New `src/campaign.ts`** holds the Verdant Reach as hand-authored data:
+  - a 5×4 grid of border vertices;
+  - 12 territories (name, tier, scenery);
+  - 64 nodes (type, territory, position, name);
+  - 69 roads;
+  - 3 rivers.
+- Each edge of the borders and coast gets a fixed wiggle keyed to that
+  edge, so the lines look drawn and both neighbours always agree.
+- Territory adjacency comes from shared edges. Shortest road paths between
+  all nodes are worked out at load (for armies in Phase 8).
+- **Start (PLAN 4):** you hold the Last Camp (a level-1 castle and the
+  village of Emberfield). The Dominion holds the other 11 territories:
+  - each has 1 castle, 1 keep, 1 outpost and 2–3 villages;
+  - tiers run 1–5 from the south-west to Thorne's Seat, the capital;
+  - starting levels rise with tier (`WAR.castleStartLevel`,
+    `WAR.nodeStartLevel`).
+- **The map screen** (`campaign`; New Game / Continue land here):
+  - **Art:** sea with shallows, land tinted by scenery, forests, mountains,
+    rivers, dashed borders, the coastline and bowed roads. It's drawn once
+    to an offscreen layer.
+  - **Ownership:** a blue or red wash shows who holds each territory (the
+    holder of its castle).
+  - **Frontier:** territories you can strike into get a pulsing gold edge,
+    and the nodes in them a pulsing ring.
+  - **Node icons:** the shape is the type (castle with banner, keep,
+    village, watchtower), the colour is the owner, and pips show the level.
+  - **Labels:** territory names and tiers sit where they cover the fewest
+    icons. Node names show at close-up or when a node is selected.
+  - **Top bar:** gold, warband, skill points, territories held.
+- **Controls:**
+  - Two zooms, whole continent and close-up: wheel, pinch, Z, or L / LT.
+  - Pan: drag, the stick or WASD.
+  - Pick a node: click or tap it, or use arrows / d-pad to step to the
+    nearest node that way.
+  - Enter attacks. Esc closes the panel, then goes to the title.
+- **Node panel** (shared geometry `MAP_PANEL` / `MAP_BTN`, so drawing and
+  hit-testing agree):
+  - For a Dominion node: type, level, territory, tier, the battle it
+    gives, battle tier, defenders, reinforcements, and why (keep +50% and
+    iron gate, thinning, the outpost's +1 tier).
+  - **Attack** is enabled only on the frontier.
+  - Your own nodes say the economy arrives in Phases 7–8.
+- **The frontier rule (PLAN 5.1):** you can attack an enemy node if you
+  hold any node in its territory, or hold (its castle) a territory
+  bordering it.
+- **Attack → battle → result → ownership:**
+  - A node builds its battle spec:
+    - type from the node;
+    - tier from the territory, +1 for castle/keep while the Dominion holds
+      the outpost;
+    - its scenery;
+    - a seed from the node, so it always lays out the same;
+    - its garrison and the `WAR.battleReinforce` reinforcements;
+    - houses = 2 + level;
+    - a named Captain or Lord;
+    - for castles, iron gate while the keep is theirs and gate HP ×1 /
+      1.5 / 2.2 by level.
+  - **Garrisons:**
+    - castles 40 / 80 / 140 by level, +50% while the keep is theirs, −15%
+      per village or outpost you hold there (max −60%);
+    - keeps 50 + 0 / 10 / 20;
+    - villages 30 + 10 a level;
+    - outposts 50.
+  - A win flips the node to you at max(1, level − 1) (PLAN 5.3). The
+    results screen says so, and you're back on the map looking at it with
+    a "TAKEN" banner. Losing or withdrawing leaves it unchanged.
+- **Saves** now carry the war (owner and level per node). A war save that
+  doesn't fit the continent is dropped for a fresh war.
+- The Phase 4–5 battle list is now a **debug screen** (tuning panel →
+  "Battle list"); the older test suites use it.
+- New `WAR` keys: `startTerritory`, `capitalTerritory`,
+  `castleStartLevel`, `nodeStartLevel`, the garrison keys,
+  `keepGarrisonBonus`, `thinPerNode`, `thinMax`, `castleGateLevel`, the
+  map wiggle keys, `mapZoomNear`, `mapPanSpeed`, `mapZoomTime` and
+  `mapNodeTap`.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13. Phase 6
+suite 31/31.
+
+- **Layout:**
+  - 12 territories and 64 nodes.
+  - Last Camp = castle + village, both yours; the rest are Dominion, each
+    with castle / keep / outpost / 2–3 villages.
+  - Tiers rise with road distance from the start, and the capital is
+    tier 5.
+- **DONE: every node is reachable by road.** BFS from the Last Camp
+  reaches 64/64, all 4096 node pairs have a path, and a path's hops are
+  real roads.
+- **DONE: frontier rule:**
+  - At the start, exactly Millbrook Vale and Greywatch March are open,
+    every node in them.
+  - Taking Greywatch's castle opened Thornwall and Hollin Reach.
+  - Holding one village deep in Saltmarsh opened Saltmarsh but not Ashfen
+    beyond it.
+  - Your own nodes are never targets.
+- **Garrison math, Millbrook Castle (L1):**
+  - 60 with the keep theirs; 40 once the keep is taken;
+  - then 34, 28 and 22 as you take 1, 2 and 3 villages/outposts;
+  - iron gate on, then off when the keep falls;
+  - battle tier 2 while their outpost stands, 1 after.
+- **Mouse:**
+  - Clicking a node opened its panel; Attack started an outpost capture
+    for that node.
+  - A win flipped it to you, it was saved, and you came back to the map
+    with it selected and a "TAKEN" banner.
+  - Captured nodes came over a level down (L3 → 2, L2 → 1).
+- **Lose and withdraw:** both returned to the map with the node unchanged.
+- **Out of reach:** Ravenmoor Castle's Attack was disabled, and Enter only
+  explained why.
+- **Keyboard:** Esc closed the panel; arrows picked and stepped between
+  nodes; Z zoomed in; WASD panned; Esc with nothing selected went to the
+  title.
+- **Mouse drag and wheel:** dragging panned without selecting, and the
+  wheel zoomed out.
+- **Taking a castle:** territories went 1 → 2 with "Greywatch March is
+  yours". After a page reload, Continue showed the same map.
+- A corrupt war save gave a fresh war, no crash.
+- Map drawing costs p50 0.8 ms, p95 2.2 ms per frame on desktop.
+- **DONE, phone:**
+  - All 64 nodes selected with a real tap on their icon at the
+    whole-continent zoom.
+  - Tap a node → panel → tap Attack → battle → win → tap the results →
+    the node is yours.
+  - A two-finger pinch zoomed in; a one-finger drag panned without
+    selecting.
+
+**Regressions:** Phase 0 30/30, Phase 1 17/17, Phase 2 23/23, Phase 3
+24/24, Phase 4 24/24, Phase 5 46/46 functional (timing 7/8 in band on a
+single run). The Phase 4 and 5 suites now start their battles from the
+debug battle list.
+
+**Assumed / not checked:**
+- **Phone text size.** In this page layout an iPhone 13 shows the game at
+  0.63 CSS px per logical px. At the whole-continent zoom, territory names
+  are about 6 CSS px tall and the closest nodes 25 CSS px apart; close-up
+  is about 2.6× that.
+  - Screenshots at the phone's 3× density read clearly, but on a real
+    phone the overview's names will be small; pinching in is the
+    readable view.
+- **Garrisons I chose (*default*):** village 30 + 10/level, outpost 50,
+  keep 50 + PLAN's bonus. The PLAN only fixes castles and the keep bonus.
+- Phase 7 is where thinning gets its full verification, with the economy.
+- Thorne's Seat's name clips one village icon at the overview zoom.
+- Gear, talents and the pause-menu tabs aren't on the map yet (the PLAN
+  7.1 tabs come with later phases); they still open in battle with Tab.
 
 # Phase 5: outpost, keep, castle siege, convoy, defense, rescue
 

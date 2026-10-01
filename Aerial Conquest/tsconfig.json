@@ -22,6 +22,7 @@
     "src/talents.ts",
     "src/army.ts",
     "src/battle.ts",
+    "src/campaign.ts",
     "src/music.ts",
     "src/entities.ts",
     "src/render.ts",

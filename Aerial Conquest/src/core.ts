@@ -71,7 +71,7 @@ type Action =
   | 'up' | 'down' | 'left' | 'right'
   | 'confirm' | 'cancel'
   | 'spell1' | 'spell2' | 'spell3' | 'spell4' | 'spell5'
-  | 'item' | 'pause' | 'debug' | 'restart' | 'mute' | 'back' | 'command';
+  | 'item' | 'pause' | 'debug' | 'restart' | 'mute' | 'back' | 'command' | 'zoom';
 
 const KEYMAP: Record<string, Action> = {
   KeyJ: 'attack', Space: 'jump', KeyK: 'jump', KeyL: 'lock',
@@ -79,7 +79,7 @@ const KEYMAP: Record<string, Action> = {
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
   Enter: 'confirm', Escape: 'cancel', Backspace: 'cancel',
   Digit1: 'spell1', Digit2: 'spell2', Digit3: 'spell3', Digit4: 'spell4', Digit5: 'spell5',
-  KeyE: 'item', KeyQ: 'command', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back',
+  KeyE: 'item', KeyQ: 'command', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back', KeyZ: 'zoom',
 };
 
 // Movement is read separately so WASD can coexist with the arrow-key menu.
@@ -112,6 +112,12 @@ class InputState {
   radial = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
   /** Set on release of the touch radial: the final offset from where it opened. Game consumes it. */
   radialRelease: { dx: number; dy: number } | null = null;
+  // map gestures (Phase 6): drag to pan, pinch or wheel to zoom; a click is a press and release that barely moved
+  private ptrs = new Map<number, { x: number; y: number; sx: number; sy: number; moved: boolean }>();
+  private pinchD = 0;
+  pan = { x: 0, y: 0 };                   // drag since last read (logical px)
+  zoomSteps = 0;                          // wheel notches / pinch steps since last read: + in, - out
+  lastClick: { x: number; y: number } | null = null;
   /** Debug autopilot's stick (Game.botDrive), when it is driving. */
   bot: { x: number; y: number } | null = null;
 
@@ -160,6 +166,8 @@ class InputState {
     canvas.addEventListener('pointerdown', (e) => {
       const p = this.toLogical(e);
       this.lastTap = { x: p.x, y: p.y };
+      this.ptrs.set(e.pointerId, { x: p.x, y: p.y, sx: p.x, sy: p.y, moved: false });
+      if (this.ptrs.size === 2) { const [a, b] = [...this.ptrs.values()]; this.pinchD = Math.hypot(a.x - b.x, a.y - b.y); }
       if (this.uiMode) return;            // menus read lastTap instead
       if (e.pointerType === 'mouse' && !IS_TOUCH) return;  // no thumbstick for a mouse
       e.preventDefault();
@@ -193,6 +201,21 @@ class InputState {
     }, { passive: false });
 
     const move = (e: PointerEvent) => {
+      const tp = this.ptrs.get(e.pointerId);
+      if (tp) {
+        const p = this.toLogical(e);
+        if (this.ptrs.size === 1) {
+          if (Math.hypot(p.x - tp.sx, p.y - tp.sy) > 8) tp.moved = true;
+          if (tp.moved && this.uiMode) { this.pan.x += p.x - tp.x; this.pan.y += p.y - tp.y; }
+        } else if (this.ptrs.size === 2) {
+          tp.moved = true;
+          tp.x = p.x; tp.y = p.y;
+          const [a, b] = [...this.ptrs.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+          if (this.pinchD > 0 && d / this.pinchD > 1.3) { this.zoomSteps++; this.pinchD = d; }
+          else if (this.pinchD > 0 && d / this.pinchD < 0.77) { this.zoomSteps--; this.pinchD = d; }
+        }
+        tp.x = p.x; tp.y = p.y;
+      }
       if (this.radial.active && e.pointerId === this.radial.id) {
         const p = this.toLogical(e);
         this.radial.dx = p.x - this.radial.ox; this.radial.dy = p.y - this.radial.oy;
@@ -214,6 +237,12 @@ class InputState {
     canvas.addEventListener('pointermove', move, { passive: false });
 
     const up = (e: PointerEvent) => {
+      const tp = this.ptrs.get(e.pointerId);
+      if (tp) {
+        if (!tp.moved && this.ptrs.size === 1) this.lastClick = { x: tp.x, y: tp.y };
+        this.ptrs.delete(e.pointerId);
+        if (this.ptrs.size < 2) this.pinchD = 0;
+      }
       if (this.radial.active && e.pointerId === this.radial.id) {
         this.radialRelease = { dx: this.radial.dx, dy: this.radial.dy };
         this.radial.active = false; this.radial.id = -1;
@@ -228,6 +257,11 @@ class InputState {
     canvas.addEventListener('pointerup', up);
     canvas.addEventListener('pointercancel', up);
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('wheel', (e) => {
+      if (!this.uiMode) return;
+      e.preventDefault();
+      this.zoomSteps += e.deltaY < 0 ? 1 : -1;
+    }, { passive: false });
   }
 
   /** Holding ATK keeps the combo going without machine-gun tapping. */
@@ -239,6 +273,11 @@ class InputState {
   }
 
   touchHeld(id: string): boolean { return this.litBtns.has(id); }
+
+  /** Read and clear the drag, zoom steps and click since last read (the campaign map). */
+  takePan(): { x: number; y: number } { const p = { ...this.pan }; this.pan.x = this.pan.y = 0; return p; }
+  takeZoom(): number { const z = this.zoomSteps; this.zoomSteps = 0; return z; }
+  takeClick(): { x: number; y: number } | null { const c = this.lastClick; this.lastClick = null; return c; }
 
   /** Read and clear the most recent tap, for whichever UI is on screen. */
   takeTap(): { x: number; y: number } | null {

@@ -48,6 +48,7 @@ class Renderer {
     this.bladeStyle = g.bladeStyle;
     c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     c.clearRect(0, 0, VIEW_W, VIEW_H);
+    if (g.screen === 'campaign') { this.drawMap(c, g); return; }
 
     c.save();
     const sh = g.shakeAmount;
@@ -325,18 +326,390 @@ class Renderer {
     c.restore();
   }
 
-  /** The campaign stub (Phase 4): a list of battles until the map exists (Phase 6). */
-  private drawCampaign(c: CanvasRenderingContext2D, g: Game) {
+  /* ------------------------------------------------------------ the map */
+
+  /** The map's unchanging art (sea, land, forests, mountains, rivers, borders, roads), drawn once. */
+  private mapLayer: HTMLCanvasElement | null = null;
+  private static readonly MAP_RES = 0.75;   // layer px per map unit
+
+  private buildMapLayer(camp: Campaign): HTMLCanvasElement {
+    const K = Renderer.MAP_RES;
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil(CONTINENT.w * K); cv.height = Math.ceil(CONTINENT.h * K);
+    const c = cv.getContext('2d')!;
+    c.scale(K, K);
+    const rng = seededRng(424242);
+    const path = (poly: { x: number; y: number }[]) => { c.beginPath(); poly.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); c.closePath(); };
+    const line = (pts: { x: number; y: number }[]) => { c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); };
+
+    // sea, with wave marks
+    const sea = c.createLinearGradient(0, 0, 0, CONTINENT.h);
+    sea.addColorStop(0, '#1b3550'); sea.addColorStop(1, '#22496a');
+    c.fillStyle = sea; c.fillRect(0, 0, CONTINENT.w, CONTINENT.h);
+    c.strokeStyle = 'rgba(160,200,230,0.18)'; c.lineWidth = 2.2;
+    for (let k = 0; k < 260; k++) {
+      const x = rng() * CONTINENT.w, y = rng() * CONTINENT.h;
+      c.beginPath(); c.arc(x, y, 9, Math.PI * 1.15, Math.PI * 1.85); c.arc(x + 17, y, 9, Math.PI * 1.15, Math.PI * 1.85); c.stroke();
+    }
+    // shallows around the coast
+    for (const w of [70, 44, 22]) {
+      c.strokeStyle = `rgba(110,170,195,${w === 70 ? 0.12 : w === 44 ? 0.16 : 0.22})`; c.lineWidth = w; c.lineJoin = 'round';
+      for (const t of camp.territories) { path(t.poly); c.stroke(); }
+    }
+    // land, by scenery
+    const land: Record<Scenery, [string, string]> = { forest: ['#6d8a4b', '#5f7c42'], coast: ['#93a462', '#86985a'], ruins: ['#8c8467', '#7e7759'] };
+    for (const t of camp.territories) {
+      path(t.poly); c.fillStyle = land[t.scenery][0]; c.fill();
+      c.save(); path(t.poly); c.clip();
+      // speckled ground
+      c.fillStyle = land[t.scenery][1];
+      for (let k = 0; k < 500; k++) { c.beginPath(); c.arc(t.cx + (rng() - 0.5) * 760, t.cy + (rng() - 0.5) * 560, 2 + rng() * 6, 0, Math.PI * 2); c.fill(); }
+      c.restore();
+    }
+    // a spot for decor: inside its territory, clear of nodes and roads
+    const nearRoad = (x: number, y: number, r: number) => camp.roads.some(([a, b]) => {
+      const A = camp.nodes[a], B = camp.nodes[b], vx = B.x - A.x, vy = B.y - A.y, L = vx * vx + vy * vy;
+      const t = clamp(((x - A.x) * vx + (y - A.y) * vy) / L, 0, 1);
+      return (A.x + vx * t - x) ** 2 + (A.y + vy * t - y) ** 2 < r * r;
+    });
+    const spot = (t: Territory, clear: number) => {
+      for (let tries = 0; tries < 40; tries++) {
+        const x = t.cx + (rng() - 0.5) * 640, y = t.cy + (rng() - 0.5) * 480;
+        if (!Campaign.inPoly(x, y, t.poly)) continue;
+        if (t.poly.some((p) => (p.x - x) ** 2 + (p.y - y) ** 2 < 40 * 40)) continue;
+        if (camp.nodes.some((n) => (n.x - x) ** 2 + (n.y - y) ** 2 < clear * clear)) continue;
+        if (nearRoad(x, y, 34)) continue;
+        return { x, y };
+      }
+      return null;
+    };
+    // rivers, under everything that stands up
+    for (const r of CONTINENT.rivers) {
+      const pts = r.map(([x, y]) => ({ x, y }));
+      for (let i = 0; i < pts.length - 1; i++) {
+        c.strokeStyle = '#3f7ea3'; c.lineCap = 'round'; c.lineWidth = 6 + i * 2.2;
+        line([pts[i], pts[i + 1]]); c.stroke();
+        c.strokeStyle = 'rgba(170,215,235,0.45)'; c.lineWidth = 2;
+        line([pts[i], pts[i + 1]]); c.stroke();
+      }
+    }
+    // mountains (ruins and the borders' high ground) and forests
+    const mountain = (x: number, y: number, s: number) => {
+      c.fillStyle = '#6b6252'; c.beginPath(); c.moveTo(x - s, y); c.lineTo(x, y - s * 1.25); c.lineTo(x + s, y); c.closePath(); c.fill();
+      c.fillStyle = '#8f8670'; c.beginPath(); c.moveTo(x - s, y); c.lineTo(x, y - s * 1.25); c.lineTo(x - s * 0.1, y); c.closePath(); c.fill();
+      c.fillStyle = '#ece9df'; c.beginPath(); c.moveTo(x - s * 0.32, y - s * 0.85); c.lineTo(x, y - s * 1.25); c.lineTo(x + s * 0.32, y - s * 0.85); c.lineTo(x + s * 0.08, y - s * 0.78); c.closePath(); c.fill();
+      c.strokeStyle = 'rgba(40,34,26,0.55)'; c.lineWidth = 2;
+      c.beginPath(); c.moveTo(x - s, y); c.lineTo(x, y - s * 1.25); c.lineTo(x + s, y); c.stroke();
+    };
+    const tree = (x: number, y: number, s: number) => {
+      c.fillStyle = 'rgba(20,30,15,0.35)'; c.beginPath(); c.ellipse(x + 2, y + s * 0.7, s, s * 0.45, 0, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#2f5a2c'; c.beginPath(); c.arc(x, y, s, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#3f7339'; c.beginPath(); c.arc(x - s * 0.3, y - s * 0.3, s * 0.55, 0, Math.PI * 2); c.fill();
+    };
+    for (const t of camp.territories) {
+      const ranges = t.scenery === 'ruins' ? 4 : t.scenery === 'forest' ? 1 : 1;
+      const woods = t.scenery === 'forest' ? 6 : t.scenery === 'coast' ? 3 : 2;
+      const peaks: { x: number; y: number; s: number }[] = [];
+      for (let k = 0; k < ranges; k++) {
+        const p = spot(t, 120);
+        if (!p) continue;
+        const n = 3 + Math.floor(rng() * 4), ang = rng() * Math.PI;
+        for (let m = 0; m < n; m++) {
+          const d = (m - n / 2) * 34;
+          const x = p.x + Math.cos(ang) * d + (rng() - 0.5) * 16, y = p.y + Math.sin(ang) * d * 0.5 + (rng() - 0.5) * 12;
+          if (Campaign.inPoly(x, y, t.poly) && !camp.nodes.some((nd) => (nd.x - x) ** 2 + (nd.y - y) ** 2 < 70 * 70) && !nearRoad(x, y, 28)) peaks.push({ x, y, s: 20 + rng() * 16 });
+        }
+      }
+      const trees: { x: number; y: number; s: number }[] = [];
+      for (let k = 0; k < woods; k++) {
+        const p = spot(t, 90);
+        if (!p) continue;
+        for (let m = 0; m < 14; m++) {
+          const x = p.x + (rng() - 0.5) * 120, y = p.y + (rng() - 0.5) * 80;
+          if (Campaign.inPoly(x, y, t.poly) && !camp.nodes.some((nd) => (nd.x - x) ** 2 + (nd.y - y) ** 2 < 55 * 55) && !nearRoad(x, y, 22)) trees.push({ x, y, s: 8 + rng() * 6 });
+        }
+      }
+      // back to front
+      const all = [...peaks.map((p) => ({ ...p, m: true })), ...trees.map((p) => ({ ...p, m: false }))].sort((a, b) => a.y - b.y);
+      for (const d of all) if (d.m) mountain(d.x, d.y, d.s); else tree(d.x, d.y, d.s);
+    }
+    // inland borders: dashed ink
+    c.setLineDash([14, 10]); c.lineCap = 'round';
+    for (const b of camp.borders) {
+      c.strokeStyle = 'rgba(52,38,24,0.55)'; c.lineWidth = 4; line(b.pts); c.stroke();
+    }
+    c.setLineDash([]);
+    // coastline
+    c.strokeStyle = '#2d2a20'; c.lineWidth = 4; c.lineJoin = 'round';
+    for (const p of camp.coast) { line(p); c.stroke(); }
+    // roads: packed earth with a darker edge, gently bowed
+    for (const pass of [0, 1]) {
+      for (const [a, b] of camp.roads) {
+        const A = camp.nodes[a], B = camp.nodes[b];
+        const mx = (A.x + B.x) / 2 + (B.y - A.y) * 0.08, my = (A.y + B.y) / 2 - (B.x - A.x) * 0.08;
+        c.beginPath(); c.moveTo(A.x, A.y); c.quadraticCurveTo(mx, my, B.x, B.y);
+        c.strokeStyle = pass ? '#c9ad7a' : '#5e4a2e'; c.lineWidth = pass ? 6 : 10; c.stroke();
+      }
+    }
+    return cv;
+  }
+
+  /** The campaign map (PLAN 7.1): the continent, who holds what, the nodes and the selected node's panel. */
+  private drawMap(c: CanvasRenderingContext2D, g: Game) {
+    const camp = g.camp;
+    if (!this.mapLayer) this.mapLayer = this.buildMapLayer(camp);
+    const s = g.mapScale(), K = Renderer.MAP_RES;
+    c.fillStyle = '#1b3550'; c.fillRect(0, 0, VIEW_W, VIEW_H);
+    const o = g.mapToScreen(0, 0);
+    c.drawImage(this.mapLayer, o.x, o.y, CONTINENT.w * s, CONTINENT.h * s);
+    void K;
+
+    c.save();
+    c.translate(o.x, o.y); c.scale(s, s);
+    // who holds each territory (its castle): a wash of their colour
+    for (const t of camp.territories) {
+      const mine = camp.holds(t.id, 'player');
+      c.beginPath(); t.poly.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); c.closePath();
+      c.fillStyle = mine ? 'rgba(70,140,255,0.26)' : 'rgba(170,30,45,0.14)';
+      c.fill();
+      // the frontier: territories you can strike into get a bright edge
+      if (!mine && t.nodes.some((n) => camp.canAttack(n))) {
+        c.strokeStyle = `rgba(255,213,74,${0.45 + Math.sin(g.time * 3) * 0.2})`; c.lineWidth = 3 / s; c.stroke();
+      }
+    }
+    c.restore();
+
+    // territory names
+    c.save();
+    c.textAlign = 'center';
+    for (const t of camp.territories) {
+      const p = g.mapToScreen(t.cx, t.cy);
+      const size = Math.round(lerp(10, 17, g.mapZoom));
+      c.font = `800 ${size}px Georgia, 'Times New Roman', serif`;
+      c.lineWidth = 3; c.strokeStyle = 'rgba(25,20,12,0.7)';
+      const label = t.name.toUpperCase();
+      c.strokeText(label, p.x, p.y); c.fillStyle = 'rgba(245,232,200,0.92)'; c.fillText(label, p.x, p.y);
+      c.font = `600 ${size - 3}px Georgia, serif`;
+      c.fillStyle = 'rgba(245,232,200,0.75)';
+      c.strokeText(`tier ${t.tier}`, p.x, p.y + size); c.fillText(`tier ${t.tier}`, p.x, p.y + size);
+    }
+    c.restore();
+
+    // nodes
+    for (const n of camp.nodes) this.drawMapNode(c, g, n);
+    this.drawMapHud(c, g);
+  }
+
+  /** One node icon: type by shape, owner by colour, level by pips; attackable ones pulse. */
+  private drawMapNode(c: CanvasRenderingContext2D, g: Game, n: MapNode) {
+    const p = g.mapToScreen(n.x, n.y);
+    if (p.x < -40 || p.x > VIEW_W + 40 || p.y < -40 || p.y > VIEW_H + 40) return;
+    const k = lerp(0.7, 1.25, g.mapZoom);
+    const mine = n.owner === 'player';
+    const body = mine ? '#4f8fe0' : '#b83a44', dark = mine ? '#1d3b66' : '#4a1418', hi = mine ? '#9fd0ff' : '#ff9a8a';
+    const attackable = g.camp.canAttack(n);
+    c.save();
+    c.translate(p.x, p.y); c.scale(k, k);
+    if (attackable) {
+      c.strokeStyle = `rgba(255,213,74,${0.5 + Math.sin(g.time * 4 + n.id) * 0.3})`; c.lineWidth = 2.5;
+      c.beginPath(); c.arc(0, 0, 17, 0, Math.PI * 2); c.stroke();
+    }
+    if (g.mapSel === n.id) {
+      c.strokeStyle = '#ffffff'; c.lineWidth = 3;
+      c.beginPath(); c.arc(0, 0, 21, 0, Math.PI * 2); c.stroke();
+    }
+    c.fillStyle = 'rgba(0,0,0,0.35)'; c.beginPath(); c.ellipse(0, 9, 14, 5, 0, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = dark; c.lineWidth = 1.6; c.lineJoin = 'round';
+    const box = (x: number, y: number, w: number, h: number) => { c.fillRect(x, y, w, h); c.strokeRect(x, y, w, h); };
+    c.fillStyle = body;
+    switch (n.type) {
+      case 'castle': {
+        box(-12, -10, 24, 18);
+        box(-15, -18, 8, 26); box(7, -18, 8, 26);
+        c.fillStyle = hi; c.fillRect(-15, -20, 8, 3); c.fillRect(7, -20, 8, 3);
+        c.fillStyle = dark; c.fillRect(-3, -1, 6, 9);
+        // banner
+        c.strokeStyle = '#2a1e10'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(0, -10); c.lineTo(0, -28); c.stroke();
+        c.fillStyle = mine ? '#ffd54a' : '#1a1a1a'; c.beginPath(); c.moveTo(0, -28); c.lineTo(13, -24); c.lineTo(0, -20); c.fill();
+        break;
+      }
+      case 'keep':
+        box(-10, -12, 20, 20);
+        c.fillStyle = hi; for (let x = -10; x < 10; x += 6) c.fillRect(x, -15, 4, 3);
+        c.fillStyle = dark; c.fillRect(-3, 0, 6, 8);
+        break;
+      case 'village':
+        box(-13, -4, 11, 10); box(2, -7, 12, 13);
+        c.fillStyle = mine ? '#c9e4ff' : '#e0b070';
+        c.beginPath(); c.moveTo(-15, -4); c.lineTo(-7.5, -11); c.lineTo(0, -4); c.closePath(); c.fill(); c.stroke();
+        c.beginPath(); c.moveTo(0, -7); c.lineTo(8, -15); c.lineTo(16, -7); c.closePath(); c.fill(); c.stroke();
+        break;
+      case 'outpost':
+        box(-5, -20, 10, 28);
+        c.fillStyle = hi; c.fillRect(-7, -23, 14, 4);
+        c.fillStyle = dark; c.fillRect(-2, -12, 4, 5);
+        break;
+    }
+    // level pips
+    if (n.type !== 'outpost') {
+      for (let i = 0; i < n.level; i++) {
+        c.fillStyle = '#ffd54a'; c.strokeStyle = '#3a2a08'; c.lineWidth = 1;
+        c.beginPath(); c.arc(-6 + i * 6, 14, 2.4, 0, Math.PI * 2); c.fill(); c.stroke();
+      }
+    }
+    c.restore();
+    // names when close (or selected); far out, the territory names do the talking
+    if (g.mapZoom > 0.5 || g.mapSel === n.id) {
+      c.save();
+      c.textAlign = 'center';
+      c.font = `700 ${n.type === 'castle' ? 11 : 10}px ui-monospace, Menlo, Consolas, monospace`;
+      c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,0.75)';
+      c.strokeText(n.name, p.x, p.y + 28 * k); c.fillStyle = mine ? '#cfe6ff' : '#ffe1d6'; c.fillText(n.name, p.x, p.y + 28 * k);
+      c.restore();
+    }
+  }
+
+  /** Toasts and banners (battle HUD and map). */
+  private drawNotices(c: CanvasRenderingContext2D, g: Game) {
+    // ---- toast
+    if (g.toastT > 0) {
+      c.save();
+      c.globalAlpha = clamp(g.toastT / 0.5, 0, 1);
+      c.textAlign = 'center';
+      c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
+      c.fillStyle = '#ffd54a';
+      c.fillText(g.toastMsg, VIEW_W / 2, VIEW_H - 150);
+      c.restore();
+    }
+
+    // ---- wave banner
+    if (g.bannerT > 0) {
+      c.save();
+      const t = clamp(g.bannerT / 1.6, 0, 1);
+      c.globalAlpha = Math.min(1, t * 2);
+      c.textAlign = 'center';
+      c.font = '900 46px ui-monospace, Menlo, Consolas, monospace';
+      c.strokeStyle = 'rgba(0,0,0,0.8)';
+      c.lineWidth = 7;
+      c.strokeText(g.bannerMsg, VIEW_W / 2, VIEW_H / 2 - 40);
+      c.fillStyle = g.bannerColor;
+      c.fillText(g.bannerMsg, VIEW_W / 2, VIEW_H / 2 - 40);
+      if (g.bannerSub) {
+        c.font = '700 15px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.text;
+        c.fillText(g.bannerSub, VIEW_W / 2, VIEW_H / 2 - 10);
+      }
+      c.restore();
+    }
+  }
+
+  /** The map's top bar, help line and the selected node's panel. */
+  private drawMapHud(c: CanvasRenderingContext2D, g: Game) {
+    const p = g.player, camp = g.camp;
+    c.save();
+    c.fillStyle = 'rgba(10,14,28,0.82)'; c.fillRect(0, 0, VIEW_W, MAP_BAR.h);
+    c.textAlign = 'left'; c.font = '900 17px Georgia, serif'; c.fillStyle = '#ffd54a';
+    c.fillText('THE VERDANT REACH', 16, 28);
+    c.font = '700 13px ui-monospace, Menlo, Consolas, monospace';
+    const items: [string, string][] = [
+      ['gold', String(p.gold)], ['warband', `${g.warbandCap()}`], ['SP', String(p.skillPoints)], ['territories', `${camp.territoriesHeld('player')} / ${camp.territories.length}`],
+    ];
+    let x = 260;
+    for (const [k, v] of items) {
+      c.fillStyle = PAL.dim; c.fillText(k, x, 27); x += c.measureText(k).width + 6;
+      c.fillStyle = PAL.text; c.fillText(v, x, 27); x += c.measureText(v).width + 22;
+    }
+    c.textAlign = 'center'; c.font = '600 11px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = 'rgba(232,236,247,0.75)';
+    const help = IS_TOUCH ? 'drag to pan  ·  pinch to zoom  ·  tap a node' : 'drag / WASD pan  ·  wheel / Z zoom  ·  arrows pick a node  ·  ENTER attack  ·  ESC title';
+    c.fillStyle = 'rgba(10,14,28,0.6)'; c.fillRect(0, VIEW_H - 24, VIEW_W, 24);
+    c.fillStyle = 'rgba(232,236,247,0.75)'; c.fillText(help, VIEW_W / 2, VIEW_H - 8);
+    c.restore();
+    if (g.mapSel >= 0) this.drawNodePanel(c, g, camp.nodes[g.mapSel]);
+    this.drawNotices(c, g);
+  }
+
+  /** The selected node's panel (PLAN 7.1). Buttons come from Game.mapButtons so taps and drawing agree. */
+  private drawNodePanel(c: CanvasRenderingContext2D, g: Game, n: MapNode) {
+    const camp = g.camp, t = camp.territories[n.territory];
+    const P = MAP_PANEL;
+    c.save();
+    c.fillStyle = 'rgba(12,16,30,0.92)';
+    this.roundRect(c, P.x, P.y, P.w, P.h, 10); c.fill();
+    c.strokeStyle = n.owner === 'player' ? '#5f9bff' : '#d0505a'; c.lineWidth = 2;
+    this.roundRect(c, P.x, P.y, P.w, P.h, 10); c.stroke();
+    let y = P.y + P.pad + 18;
+    const x = P.x + P.pad;
+    c.textAlign = 'left';
+    c.font = '900 18px Georgia, serif'; c.fillStyle = '#ffffff';
+    c.fillText(n.name, x, y); y += 20;
+    const typeName = { castle: 'Castle', keep: 'Keep', village: 'Village', outpost: 'Outpost' }[n.type];
+    c.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = n.owner === 'player' ? '#9fc8ff' : '#ff9a8a';
+    c.fillText(`${typeName}${n.type !== 'outpost' ? ` · level ${n.level}` : ''} · ${n.owner === 'player' ? 'yours' : 'Dominion'}`, x, y); y += 17;
+    c.fillStyle = PAL.dim;
+    c.fillText(`${t.name} · tier ${t.tier}`, x, y); y += 24;
+    const row = (k: string, v: string, col = PAL.text) => {
+      c.fillStyle = PAL.dim; c.font = '600 12px ui-monospace, Menlo, Consolas, monospace'; c.fillText(k, x, y);
+      c.textAlign = 'right'; c.fillStyle = col; c.font = '700 12px ui-monospace, Menlo, Consolas, monospace'; c.fillText(v, P.x + P.w - P.pad, y);
+      c.textAlign = 'left'; y += 19;
+    };
+    const note = (s: string, col = '#c7b8ff') => {
+      // wrapped to the panel (measured, PLAN 16)
+      c.fillStyle = col; c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
+      let lineText = '';
+      for (const w of s.split(' ')) {
+        const tryText = lineText ? lineText + ' ' + w : w;
+        if (c.measureText(tryText).width > P.w - P.pad * 2 && lineText) { c.fillText(lineText, x, y); y += 15; lineText = w; } else lineText = tryText;
+      }
+      if (lineText) { c.fillText(lineText, x, y); y += 17; }
+    };
+    if (n.owner === 'enemy') {
+      const kind = Campaign.battleKind(n), tier = camp.battleTier(n);
+      const names: Record<string, string> = { castle: 'Castle siege', keep: 'Keep assault', village: 'Village raid', outpost: 'Outpost capture' };
+      row('Battle', names[kind]);
+      row('Battle tier', String(tier), tier > t.tier ? '#ff9a8a' : PAL.text);
+      row('Defenders', String(camp.garrison(n)));
+      row('Reinforcements', `+${WAR.battleReinforce[kind]}`);
+      y += 4;
+      const keep = t.nodes.find((m) => m.type === 'keep'), op = t.nodes.find((m) => m.type === 'outpost');
+      if (n.type === 'castle') {
+        if (keep && keep.owner !== 'player') note('+50% garrison and an iron gate: their keep stands');
+        const thin = t.nodes.filter((m) => m.owner === 'player' && (m.type === 'village' || m.type === 'outpost')).length;
+        if (thin) note(`garrison thinned ${Math.round(Math.min(WAR.thinMax, WAR.thinPerNode * thin) * 100)}% by ${thin} node${thin > 1 ? 's' : ''} you hold`, '#9fe8b0');
+      }
+      if ((n.type === 'castle' || n.type === 'keep') && op && op.owner !== 'player') note('+1 tier of defenders: their watchtower stands');
+      if (!camp.canAttack(n)) note('out of reach: take a bordering territory first', '#ff9a8a');
+    } else {
+      row('Held by', 'you');
+      note('garrison, income, upgrades and armies', PAL.dim);
+      note('arrive with the war economy (Phase 7-8)', PAL.dim);
+    }
+    // buttons
+    const btns = g.mapButtons();
+    btns.forEach((b, i) => {
+      const at = g.mapButtonAt(i, btns.length);
+      const main = b.label === 'Attack';
+      c.fillStyle = !b.enabled ? 'rgba(60,60,70,0.6)' : main ? 'rgba(200,60,70,0.9)' : 'rgba(40,50,80,0.9)';
+      this.roundRect(c, at.x, at.y, MAP_BTN.w, MAP_BTN.h, 8); c.fill();
+      c.textAlign = 'center'; c.font = `900 ${main ? 16 : 14}px ui-monospace, Menlo, Consolas, monospace`;
+      c.fillStyle = b.enabled ? '#ffffff' : '#8a8a96';
+      c.fillText(b.label.toUpperCase(), at.x + MAP_BTN.w / 2, at.y + MAP_BTN.h / 2 + 5);
+    });
+    c.restore();
+  }
+
+  /** Debug battle list (the Phase 4-5 stub): one battle of each type. */
+  private drawSandbox(c: CanvasRenderingContext2D, g: Game) {
     c.save();
     c.fillStyle = 'rgba(6,8,14,0.9)';
     c.fillRect(0, 0, VIEW_W, VIEW_H);
     c.textAlign = 'center';
     c.font = '900 30px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.mpCharge;
-    c.fillText('THE VERDANT REACH', VIEW_W / 2, 92);
+    c.fillText('BATTLE LIST', VIEW_W / 2, 92);
     c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
-    c.fillText('campaign map stub — the illustrated map arrives in Phase 6', VIEW_W / 2, 116);
+    c.fillText('debug: one battle of each type (the campaign map is New Game / Continue)', VIEW_W / 2, 116);
     c.fillStyle = '#ffd54a';
     c.fillText(`treasury ${g.player.gold} gold  ·  warband ${g.warbandCap()}`, VIEW_W / 2, 140);
     const rows = g.campaignRows();
@@ -1905,7 +2278,7 @@ class Renderer {
 
   private drawHud(c: CanvasRenderingContext2D, g: Game) {
     if (g.screen === 'title') { this.drawTitle(c, g); return; }
-    if (g.screen === 'campaign') { this.drawCampaign(c, g); return; }
+    if (g.screen === 'sandbox') { this.drawSandbox(c, g); return; }
     // full-screen results: nothing of the HUD underneath (PLAN 16: early-return under overlays)
     if (g.battle.result) { this.drawResults(c, g); return; }
     const p = g.player;
@@ -1988,36 +2361,7 @@ class Renderer {
       c.restore();
     }
 
-    // ---- toast
-    if (g.toastT > 0) {
-      c.save();
-      c.globalAlpha = clamp(g.toastT / 0.5, 0, 1);
-      c.textAlign = 'center';
-      c.font = '800 15px ui-monospace, Menlo, Consolas, monospace';
-      c.fillStyle = '#ffd54a';
-      c.fillText(g.toastMsg, VIEW_W / 2, VIEW_H - 150);
-      c.restore();
-    }
-
-    // ---- wave banner
-    if (g.bannerT > 0) {
-      c.save();
-      const t = clamp(g.bannerT / 1.6, 0, 1);
-      c.globalAlpha = Math.min(1, t * 2);
-      c.textAlign = 'center';
-      c.font = '900 46px ui-monospace, Menlo, Consolas, monospace';
-      c.strokeStyle = 'rgba(0,0,0,0.8)';
-      c.lineWidth = 7;
-      c.strokeText(g.bannerMsg, VIEW_W / 2, VIEW_H / 2 - 40);
-      c.fillStyle = g.bannerColor;
-      c.fillText(g.bannerMsg, VIEW_W / 2, VIEW_H / 2 - 40);
-      if (g.bannerSub) {
-        c.font = '700 15px ui-monospace, Menlo, Consolas, monospace';
-        c.fillStyle = PAL.text;
-        c.fillText(g.bannerSub, VIEW_W / 2, VIEW_H / 2 - 10);
-      }
-      c.restore();
-    }
+    this.drawNotices(c, g);
 
     if (g.orderT > 0 && p.alive) {
       c.save();

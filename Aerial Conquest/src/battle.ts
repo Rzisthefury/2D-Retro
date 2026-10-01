@@ -30,6 +30,8 @@ interface BattleSpec {
   lordName?: string;                          // castle / rescue
   captainName?: string;                       // keep
   generalName?: string;                       // rescue: who you came for
+  gateMult?: number;                          // castle gate HP x (castle level, PLAN 5.2)
+  nodeId?: number;                            // the map node this battle is for (none: the debug battle list)
 }
 
 /** Ground colours per territory scenery (PLAN 10.1: the look comes from the territory). */
@@ -404,7 +406,7 @@ class Battle {
     this.wallV(ix, top + breach, cy - gap / 2, t); this.wallV(ix, cy + gap / 2, bot, t);
     this.wallH(ox, this.w, top, t); this.wallH(ox, this.w, bot, t);
     const iron = this.spec.ironGate ? WAR.ironGateMult : 1;
-    const gateHp = Math.round(WAR.gateHp * iron * TIER_SCALING.hpMultiplier(this.spec.tier));
+    const gateHp = Math.round(WAR.gateHp * iron * (this.spec.gateMult || 1) * TIER_SCALING.hpMultiplier(this.spec.tier));
     const outer = new Structure('gate', 'enemy', ox, cy + gap / 2, t + 8, gap, gateHp, 'Outer gate');
     const inner = new Structure('gate', 'enemy', ix, cy + gap / 2, t + 8, gap, gateHp, 'Inner gate');
     this.structures.push(outer, inner);
