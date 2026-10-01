@@ -1095,8 +1095,9 @@ class Renderer {
         row('Next convoy', `${Math.ceil(w.convoyT[n.id])} s`);
       } else if (n.type === 'keep') {
         row('Defense (sim)', `x${[1.5, 1.7, 2.0][n.level - 1]}`);
-        row('Defenders', `+${WAR.keepDefenders[n.level - 1]}`);
+        row('Defenders', `${troopTotal(w.defendersOf(n))} / ${w.militiaFull(n)}`);
       } else {
+        row('Militia', `${troopTotal(w.defendersOf(n))} / ${w.militiaFull(n)}`);
         note('outposts don\'t level; while you hold it, this territory\'s castle and keep fight a tier lower', PAL.dim);
       }
     }

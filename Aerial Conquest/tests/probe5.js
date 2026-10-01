@@ -12,12 +12,12 @@ const runs = +(process.argv[4] || 1);
   await page.goto(URL);
   await page.evaluate(() => localStorage.clear());
   await page.reload(); await new Promise((r) => setTimeout(r, 600));
-  await page.keyboard.press('Enter'); await new Promise((r) => setTimeout(r, 200));
+  await page.evaluate(() => { GAME.startNewGame(1, 'normal'); GAME.story = null; });
   for (const k of kinds) for (let r = 0; r < runs; r++) {
     const out = await page.evaluate(([k, god, upg]) => {
       const lordFirst = !k.endsWith('!'); k = k.replace('!', '');
       GAME.enterCampaign();
-      GAME.startBattle(window[k + 'Spec']());
+      GAME.battleFrom = 'sandbox'; GAME.startBattle(window[k + 'Spec']());
       GAME.autopilot = true; GAME.botLordFirst = lordFirst; GAME.god = god;
       if (upg) { const r = GAME.battle.spec.tier === 1 ? upg[0] : upg[1]; for (const u of Object.keys(GAME.player.upgrades)) GAME.player.upgrades[u] = r; GAME.player.refreshStats(true); }
       const log = [];

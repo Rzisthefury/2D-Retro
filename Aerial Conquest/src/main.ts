@@ -1479,6 +1479,8 @@ class Game {
     const kind = b.spec.kind;
     if (b.time < 0.1 && this.order === 'follow' && kind !== 'outpost' && kind !== 'rescue' && kind !== 'defense') this.issueOrder('charge');
     if (p.hp < p.stats.maxHp * 0.35 && p.potions > 0 && inp.frame % 30 === 0) inp.press('item');
+    // a competent player heals with Cure too (Phase 14: the autopilot is the balance harness's stand-in)
+    else if (p.hp < p.stats.maxHp * 0.5 && !p.charging && p.mp >= p.stats.maxMp * 0.99 && inp.frame % 30 === 0) inp.press('spell4');
 
     // the nearest hostile in the knight's way
     const near = (r: number, skip: Enemy | null = null): Combatant | null => {

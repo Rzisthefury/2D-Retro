@@ -170,11 +170,10 @@ class War {
   /* ------------------------------------------------------------- figures */
 
   static readonly INCOME = [20, 35, 55];          // PLAN 5.2 village gold / min
-  static readonly PRODUCTION = [6, 10, 16];       // castle troops / min
   static readonly UPGRADE: Record<'village' | 'castle' | 'keep', number[]> = { village: [150, 400], castle: [300, 800], keep: [250, 700] };
 
   income(n: MapNode): number { return n.type === 'village' ? War.INCOME[n.level - 1] : 0; }
-  production(n: MapNode): number { return n.type === 'castle' ? War.PRODUCTION[n.level - 1] : 0; }
+  production(n: MapNode): number { return n.type === 'castle' ? WAR.castleProduction[n.level - 1] : 0; }
   cap(n: MapNode): number { return WAR.castleGarrison[n.level - 1]; }
 
   /** Gold to raise a node a level (PLAN 5.2 x the tier multiplier), or 0 if it can't be. */
@@ -263,6 +262,14 @@ class War {
         }
       } else if (n.type === 'castle') {
         this.produce(n, dt, p);
+      }
+      // militia drifts back into your worn villages, outposts and keeps (Phase 14)
+      if (n.type !== 'castle') {
+        const g = this.nodeForce[n.id] || (this.nodeForce[n.id] = emptyReserve()), full = this.militiaFull(n);
+        if (troopTotal(g) < full) {
+          this.refill[n.id] = Math.min(1, this.refill[n.id] + WAR.militiaRefill / 60 * dt);
+          while (this.refill[n.id] >= 1 && troopTotal(g) < full) { g[this.nextType(g, 0)]++; this.refill[n.id] -= 1; }
+        }
       }
     }
     // the Dominion's convoys (its economy proper arrives with its campaign AI, Phase 9)
@@ -387,10 +394,20 @@ class War {
     }
   }
 
+  /** The militia a node of yours holds when full (Phase 14): villages and outposts and keeps; castles have garrisons. */
+  militiaFull(n: MapNode): number {
+    if (n.type === 'castle') return 0;
+    if (n.type === 'village') return WAR.militia.village + WAR.militiaPerLevel * (n.level - 1);
+    if (n.type === 'keep') return WAR.militia.keep + WAR.keepDefenders[n.level - 1];
+    return WAR.militia.outpost;
+  }
+
   /** A node changed hands: a captured castle starts with an empty garrison, a village with an empty store. */
   onCapture(n: MapNode) {
     this.awardSP(n);
     if (n.owner === 'player') this.stats.captured++;
+    // your new village, outpost or keep raises its militia at once (Phase 14)
+    if (n.owner === 'player' && n.type !== 'castle') { this.nodeForce[n.id] = this.recruitList(this.militiaFull(n), 0); this.refill[n.id] = 0; }
     // PLAN 8: grace - no offensive targets a territory for 90 s after you take its castle
     if (n.type === 'castle' && n.owner === 'player') this.grace[n.territory] = WAR.grace;
     if (n.type === 'castle') { this.garrison[n.id] = emptyReserve(); this.prod[n.id] = 0; this.sinceRam[n.id] = 0; this.mix[n.id] = 0; }
@@ -425,8 +442,11 @@ class War {
     const camp = this.camp, N = camp.nodes.length;
     const value: Record<NodeType, number> = { castle: 5, keep: 3, village: 2, outpost: 1 };
     let best: { from: number; target: number; size: number } | null = null, bs = -Infinity;
+    // Phase 14: never your last castle - losing it would leave a campaign nothing can recover
+    const lastCastle = camp.nodes.filter((m) => m.type === 'castle' && m.owner === 'player').length <= 1;
     for (const n of camp.nodes) {
       if (n.owner !== 'player' || this.grace[n.territory] > 0) continue;
+      if (lastCastle && n.type === 'castle') continue;
       if (this.musters.some((m) => m.target === n.id) || this.armies.some((a) => a.team === 'enemy' && a.offensive && a.target === n.id)) continue;
       // the nearest of their castles that can field an army
       let from = -1, fd = Infinity;
