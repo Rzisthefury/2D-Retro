@@ -7694,7 +7694,7 @@ class Renderer {
         c.lineWidth = 1.5;
         this.roundRect(c, x, y, w, 56, 10);
         c.stroke();
-        this.drawHeroPreview(c, g, x + 34, y + 50, 0.8);
+        this.drawHeroPreview(c, g, x + 34, y + 46, 0.62);
         c.fillStyle = PAL.text;
         c.textAlign = 'left';
         c.fillText(this.clip(c, s.text, w - 90), x + 72, y + 33);
@@ -11596,7 +11596,7 @@ class Renderer {
                 c.fillText(rows[i], r.x + 18, r.y + 24);
                 c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
                 c.fillStyle = info ? (info.won ? '#ffd54a' : PAL.dim) : 'rgba(150,160,190,0.6)';
-                c.fillText(info ? `${info.land}/12 territories  ·  ${fmtPlayTime(info.time)}  ·  ${info.difficulty}${info.won ? '  ·  VICTORY' : ''}` : 'empty: start a new campaign here', r.x + 18, r.y + 43);
+                c.fillText(info ? `${info.land}/12 territories  ·  ${fmtPlayTime(info.time)}  ·  ${info.difficulty[0].toUpperCase() + info.difficulty.slice(1)}${info.won ? '  ·  VICTORY' : ''}` : 'empty: start a new campaign here', r.x + 18, r.y + 43);
                 if (info && info.ng) {
                     c.textAlign = 'right';
                     c.fillStyle = '#ff9a5c';

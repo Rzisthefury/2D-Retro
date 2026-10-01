@@ -32,6 +32,100 @@ No dependencies, no bundler, nothing to install.
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
 
+# Phase 12: story, difficulty, New Game+, victory, 3 slots
+
+**What changed** (PLAN 13):
+
+- **Three save slots** (`aerial-conquest-slot1..3`; Aerial Finisher's
+  keys are never touched).
+  - Title → **Play** → slot picker. Each slot shows territories held,
+    play time, difficulty, NG+ and VICTORY.
+  - An empty slot goes straight to Easy / Normal / Hard. A used slot
+    offers Continue / New Game (which erases it, after a difficulty
+    pick).
+  - The title's **Continue** opens the most recently saved slot (no
+    extra storage key).
+- **Difficulty** is chosen at New Game and can be changed in Options (a
+  new Difficulty row; it changes the current slot).
+  - Dominion damage in your battles is ×0.7 / ×1 / ×1.3
+    (`WAR.enemyDamage`).
+  - Enemy income ×0.8 / ×1 / ×1.25 and the war clock 240 / 160 / 110 s
+    were already in (Phase 9).
+- **Story:**
+  - Text cards with the knight's portrait for the intro (on New Game),
+    the ending and New Game+. Any key or tap moves on.
+  - A short portrait line at the foot of the map for the first keep,
+    first castle and first general. It doesn't block play.
+  - The per-general lines (recruit, ≤25 loyalty, defect, rescue) were
+    already in (Phase 10).
+- **Victory:** when the warlord's seat is yours, by your army or live,
+  the ending card plays, then the **victory screen**. It shows total
+  time, battles won / lost, nodes captured, generals recruited /
+  defected / rescued, gold earned, troops lost, highest combo,
+  difficulty and NG+ cycle. Then **New Game+** or **Title**. Continuing
+  a won slot shows the ending again.
+- **New Game+:**
+  - Keeps knight upgrades, talents, gear, materials and SP.
+  - Resets the land, generals, gold and tallies.
+  - Per cycle, the Dominion's HP and damage are ×1.5 in battle (minions,
+    elites, Lords, the warlord) and their sim strength ×1.5
+    (`WAR.ngStats`). The war clock is ×0.8 (`WAR.ngClock`).
+  - The cycle shows on the slot and on the title.
+- Saves now also carry difficulty, NG+, the run's tallies, the story
+  lines seen and a timestamp; all are validated on load.
+
+**Deviations / choices:**
+- **War clock by difficulty:** PLAN 13 says ×1.4 / ×0.75, but PLAN 8
+  gives 240 / 160 / 110 s (×1.5 / ×0.69). I kept PLAN 8's numbers
+  (built and verified in Phase 9).
+- Difficulty damage applies in your battles, not the off-screen sim.
+  NG+ scales both.
+- First keep, castle and general use a non-blocking portrait line, not a
+  full card, so they never interrupt a map action.
+- NG+ pays SP for first captures again. The tree is already full at 42,
+  so it has nothing to buy (Phase 14 can decide).
+- "Battles lost" counts falls and retreats. "Troops lost" counts your
+  live battles only, not the off-screen sim.
+- Older suites now walk the new title flow (helpers `titleStart` /
+  `titleTapStart`); their checks are unchanged.
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13. Phase 12
+suite 19/19.
+
+- **Fresh title:** Play → slot picker → Slot 2 (empty) → Normal
+  preselected → Hard → intro card → map. Only slot 2 was written.
+- **Difficulty:** Hard: Dominion damage ×1.3, clock 110 s. Easy: ×0.7,
+  240 s. The debug battle list fights at ×1.
+- **DONE, scripted fast run:** take everything but the seat, recruit a
+  Lord (the three story lines fired), beat the warlord live, Enter →
+  ending card → victory screen.
+  - The screen read: won 1 / lost 0, 62 nodes captured, 1 / 0 / 0
+    generals, gold 1101, combo 3, Hard, first campaign.
+- **DONE, NG+:** upgrades, weapons, materials, talents and SP were kept;
+  gold 0, 1 territory, all Lords back, tallies 0.
+  - In battle: Dominion HP ×1.5, damage ×1.95 (×1.5 × Hard's 1.3).
+  - Sim ×1.5; clock 110 → 88 s.
+- **DONE, slots isolated:**
+  - Slot 2 (NG+1, 777 gold) was untouched by a new game in slot 3
+    (5 gold, NG 0, no upgrades).
+  - Slot 1 stayed empty; the Aerial Finisher save was untouched.
+- **DONE, reload:**
+  - Continue opened the newest slot (3).
+  - Slot 2 via the picker came back identical: node owners and levels,
+    gold, NG+, difficulty, upgrades and story lines.
+- **Options:** Difficulty changed slot 2 only. New Game on a used slot
+  asked for a difficulty and wiped only that slot.
+- **Phone:** tap Play → Slot 1 → Normal → intro → map; the victory
+  screen's Title button by tap.
+- **Regressions:** Phases 0-11 all pass: 30/30, 17/17, 23/23, 24/24,
+  24/24, 46/46 functional, 31/31, 24/24, 17/17, 20/20, 28/28, 34/34.
+
+**Assumed / not yet verified:**
+- A real playthrough to victory. The run was scripted: nodes captured in
+  code, the warlord killed by the test.
+- Play time counts the map and map battles, not the title, pauses or
+  open story cards.
+
 # Phase 11: progression and bosses
 
 **What changed** (PLAN 11.3, 12; numbers in `WAR`):
