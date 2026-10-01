@@ -1,6 +1,6 @@
 # Aerial Conquest — build spec (v2)
 
-**Status:** v2 draft, waiting for Michael's approval. Not built.
+**Status:** v2, approved by Michael 2026-10-01. Being built phase by phase (section 14).
 **v1 → v2 (2026-10-01):** v1 kept too much of Aerial Finisher (walkable overworld, regions, dungeons, bosses, chests, levels 1–100). Michael's direction: keep only AF's **knight and combat system** plus its **talent tree, gear & crafting, and music**. Everything else follows Hyper Knights: a node-based campaign map, armies, generals, an economy. Scope shrinks to **one continent first**.
 **Owner decisions:** Michael, 2026-09-30 (v1) and 2026-10-01 (v2). Anything marked *default* is Claude's call and can be overruled.
 
