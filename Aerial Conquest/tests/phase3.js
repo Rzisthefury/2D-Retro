@@ -6,6 +6,25 @@ const OUT = process.argv[3];
 const results = [];
 const check = (name, ok, info = '') => { results.push({ name, ok, info }); console.log((ok ? 'PASS ' : 'FAIL ') + name + (info ? '  — ' + info : '')); };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Phase 12: the title goes Play -> slot -> difficulty -> intro card (or Continue with a save); these walk it to the map.
+async function titleStart(page) {
+  for (let k = 0; k < 8; k++) {
+    if (await page.evaluate(() => GAME.screen === 'campaign' && !GAME.story)) return;
+    await page.keyboard.press('Enter'); await new Promise((r) => setTimeout(r, 250));
+  }
+}
+async function titleTapStart(page) {
+  for (let k = 0; k < 8; k++) {
+    const at = await page.evaluate(() => {
+      if (GAME.screen === 'campaign') return GAME.story ? { x: 480, y: 300 } : null;
+      const r = GAME.titleRowAt(GAME.titleMode === 'difficulty' ? 1 : 0); return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+    });
+    if (!at) return;
+    const b = await page.evaluate(() => { const r = document.getElementById('game').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+    await page.touchscreen.tap(b.x + at.x / 960 * b.w, b.y + at.y / 540 * b.h); await new Promise((r) => setTimeout(r, 300));
+  }
+}
 const ignorable = (t) => /fonts\.(googleapis|gstatic)|ERR_|net::/.test(t);
 const order = (page) => page.evaluate(() => GAME.order);
 
@@ -35,7 +54,7 @@ async function desktop(browser) {
   await page.goto(URL);
   await page.evaluate(() => localStorage.clear());
   await page.reload(); await wait(700);
-  await page.keyboard.press('Enter'); await wait(800); await page.evaluate(() => { if (GAME.screen === 'campaign') GAME.startBattle(testSpec()); }); await wait(300);
+  await titleStart(page); await wait(300); await page.evaluate(() => { if (GAME.screen === 'campaign') GAME.startBattle(testSpec()); }); await wait(300);
 
   const tf = await page.evaluate(() => ({ warband: GAME.army.live('player'), cap: GAME.warbandCap(), order: GAME.order }));
   check('test field: warband of 12 (base cap), order Follow', tf.warband === 12 && tf.cap === 12 && tf.order === 'follow', JSON.stringify(tf));
@@ -230,7 +249,7 @@ async function phone(browser) {
   await page.goto(URL); await wait(800);
   const b = await page.evaluate(() => { const r = document.getElementById('game').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
   const pt = (x, y) => ({ x: b.x + x / 960 * b.w, y: b.y + y / 540 * b.h });
-  const s = pt(480, 278); await page.touchscreen.tap(s.x, s.y); await wait(800); await page.evaluate(() => { if (GAME.screen === 'campaign') GAME.startBattle(testSpec()); }); await wait(300);
+  await titleTapStart(page); await wait(300); await page.evaluate(() => { if (GAME.screen === 'campaign') GAME.startBattle(testSpec()); }); await wait(300);
   await clean(page);
   const cdp = await ctx.newCDPSession(page);
   const cmd = pt(672, 456);

@@ -6,6 +6,25 @@ const OUT = process.argv[3];
 const results = [];
 const check = (name, ok, info = '') => { results.push({ name, ok, info }); console.log((ok ? 'PASS ' : 'FAIL ') + name + (info ? '  — ' + info : '')); };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Phase 12: the title goes Play -> slot -> difficulty -> intro card (or Continue with a save); these walk it to the map.
+async function titleStart(page) {
+  for (let k = 0; k < 8; k++) {
+    if (await page.evaluate(() => GAME.screen === 'campaign' && !GAME.story)) return;
+    await page.keyboard.press('Enter'); await new Promise((r) => setTimeout(r, 250));
+  }
+}
+async function titleTapStart(page) {
+  for (let k = 0; k < 8; k++) {
+    const at = await page.evaluate(() => {
+      if (GAME.screen === 'campaign') return GAME.story ? { x: 480, y: 300 } : null;
+      const r = GAME.titleRowAt(GAME.titleMode === 'difficulty' ? 1 : 0); return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+    });
+    if (!at) return;
+    const b = await page.evaluate(() => { const r = document.getElementById('game').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+    await page.touchscreen.tap(b.x + at.x / 960 * b.w, b.y + at.y / 540 * b.h); await new Promise((r) => setTimeout(r, 300));
+  }
+}
 const ignorable = (t) => /fonts\.(googleapis|gstatic)|ERR_|net::/.test(t);
 
 /** Page px of a logical (960x540) point. */
@@ -25,7 +44,7 @@ async function desktop(browser) {
   await page.goto(URL);
   await page.evaluate(() => localStorage.clear());
   await page.reload(); await wait(700);
-  await page.keyboard.press('Enter'); await wait(500);
+  await titleStart(page);
   const b = await geom(page);
 
   // ---- the continent (PLAN 4 / 5.1)
@@ -212,7 +231,7 @@ async function phone(browser) {
   page.on('console', (m) => { if (m.type() === 'error' && !ignorable(m.text())) errors.push(m.text()); });
   await page.goto(URL); await page.evaluate(() => localStorage.clear()); await page.reload(); await wait(800);
   const b = await geom(page);
-  let s = toPage(b, 480, 278); await page.touchscreen.tap(s.x, s.y); await wait(600);
+  let s; await titleTapStart(page);
   check('phone: tap Start -> the campaign map', (await page.evaluate(() => GAME.screen)) === 'campaign');
   await page.screenshot({ path: OUT + '/p6-phone-far.png' });
   // DONE: tappable on the phone. Every node, at the whole-continent zoom, by a real tap on its icon

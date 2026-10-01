@@ -66,6 +66,12 @@ function fmtTime(t: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/** Play time as h:mm:ss. */
+function fmtPlayTime(t: number): string {
+  const s = Math.max(0, Math.floor(t)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return `${h}:${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
 type Action =
   | 'attack' | 'jump' | 'lock' | 'dash' | 'menu' | 'magic'
   | 'up' | 'down' | 'left' | 'right'

@@ -61,6 +61,7 @@ class Army {
   streamMult = [1, 1];                // < 1 streams faster (the Muster talent, Phase 11)
   // the Command talents (PLAN 12.2), set by the game per battle / per frame
   troopHp = 1; troopDmg = 1;          // your troops' HP and damage, applied as they spawn
+  foeHp = 1; foeDmg = 1;              // the Dominion's: NG+ and difficulty (Phase 12), applied as they spawn
   presence = { on: false, x: 0, y: 0 };   // Warlord's Presence: your troops near the knight hit harder
   edge = [{ x: 0, y: 0, spread: 200 }, { x: 0, y: 0, spread: 200 }];
   streamTier = 1;
@@ -175,7 +176,7 @@ class Army {
     const i = this.freeList.pop()!;
     const d = UNITS[kind];
     const tm = side === 'player' ? WAR.playerTroopMult : 1;
-    const hm = side === 'player' ? this.troopHp : 1, dm = side === 'player' ? this.troopDmg : 1;
+    const hm = side === 'player' ? this.troopHp : this.foeHp, dm = side === 'player' ? this.troopDmg : this.foeDmg;
     const ts = Math.max(1, tier);
     this.used[i] = 1; this.alive[i] = 1;
     this.uid[i] = this.nextUid++;

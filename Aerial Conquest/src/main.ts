@@ -18,9 +18,9 @@ interface SynthEntry { kind: 'w' | 'a'; id: string; name: string; recipe: Recipe
  * campaign  — the campaign map (Phase 6)
  * sandbox   — debug: one battle of each type and the test field (the Phase 4-5 stub)
  * battle    — a scrolling battlefield, ending in its results screen
- * victory arrives in a later phase.
+ * victory   — the run's tallies after the warlord falls: New Game+ or the title (PLAN 13)
  */
-type GameScreen = 'title' | 'campaign' | 'battle' | 'sandbox';
+type GameScreen = 'title' | 'campaign' | 'battle' | 'sandbox' | 'victory';
 
 interface SaveData {
   skillPoints: number; upgrades: KnightUpgrades; gold: number;
@@ -30,11 +30,47 @@ interface SaveData {
   hero: HeroStyle; blade: BladeStyle;
   war: number[][] | null;            // node owners and levels (Campaign.save); null = a fresh war
   econ: object | null;               // gold in the villages, garrisons, convoys, warband (War.save)
+  difficulty: Difficulty;            // chosen at New Game, changeable in Options (PLAN 13)
+  ng: number;                        // New Game+ cycle
+  stats: RunStats | null;            // this run's tallies for the victory screen
+  story: string[];                   // story lines already shown ('keep', 'castle', 'general')
+  at: number;                        // when it was saved (the title's Continue picks the newest slot)
 }
 
-// Phase 12 adds the slot picker (slot1..3); until then everything lives in slot 1.
-// Never read or write Aerial Finisher's `aerial-finisher-save-*` keys.
-const SAVE_KEY = 'aerial-conquest-slot1';
+// Three slots (PLAN 13). Never read or write Aerial Finisher's `aerial-finisher-save-*` keys.
+const SLOT_COUNT = 3;
+const slotKey = (n: number) => `aerial-conquest-slot${n}`;
+let SAVE_SLOT = 1;                   // the slot loadSave / writeSave use
+
+/** What the slot picker shows for a slot, or null if it's empty. */
+interface SlotInfo { land: number; time: number; ng: number; difficulty: Difficulty; won: boolean; at: number; }
+
+function slotInfo(n: number): SlotInfo | null {
+  try {
+    const raw = localStorage.getItem(slotKey(n));
+    if (!raw) return null;
+    const j = JSON.parse(raw) || {};
+    // territories held = castles you own in the saved war (the Last Camp's alone if none saved yet)
+    let land = 1, won = false;
+    if (Array.isArray(j.war) && j.war.length === CONTINENT.nodes.length) {
+      land = 0;
+      CONTINENT.nodes.forEach((row, i) => {
+        if (row[1] !== 'castle' || !Array.isArray(j.war[i]) || j.war[i][0] !== 1) return;
+        land++;
+        if (row[2] === WAR.capitalTerritory) won = true;
+      });
+    }
+    const diff: Difficulty = j.difficulty === 'easy' || j.difficulty === 'hard' ? j.difficulty : 'normal';
+    return { land, time: Math.max(0, +(j.stats && j.stats.time) || 0), ng: Math.max(0, j.ng | 0), difficulty: diff, won, at: +j.at || 0 };
+  } catch { return null; }
+}
+
+/** The most recently saved slot (1 if none). */
+function lastSlot(): number {
+  let best = 1, at = -1;
+  for (let n = 1; n <= SLOT_COUNT; n++) { const s = slotInfo(n); if (s && s.at > at) { at = s.at; best = n; } }
+  return best;
+}
 
 function freshSave(): SaveData {
   return {
@@ -44,13 +80,14 @@ function freshSave(): SaveData {
     potions: 3, ethers: 2,
     hero: 'wayfarer', blade: 'longsword',
     war: null, econ: null,
+    difficulty: 'normal', ng: 0, stats: null, story: [], at: 0,
   };
 }
 
 function loadSave(): SaveData {
   const d = freshSave();
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    const raw = localStorage.getItem(slotKey(SAVE_SLOT));
     if (raw) {
       const j = JSON.parse(raw) || {};
       if (typeof j.skillPoints === 'number') d.skillPoints = Math.max(0, j.skillPoints | 0);
@@ -84,6 +121,17 @@ function loadSave(): SaveData {
       if (BLADE_STYLES.some((b) => b.id === j.blade)) d.blade = j.blade;
       if (Array.isArray(j.war)) d.war = j.war;   // Campaign.load validates it against the continent
       if (j.econ && typeof j.econ === 'object') d.econ = j.econ;   // ...and War.load this
+      const okDiff = (x: unknown): x is Difficulty => x === 'easy' || x === 'normal' || x === 'hard';
+      if (okDiff(j.difficulty)) d.difficulty = j.difficulty;
+      else if (j.econ && j.econ.ai && okDiff(j.econ.ai.difficulty)) d.difficulty = j.econ.ai.difficulty;
+      d.ng = clamp(j.ng | 0, 0, 99);
+      if (j.stats && typeof j.stats === 'object') {
+        const s = freshStats();
+        for (const k of Object.keys(s) as (keyof RunStats)[]) s[k] = Math.max(0, +j.stats[k] || 0);
+        d.stats = s;
+      }
+      if (Array.isArray(j.story)) d.story = j.story.filter((x: unknown) => typeof x === 'string' && STORY_FIRSTS.includes(x as string));
+      d.at = +j.at || 0;
     }
   } catch { /* private mode, blocked storage — play on regardless */ }
   return d;
@@ -107,7 +155,7 @@ function applySave(p: Player, d: SaveData) {
 }
 
 function writeSave(d: SaveData) {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(d)); } catch { /* ignore */ }
+  try { localStorage.setItem(slotKey(SAVE_SLOT), JSON.stringify(d)); } catch { /* ignore */ }
 }
 
 class Game {
@@ -175,8 +223,9 @@ class Game {
 
   // title / options / how-to-play live in front of everything
   screen: GameScreen = 'title';
-  titleMode: 'root' | 'options' | 'help' = 'root';
+  titleMode: 'root' | 'options' | 'help' | 'slots' | 'slot' | 'difficulty' = 'root';
   titleIndex = 0;
+  pendingSlot = 1;             // the slot being picked on the title's slot screens
   optionIndex = 0;
 
   waveIntro = 0;               // grace period before a fresh group activates
@@ -204,6 +253,7 @@ class Game {
     this.renderer = new Renderer(canvas);
     this.input.attach(canvas);
 
+    SAVE_SLOT = lastSlot();
     const save = loadSave();
     applySave(this.player, save);
     this.heroStyle = save.hero;
@@ -215,17 +265,27 @@ class Game {
 
   inCombat(): boolean { return this.screen !== 'title'; }
 
-  hasSave(): boolean {
-    const p = this.player;
-    return p.ownedWeapons.length > 1 || p.ownedArmors.length > 1 || Object.keys(p.talents).length > 0
-      || Object.values(p.upgrades).some((r) => r > 0) || MAT_ORDER.some((m) => (p.inv[m] || 0) > 0);
-  }
+  /** Is there a game in the current (newest) slot to Continue? */
+  hasSave(): boolean { return !!slotInfo(SAVE_SLOT); }
+
+  /** The slot the game is reading and writing (1-3). */
+  get slot(): number { return SAVE_SLOT; }
 
   titleRows(): string[] {
-    if (this.titleMode === 'options') return ['Music volume', 'Sound volume', 'Hero', 'Blade', 'Back'];
-    if (this.titleMode === 'help') return ['Back'];
-    return this.hasSave() ? ['Continue', 'New Game', 'Options', 'How to Play']
-                          : ['Start', 'Options', 'How to Play'];
+    switch (this.titleMode) {
+      case 'options': return ['Music volume', 'Sound volume', 'Difficulty', 'Hero', 'Blade', 'Back'];
+      case 'help': return ['Back'];
+      case 'slots': return ['Slot 1', 'Slot 2', 'Slot 3', 'Back'];
+      case 'slot': return ['Continue', 'New Game', 'Back'];
+      case 'difficulty': return ['Easy', 'Normal', 'Hard', 'Back'];
+    }
+    return this.hasSave() ? ['Continue', 'Play', 'Options', 'How to Play'] : ['Play', 'Options', 'How to Play'];
+  }
+
+  /** Where title row i sits: the slot picker's rows are taller (they carry a summary), options' tighter. */
+  titleRowAt(i: number): { x: number; y: number; w: number; h: number } {
+    const R = this.titleMode === 'slots' ? SLOT_ROW : this.titleMode === 'options' ? OPTION_ROW : TITLE_ROW;
+    return { x: R.x, y: R.y0 + i * (R.h + R.gap), w: R.w, h: R.h };
   }
 
   private handleTitle() {
@@ -245,17 +305,16 @@ class Game {
     }
     if (tap) {
       for (let i = 0; i < rows.length; i++) {
-        const ry = TITLE_ROW.y0 + i * (TITLE_ROW.h + TITLE_ROW.gap);
-        if (tap.x >= TITLE_ROW.x && tap.x <= TITLE_ROW.x + TITLE_ROW.w
-          && tap.y >= ry && tap.y <= ry + TITLE_ROW.h) {
+        const r = this.titleRowAt(i);
+        if (tap.x >= r.x && tap.x <= r.x + r.w && tap.y >= r.y && tap.y <= r.y + r.h) {
           cur = i;
           activate = true;
         }
       }
-      // on the options screen, tapping the left or right third nudges the slider
+      // on the options screen, tapping either side of the selected row nudges it
       if (!activate && this.titleMode === 'options') {
-        const ry = TITLE_ROW.y0 + cur * (TITLE_ROW.h + TITLE_ROW.gap);
-        if (tap.y >= ry - 20 && tap.y <= ry + TITLE_ROW.h + 20) {
+        const r = this.titleRowAt(cur);
+        if (tap.y >= r.y - 20 && tap.y <= r.y + r.h + 20) {
           this.nudgeOption(cur, tap.x < VIEW_W / 2 ? -1 : 1);
         }
       }
@@ -270,7 +329,9 @@ class Game {
     if (this.titleMode === 'options') this.optionIndex = cur; else this.titleIndex = cur;
 
     if (inp.wasPressed('cancel') && this.titleMode !== 'root') {
-      this.titleMode = 'root'; this.titleIndex = 0; return;
+      if (this.titleMode === 'slot' || this.titleMode === 'difficulty') { this.titleMode = 'slots'; this.titleIndex = this.pendingSlot - 1; }
+      else { this.titleMode = 'root'; this.titleIndex = 0; }
+      return;
     }
     if (activate || inp.wasPressed('confirm') || inp.wasPressed('attack') || inp.wasPressed('jump')) {
       this.pickTitle(rows[cur]);
@@ -286,28 +347,72 @@ class Game {
       TUNING.sfxVolume = clamp(+(TUNING.sfxVolume + dir * 0.05).toFixed(2), 0, 1);
       this.sfx.guard();
     } else if (row === 2) {
+      // the current slot's difficulty (PLAN 13: changeable in Options); an empty slot chooses at New Game
+      if (!slotInfo(SAVE_SLOT)) { this.toast('CHOOSE IT AT NEW GAME'); return; }
+      const d = loadSave(), i = DIFFICULTIES.indexOf(d.difficulty);
+      d.difficulty = DIFFICULTIES[(i + dir + DIFFICULTIES.length) % DIFFICULTIES.length];
+      writeSave(d);
+      this.war.difficulty = d.difficulty;
+      this.sfx.guard();
+    } else if (row === 3) {
       const i = HERO_STYLES.findIndex((h) => h.id === this.heroStyle);
       this.heroStyle = HERO_STYLES[(i + dir + HERO_STYLES.length) % HERO_STYLES.length].id;
       this.sfx.guard();
-      this.save();
-    } else if (row === 3) {
+      this.saveLooks();
+    } else if (row === 4) {
       const i = BLADE_STYLES.findIndex((b) => b.id === this.bladeStyle);
       this.bladeStyle = BLADE_STYLES[(i + dir + BLADE_STYLES.length) % BLADE_STYLES.length].id;
       this.sfx.guard();
-      this.save();
+      this.saveLooks();
     }
+  }
+
+  /** The title's looks go into the current slot's save, if it has one (a new game picks them up either way). */
+  private saveLooks() {
+    if (!slotInfo(SAVE_SLOT)) return;
+    const d = loadSave();
+    d.hero = this.heroStyle; d.blade = this.bladeStyle;
+    writeSave(d);
+  }
+
+  /** Continue a slot's game. */
+  continueSlot(n: number) {
+    SAVE_SLOT = n;
+    const d = loadSave();
+    this.heroStyle = d.hero; this.bladeStyle = d.blade;
+    this.enterCampaign();
+  }
+
+  /** A fresh war in slot n at this difficulty (overwriting what was there), opening on the intro card (PLAN 13). */
+  startNewGame(n: number, difficulty: Difficulty) {
+    SAVE_SLOT = n;
+    const d = freshSave();
+    d.difficulty = difficulty; d.hero = this.heroStyle; d.blade = this.bladeStyle; d.at = Date.now();
+    writeSave(d);
+    this.enterCampaign();
+    this.save();
+    this.story = { title: STORY.introTitle, lines: STORY.intro(this.camp.castleOf(WAR.capitalTerritory).name) };
   }
 
   private pickTitle(label: string) {
     this.sfx.cast(560);
     switch (label) {
       case 'Continue':
-      case 'Start':
-        this.enterCampaign();
+        this.continueSlot(this.titleMode === 'slot' ? this.pendingSlot : SAVE_SLOT);
+        break;
+      case 'Play':
+        this.titleMode = 'slots'; this.titleIndex = SAVE_SLOT - 1;
+        break;
+      case 'Slot 1': case 'Slot 2': case 'Slot 3':
+        this.pendingSlot = +label.slice(5);
+        if (slotInfo(this.pendingSlot)) { this.titleMode = 'slot'; this.titleIndex = 0; }
+        else { this.titleMode = 'difficulty'; this.titleIndex = 1; }
         break;
       case 'New Game':
-        this.resetSave();
-        this.enterCampaign();
+        this.titleMode = 'difficulty'; this.titleIndex = 1;
+        break;
+      case 'Easy': case 'Normal': case 'Hard':
+        this.startNewGame(this.pendingSlot, label.toLowerCase() as Difficulty);
         break;
       case 'Options':
         this.titleMode = 'options'; this.optionIndex = 0;
@@ -316,13 +421,100 @@ class Game {
         this.titleMode = 'help'; this.titleIndex = 0;
         break;
       case 'Back':
-        this.titleMode = 'root'; this.titleIndex = 0;
+        if (this.titleMode === 'slot' || this.titleMode === 'difficulty') { this.titleMode = 'slots'; this.titleIndex = this.pendingSlot - 1; }
+        else { this.titleMode = 'root'; this.titleIndex = 0; }
         break;
       case 'Music volume': this.nudgeOption(0, 1); break;
       case 'Sound volume': this.nudgeOption(1, 1); break;
-      case 'Hero': this.nudgeOption(2, 1); break;
-      case 'Blade': this.nudgeOption(3, 1); break;
+      case 'Difficulty': this.nudgeOption(2, 1); break;
+      case 'Hero': this.nudgeOption(3, 1); break;
+      case 'Blade': this.nudgeOption(4, 1); break;
     }
+  }
+
+  /* ------------------------------------------------ story and victory (PLAN 13) */
+
+  /** A text card over the map (intro, ending, NG+): any key or tap moves on. */
+  story: { title: string; lines: string[]; then?: () => void } | null = null;
+  /** A short portrait line at the foot of the map (first keep, castle, general). */
+  storyLine: { text: string; t: number } | null = null;
+  storyFlags: string[] = [];
+  victoryIndex = 0;
+  private lastGold = 0;
+
+  /** Gold earned (victory tally): every rise in the treasury since the last look. Also settled by save(). */
+  private trackGold() {
+    const g = this.player.gold;
+    if (g > this.lastGold) this.war.stats.gold += g - this.lastGold;
+    this.lastGold = g;
+  }
+
+  /** The story beats the map watches for: the firsts, and the warlord's seat falling. */
+  private checkStory() {
+    const c = this.camp, f = this.storyFlags;
+    const first = (id: string, text: string) => { f.push(id); this.storyLine = { text, t: WAR.storyLineTime }; this.save(); };
+    if (!f.includes('keep')) { const k = c.nodes.find((n) => n.type === 'keep' && n.owner === 'player'); if (k) first('keep', STORY.keep(k.name)); }
+    if (!f.includes('castle')) { const k = c.nodes.find((n) => n.type === 'castle' && n.owner === 'player' && n.territory !== WAR.startTerritory); if (k) first('castle', STORY.castle(k.name)); }
+    if (!f.includes('general')) { const g = this.war.mine()[0]; if (g) first('general', STORY.general(g.name)); }
+    // the warlord's seat is yours: the ending card, then the victory screen
+    const seat = c.castleOf(WAR.capitalTerritory);
+    if (seat.owner === 'player') {
+      this.war.won = true;
+      this.save();
+      this.story = { title: STORY.endingTitle, lines: STORY.ending(seat.name), then: () => this.enterVictory() };
+    }
+  }
+
+  enterVictory() {
+    this.screen = 'victory';
+    this.victoryIndex = 0;
+    this.story = null; this.storyLine = null; this.menuOpen = false;
+    this.sfx.levelUp();
+  }
+
+  /** The victory screen's lines (PLAN 13). */
+  victoryRows(): [string, string][] {
+    const s = this.war.stats, w = this.war;
+    return [
+      ['Total time', fmtPlayTime(s.time)],
+      ['Battles won / lost', `${s.won} / ${s.lost}`],
+      ['Nodes captured', String(s.captured)],
+      ['Generals recruited / defected / rescued', `${s.recruited} / ${s.defected} / ${s.rescued}`],
+      ['Gold earned', String(Math.round(s.gold))],
+      ['Troops lost in your battles', String(s.troopsLost)],
+      ['Highest combo', String(s.bestCombo)],
+      ['Difficulty', w.difficulty[0].toUpperCase() + w.difficulty.slice(1)],
+      ['New Game+ cycle', w.ng ? String(w.ng) : 'first campaign'],
+    ];
+  }
+
+  private handleVictory() {
+    const inp = this.input;
+    const tap = inp.takeTap() || inp.takeClick();
+    let go = false;
+    if (tap) for (let i = 0; i < 2; i++) {
+      const x = VICTORY_BTN.x0 + i * (VICTORY_BTN.w + VICTORY_BTN.gap);
+      if (tap.x >= x && tap.x <= x + VICTORY_BTN.w && tap.y >= VICTORY_BTN.y && tap.y <= VICTORY_BTN.y + VICTORY_BTN.h) { this.victoryIndex = i; go = true; }
+    }
+    if (inp.wasPressed('left') || inp.wasPressed('right') || inp.wasPressed('up') || inp.wasPressed('down')) { this.victoryIndex = 1 - this.victoryIndex; this.sfx.guard(); }
+    if (go || inp.wasPressed('confirm') || inp.wasPressed('attack')) {
+      if (this.victoryIndex === 0) this.newGamePlus();
+      else { this.screen = 'title'; this.titleMode = 'root'; this.titleIndex = 0; this.sfx.guard(); }
+    }
+  }
+
+  /**
+   * New Game+ (PLAN 13): the knight keeps upgrades, talents, gear and materials (and SP);
+   * the war, generals and gold start over; the Dominion is x1.5 stronger and its clock x0.8 per cycle.
+   */
+  newGamePlus() {
+    this.save();
+    const d = loadSave();
+    d.gold = 0; d.war = null; d.econ = null; d.ng = this.war.ng + 1; d.stats = null; d.difficulty = this.war.difficulty;
+    writeSave(d);
+    this.enterCampaign();
+    this.save();
+    this.story = { title: `NEW GAME+ ${d.ng}`, lines: STORY.ngPlus(d.ng) };
   }
 
   /* --------------------------------------------------------- campaign map */
@@ -366,7 +558,14 @@ class Game {
     this.mapMode = 'browse';
     const sv = loadSave();
     this.camp.load(sv.war);
+    // difficulty and NG+ first: a fresh war's clock depends on them
+    this.war.difficulty = sv.difficulty; this.war.ng = sv.ng;
     this.war.load(sv.econ);
+    this.war.difficulty = sv.difficulty; this.war.ng = sv.ng;
+    if (sv.stats) this.war.stats = sv.stats;
+    this.storyFlags = sv.story.slice();
+    this.story = null; this.storyLine = null;
+    this.lastGold = this.player.gold;
     this.syncWar();
     this.war.refillWarband();
     this.mapConvoy = -1;
@@ -630,6 +829,18 @@ class Game {
 
   private handleMap(dt: number) {
     const inp = this.input;
+    // a story card holds the map until it's read
+    if (this.story) {
+      const t = inp.takeTap(), c = inp.takeClick();
+      if (t || c || inp.wasPressed('confirm') || inp.wasPressed('attack') || inp.wasPressed('jump') || inp.wasPressed('cancel')) {
+        const then = this.story.then;
+        this.story = null; this.sfx.guard();
+        inp.clearBuffer();
+        if (then) then();
+      }
+      return;
+    }
+    if (this.storyLine && (this.storyLine.t -= dt) <= 0) this.storyLine = null;
     // the pause menu works on the map too (PLAN 7.1), and pauses map time; the forge is only here
     if (inp.wasPressed('menu')) { if (this.menuOpen) this.closeMenu(); else this.openMenu(this.menuTab); inp.clearBuffer(); }
     if (!this.menuOpen) {
@@ -660,7 +871,6 @@ class Game {
       else if (e.kind === 'reinforce') this.toast(`${nm(e.node).toUpperCase()} SENDS HELP TO ${nm(e.target).toUpperCase()}`);
       else if (e.kind === 'convoyLost') this.toast(`A CONVOY FROM ${nm(e.node).toUpperCase()} WAS TAKEN (${e.target} GOLD)`);
       else if (e.kind === 'sp') this.banner(`+${e.target} SKILL POINT${e.target > 1 ? 'S' : ''}`, `${nm(e.node)} is yours for the first time  ·  spend them in TALENTS`, '#ffd54a');
-      else if (e.kind === 'won') this.banner('THE BLACK SEAT HAS FALLEN', 'the Dominion\'s offensives stop  ·  the victory screen arrives in Phase 12', '#ffd54a');
     }
     if (this.war.events.length) this.save();
     this.war.events = [];
@@ -673,6 +883,8 @@ class Game {
     }
     if (this.war.results.length) this.save();
     this.war.results = []; this.war.captured = [];
+    this.checkStory();
+    if (this.story) return;
     this.autosaveT += dt;
     if (this.autosaveT >= WAR.autosaveEvery) { this.autosaveT = 0; this.save(); }
     // zoom: wheel, pinch, Z / L / LT
@@ -838,6 +1050,9 @@ class Game {
     this.army.clear();
     this.army.streamTier = spec.tier;
     this.army.streamMult[TEAM_ENEMY] = WAR.battlePace[spec.kind] || 1;
+    // the Dominion's NG+ strength and the difficulty's damage (PLAN 13); the debug list fights at base
+    const ngm = this.battleFrom === 'map' ? this.war.ngMult() : 1, dmgm = this.battleFrom === 'map' ? WAR.enemyDamage[this.war.difficulty] : 1;
+    this.army.foeHp = ngm; this.army.foeDmg = ngm * dmgm;
     // the Command talents (PLAN 12.2): your troops' HP and damage, Muster's faster stream, Warlord's Presence
     const tl = p.talents, cm = WAR.command;
     this.army.streamMult[TEAM_PLAYER] = tl.muster ? 1 / cm.musterStream : 1;
@@ -970,6 +1185,7 @@ class Game {
       this.enemies.push(e);
       this.battleGeneral = e;
     }
+    for (const e of this.enemies) if (e.team === 'enemy') { e.maxHp = Math.round(e.maxHp * ngm); e.hp = e.maxHp; e.str *= ngm * dmgm; }
     b.startFoes = this.foeStrength();
     b.startAllies = this.army.live('player') + this.army.reserveCount('player');
     if (spec.kind === 'convoy') b.notes.push(`${b.cargo} gold aboard`);
@@ -1134,6 +1350,9 @@ class Game {
     b.resultT = 0;
     this.wheelOpen = false; this.input.suppressMove = false; this.input.bot = null;
     if (this.battleFrom === 'map') {
+      const st = this.war.stats;
+      if (result === 'win') st.won++; else st.lost++;
+      st.troopsLost += b.losses.troops;
       // who's still standing on each side (a loss loses your side, PLAN 10.1)
       const a = this.army;
       const mine = { ...a.reserve[TEAM_PLAYER] }, theirs = { ...a.reserve[TEAM_ENEMY] };
@@ -1388,6 +1607,11 @@ class Game {
       this.music.setVolume(TUNING.musicVolume);
     }
 
+    // the run's play time and gold coming in (PLAN 13 victory tallies): map, map battles; not paused
+    const inRun = this.screen === 'campaign' || (this.screen === 'battle' && this.battleFrom === 'map');
+    if (inRun && !this.paused && !this.story) this.war.stats.time += dt;
+    if (inRun) this.trackGold(); else this.lastGold = this.player.gold;
+
     if (this.screen !== 'battle') {
       this.time += dt;
       if (this.bannerT > 0) this.bannerT -= dt;
@@ -1396,6 +1620,7 @@ class Game {
       this.syncMusic();
       if (this.screen === 'title') this.handleTitle();
       else if (this.screen === 'sandbox') this.handleSandbox();
+      else if (this.screen === 'victory') this.handleVictory();
       else this.handleMap(dt);
       this.input.endTick();
       return;
@@ -2641,6 +2866,7 @@ class Game {
   /** Save: runs on every meaningful change, and from the panel. */
   save() {
     const p = this.player;
+    if (this.screen === 'campaign' || this.battleFrom === 'map') this.trackGold();
     writeSave({
       skillPoints: p.skillPoints, upgrades: p.upgrades, gold: p.gold,
       inv: p.inv, weapons: p.ownedWeapons, armors: p.ownedArmors,
@@ -2649,6 +2875,7 @@ class Game {
       hero: this.heroStyle, blade: this.bladeStyle,
       war: this.camp.save(),
       econ: this.war.save(),
+      difficulty: this.war.difficulty, ng: this.war.ng, stats: this.war.stats, story: this.storyFlags.slice(), at: Date.now(),
     });
   }
 
@@ -2707,6 +2934,7 @@ class Game {
 
   registerHit() {
     this.comboCount++;
+    if (this.screen === 'battle' && this.battleFrom === 'map' && this.comboCount > this.war.stats.bestCombo) this.war.stats.bestCombo = this.comboCount;
     this.comboTimer = 100;
     this.comboDisplay = 60;
   }

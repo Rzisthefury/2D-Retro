@@ -515,7 +515,73 @@ class Renderer {
     for (const f of g.war.fights) this.drawMapFight(c, g, f);
     for (const m of g.war.musters) this.drawMuster(c, g, m);
     this.drawMapHud(c, g);
+    if (g.storyLine) this.drawStoryLine(c, g);
     if (g.menuOpen) this.drawBigMenu(c, g);
+    if (g.story) this.drawStoryCard(c, g);
+  }
+
+  /** PLAN 13: a text card with the knight beside it (intro, ending, NG+). */
+  private drawStoryCard(c: CanvasRenderingContext2D, g: Game) {
+    const s = g.story!;
+    c.save();
+    c.fillStyle = 'rgba(4,6,12,0.86)'; c.fillRect(0, 0, VIEW_W, VIEW_H);
+    const x = 120, y = 110, w = VIEW_W - 240, h = 320;
+    c.fillStyle = 'rgba(16,20,36,0.96)'; this.roundRect(c, x, y, w, h, 12); c.fill();
+    c.strokeStyle = 'rgba(255,213,74,0.6)'; c.lineWidth = 2; this.roundRect(c, x, y, w, h, 12); c.stroke();
+    this.drawHeroPreview(c, g, x + 110, y + 230, 2.2);
+    c.textAlign = 'left';
+    c.font = '900 26px Georgia, serif'; c.fillStyle = '#ffd54a';
+    c.fillText(s.title, x + 220, y + 58);
+    c.font = '500 15px Georgia, serif'; c.fillStyle = PAL.text;
+    s.lines.forEach((ln, i) => c.fillText(this.clip(c, ln, w - 250), x + 220, y + 100 + i * 28));
+    c.font = '700 12px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = PAL.dim;
+    c.fillText(IS_TOUCH ? 'tap to continue' : 'ENTER to continue', x + 220, y + h - 24);
+    c.restore();
+  }
+
+  /** PLAN 13: a short portrait line at the foot of the map. */
+  private drawStoryLine(c: CanvasRenderingContext2D, g: Game) {
+    const s = g.storyLine!, a = clamp(s.t, 0, 1);
+    c.save();
+    c.globalAlpha = a;
+    c.font = '600 14px Georgia, serif';
+    const w = Math.min(VIEW_W - 280, c.measureText(s.text).width + 110), x = (VIEW_W - w) / 2, y = VIEW_H - 92;
+    c.fillStyle = 'rgba(12,16,30,0.92)'; this.roundRect(c, x, y, w, 56, 10); c.fill();
+    c.strokeStyle = 'rgba(255,213,74,0.55)'; c.lineWidth = 1.5; this.roundRect(c, x, y, w, 56, 10); c.stroke();
+    this.drawHeroPreview(c, g, x + 34, y + 46, 0.62);
+    c.fillStyle = PAL.text; c.textAlign = 'left';
+    c.fillText(this.clip(c, s.text, w - 90), x + 72, y + 33);
+    c.restore();
+  }
+
+  /** PLAN 13: the victory screen - the run's tallies, then New Game+ or the title. */
+  private drawVictory(c: CanvasRenderingContext2D, g: Game) {
+    c.save();
+    c.fillStyle = '#070912'; c.fillRect(0, 0, VIEW_W, VIEW_H);
+    c.textAlign = 'center';
+    c.font = '900 44px Georgia, serif'; c.fillStyle = '#ffd54a';
+    c.fillText('VICTORY', VIEW_W / 2, 74);
+    c.font = '600 13px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = PAL.dim;
+    c.fillText('the Verdant Reach is free', VIEW_W / 2, 100);
+    const rows = g.victoryRows(), x0 = 230, x1 = VIEW_W - 230;
+    c.font = '600 15px ui-monospace, Menlo, Consolas, monospace';
+    rows.forEach(([k, v], i) => {
+      const y = 140 + i * 34;
+      c.textAlign = 'left'; c.fillStyle = PAL.dim; c.fillText(k, x0, y);
+      c.textAlign = 'right'; c.fillStyle = PAL.text; c.fillText(v, x1, y);
+    });
+    ['New Game+', 'Title'].forEach((label, i) => {
+      const x = VICTORY_BTN.x0 + i * (VICTORY_BTN.w + VICTORY_BTN.gap), on = i === g.victoryIndex;
+      c.fillStyle = on ? 'rgba(255,213,74,0.25)' : 'rgba(19,23,40,0.85)';
+      this.roundRect(c, x, VICTORY_BTN.y, VICTORY_BTN.w, VICTORY_BTN.h, 8); c.fill();
+      c.strokeStyle = on ? '#ffd54a' : 'rgba(120,150,220,0.3)'; c.lineWidth = on ? 2 : 1.4;
+      this.roundRect(c, x, VICTORY_BTN.y, VICTORY_BTN.w, VICTORY_BTN.h, 8); c.stroke();
+      c.textAlign = 'center'; c.font = '800 16px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = on ? '#ffffff' : PAL.text;
+      c.fillText(label.toUpperCase(), x + VICTORY_BTN.w / 2, VICTORY_BTN.y + 28);
+    });
+    c.font = '600 11px ui-monospace, Menlo, Consolas, monospace'; c.fillStyle = PAL.dim; c.textAlign = 'center';
+    c.fillText(`New Game+ ${g.war.ng + 1}: keep upgrades, talents, gear and materials  ·  the Dominion x${Math.pow(WAR.ngStats, g.war.ng + 1).toFixed(2).replace(/\.?0+$/, '')}`, VIEW_W / 2, VICTORY_BTN.y + VICTORY_BTN.h + 22);
+    c.restore();
   }
 
   /** The Generals roster (PLAN 7.1 Generals tab): level, command, loyalty, where they are; red at 25 or under. */
@@ -2627,6 +2693,7 @@ class Renderer {
 
   private drawHud(c: CanvasRenderingContext2D, g: Game) {
     if (g.screen === 'title') { this.drawTitle(c, g); return; }
+    if (g.screen === 'victory') { this.drawVictory(c, g); return; }
     if (g.screen === 'sandbox') { this.drawSandbox(c, g); return; }
     // full-screen results: nothing of the HUD underneath (PLAN 16: early-return under overlays)
     if (g.battle.result) { this.drawResults(c, g); return; }
@@ -3399,42 +3466,59 @@ class Renderer {
     const sel = g.titleMode === 'options' ? g.optionIndex : g.titleIndex;
     c.font = '700 17px ui-monospace, Menlo, Consolas, monospace';
     for (let i = 0; i < rows.length; i++) {
-      const y = TITLE_ROW.y0 + i * (TITLE_ROW.h + TITLE_ROW.gap);
+      const r = g.titleRowAt(i), y = r.y, mid = r.y + r.h / 2 + 6;
       const on = i === sel;
       c.fillStyle = on ? 'rgba(80,140,255,0.26)' : 'rgba(19,23,40,0.75)';
-      this.roundRect(c, TITLE_ROW.x, y, TITLE_ROW.w, TITLE_ROW.h, 8); c.fill();
+      this.roundRect(c, r.x, y, r.w, r.h, 8); c.fill();
       c.strokeStyle = on ? '#6f9bff' : 'rgba(120,150,220,0.22)';
       c.lineWidth = on ? 2 : 1.4;
-      this.roundRect(c, TITLE_ROW.x, y, TITLE_ROW.w, TITLE_ROW.h, 8); c.stroke();
+      this.roundRect(c, r.x, y, r.w, r.h, 8); c.stroke();
 
       c.fillStyle = on ? '#ffffff' : PAL.text;
       if (g.titleMode === 'options' && i < 2) {
         c.textAlign = 'left';
         c.font = '700 14px ui-monospace, Menlo, Consolas, monospace';
-        c.fillText(rows[i], TITLE_ROW.x + 16, y + 25);
+        c.fillText(rows[i], r.x + 16, mid);
         const v = i === 0 ? TUNING.musicVolume : TUNING.sfxVolume;
-        const bx = TITLE_ROW.x + 150, bw = 100;
+        const bx = r.x + 150, bw = 100;
         c.fillStyle = 'rgba(0,0,0,0.5)';
-        this.roundRect(c, bx, y + 14, bw, 9, 4); c.fill();
+        this.roundRect(c, bx, mid - 11, bw, 9, 4); c.fill();
         c.fillStyle = i === 0 ? '#c39bff' : '#7fb4ff';
-        this.roundRect(c, bx, y + 14, Math.max(3, bw * v), 9, 4); c.fill();
+        this.roundRect(c, bx, mid - 11, Math.max(3, bw * v), 9, 4); c.fill();
         c.fillStyle = PAL.text;
         c.textAlign = 'right';
-        c.fillText(`${Math.round(v * 100)}%`, TITLE_ROW.x + TITLE_ROW.w - 14, y + 25);
+        c.fillText(`${Math.round(v * 100)}%`, r.x + r.w - 14, mid);
         c.textAlign = 'center';
         c.font = '700 17px ui-monospace, Menlo, Consolas, monospace';
-      } else if (g.titleMode === 'options' && i < 4) {
+      } else if (g.titleMode === 'options' && i < 5) {
         c.textAlign = 'left';
         c.font = '700 14px ui-monospace, Menlo, Consolas, monospace';
-        c.fillText(rows[i], TITLE_ROW.x + 16, y + 25);
-        const name = i === 2 ? HERO_STYLES.find((h) => h.id === g.heroStyle)!.name : BLADE_STYLES.find((b) => b.id === g.bladeStyle)!.name;
+        c.fillText(rows[i], r.x + 16, mid);
+        const info = slotInfo(g.slot);
+        const name = i === 2 ? (info ? info.difficulty[0].toUpperCase() + info.difficulty.slice(1) : 'at New Game')
+          : i === 3 ? HERO_STYLES.find((h) => h.id === g.heroStyle)!.name : BLADE_STYLES.find((b) => b.id === g.bladeStyle)!.name;
         c.textAlign = 'right';
         c.fillStyle = PAL.mpCharge;
-        c.fillText(`\u25C0 ${name} \u25B6`, TITLE_ROW.x + TITLE_ROW.w - 14, y + 25);
+        c.fillText(i === 2 && !info ? name : `\u25C0 ${name} \u25B6`, r.x + r.w - 14, mid);
+        c.textAlign = 'center';
+        c.font = '700 17px ui-monospace, Menlo, Consolas, monospace';
+      } else if (g.titleMode === 'slots' && i < SLOT_COUNT) {
+        // Slot N: territories held, play time, NG+ (PLAN 13)
+        const info = slotInfo(i + 1);
+        c.textAlign = 'left';
+        c.font = '800 16px ui-monospace, Menlo, Consolas, monospace';
+        c.fillText(rows[i], r.x + 18, r.y + 24);
+        c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = info ? (info.won ? '#ffd54a' : PAL.dim) : 'rgba(150,160,190,0.6)';
+        c.fillText(info ? `${info.land}/12 territories  ·  ${fmtPlayTime(info.time)}  ·  ${info.difficulty[0].toUpperCase() + info.difficulty.slice(1)}${info.won ? '  ·  VICTORY' : ''}` : 'empty: start a new campaign here', r.x + 18, r.y + 43);
+        if (info && info.ng) {
+          c.textAlign = 'right'; c.fillStyle = '#ff9a5c'; c.font = '900 18px ui-monospace, Menlo, Consolas, monospace';
+          c.fillText(`NG+${info.ng}`, r.x + r.w - 18, r.y + 35);
+        }
         c.textAlign = 'center';
         c.font = '700 17px ui-monospace, Menlo, Consolas, monospace';
       } else {
-        c.fillText(rows[i], VIEW_W / 2, y + 26);
+        c.fillText(rows[i], VIEW_W / 2, mid);
       }
     }
 
@@ -3442,12 +3526,21 @@ class Renderer {
 
     c.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
+    const cur = slotInfo(g.slot);
     if (g.titleMode === 'options') {
-      c.fillText(IS_TOUCH ? 'tap either side of a bar to adjust' : '\u2190 \u2192 to adjust  ·  ESC to go back', VIEW_W / 2, VIEW_H - 46);
-    } else if (g.hasSave()) {
-      c.fillText(`${g.player.weapon.name} / ${g.player.armor.name}  ·  ${Object.keys(g.player.talents).length} talents`, VIEW_W / 2, VIEW_H - 62);
-      c.fillStyle = '#ff9d9d';
-      c.fillText('New Game wipes that progress.', VIEW_W / 2, VIEW_H - 44);
+      c.fillText(IS_TOUCH ? 'tap either side of a row to adjust' : '\u2190 \u2192 to adjust  ·  ESC to go back', VIEW_W / 2, VIEW_H - 30);
+    } else if (g.titleMode === 'difficulty') {
+      const d = (['easy', 'normal', 'hard'] as Difficulty[])[clamp(g.titleIndex, 0, 2)];
+      if (g.titleIndex < 3) c.fillText(`Dominion damage x${WAR.enemyDamage[d]}  ·  war clock ${WAR.warClock[d]} s  ·  their income x${WAR.enemyIncome[d]}`, VIEW_W / 2, VIEW_H - 62);
+      if (slotInfo(g.pendingSlot)) { c.fillStyle = '#ff9d9d'; c.fillText(`This erases Slot ${g.pendingSlot}.`, VIEW_W / 2, VIEW_H - 44); }
+    } else if (g.titleMode === 'slot') {
+      c.fillText(`Slot ${g.pendingSlot}`, VIEW_W / 2, VIEW_H - 62);
+      c.fillStyle = '#ff9d9d'; c.fillText('New Game erases this slot.', VIEW_W / 2, VIEW_H - 44);
+    } else if (g.titleMode === 'slots') {
+      c.fillText(IS_TOUCH ? 'tap a slot' : '\u2191\u2193 and ENTER  ·  ESC back', VIEW_W / 2, VIEW_H - 22);
+    } else if (cur) {
+      c.fillText(`Continue: Slot ${g.slot}  ·  ${cur.land}/12 territories  ·  ${fmtPlayTime(cur.time)}`, VIEW_W / 2, VIEW_H - 62);
+      if (cur.ng) { c.fillStyle = '#ff9a5c'; c.font = '900 14px ui-monospace, Menlo, Consolas, monospace'; c.fillText(`NEW GAME+ ${cur.ng}`, VIEW_W / 2, VIEW_H - 40); }
     } else {
       c.fillText(IS_TOUCH ? 'tap an option to begin' : 'arrow keys and ENTER, or click', VIEW_W / 2, VIEW_H - 46);
     }

@@ -551,6 +551,12 @@ const WAR = {
   loyaltyWarn: 25,                      // at or under: the warning (red border, a line)
   presenceMult: 1.5,                    // Warlord's Presence (Command talent, Phase 11): loyalty gains x this
 
+  // difficulty and New Game+ (Phase 12, PLAN 13); the war clock and enemy income by difficulty are above
+  enemyDamage: { easy: 0.7, normal: 1, hard: 1.3 } as Record<string, number>,   // Dominion damage in your battles
+  ngStats: 1.5,              // Dominion HP and damage (and sim strength) x this per NG+ cycle
+  ngClock: 0.8,              // war clock x this per NG+ cycle
+  storyLineTime: 7,          // seconds a story line (first keep / castle / general) stays on the map
+
   // Thornhounds and the warlord (Phase 11, PLAN 11.2 / 11.3)
   houndPack: 6,
   houndPacks: [0, 0, 0, 1, 2],          // packs guarding a node, by battle tier
@@ -625,6 +631,37 @@ function talentColW(): number { return (VIEW_W - 52 - 10 * (BRANCHES.length - 1)
 const SYNTH_ROW_H = 20;  // the recipe list is long now, so its rows are tighter
 const MENU_LIST = { x: 26, y: 62, w: 330, rowH: 26, pad: 10 };
 const TITLE_ROW = { x: 336, y0: 258, w: 288, h: 40, gap: 6 };
+const OPTION_ROW = { x: 336, y0: 232, w: 288, h: 36, gap: 6 };    // six rows of options
+const SLOT_ROW = { x: 230, y0: 236, w: 500, h: 56, gap: 8 };      // the slot picker: three slots + Back
+const VICTORY_BTN = { x0: 250, y: 470, w: 220, h: 44, gap: 20 };  // New Game+ · Title
+const DIFFICULTIES: Difficulty[] = ['easy', 'normal', 'hard'];
+
+/** The light story (PLAN 13): text cards for the intro and ending, one line for each first. Names are placeholders (PLAN 17). */
+const STORY_FIRSTS = ['keep', 'castle', 'general'];
+const STORY = {
+  introTitle: 'THE VERDANT REACH',
+  intro: (seat: string) => [
+    'The Umbral Dominion took the Verdant Reach in a single season.',
+    'The Aerial Order fell with it. You are its last knight,',
+    'holding the Last Camp with twelve soldiers and one village.',
+    `Warlord Garrick Thorne rules from ${seat}. Take the Reach back,`,
+    'one village, one keep, one castle at a time.',
+  ],
+  keep: (name: string) => `${name} is ours. Their castle loses its iron gate and half its garrison.`,
+  castle: (name: string) => `${name} flies our banner. Its forge and barracks answer to us now.`,
+  general: (name: string) => `${name} rides with us. A Dominion Lord, sworn to the Order.`,
+  endingTitle: 'THE WARLORD FALLS',
+  ending: (seat: string) => [
+    `${seat} is taken and Garrick Thorne is beaten.`,
+    'The Dominion\'s hold on the Verdant Reach is broken.',
+    'The Aerial Order flies again.',
+  ],
+  ngPlus: (n: number) => [
+    `The Dominion returns, stronger (x${Math.pow(WAR.ngStats, n).toFixed(2).replace(/\.?0+$/, '')}) and quicker to march.`,
+    'You keep your upgrades, talents, gear and materials.',
+    'The land, the generals and the treasury start over.',
+  ],
+};
 /** The campaign map's node panel and its buttons (render and hit-testing share these). */
 const MAP_PANEL = { x: 640, y: 62, w: 306, h: 412, pad: 14 };
 const MAP_BTN = { w: 278, h: 46, gap: 8, pairFrom: 5 };   // 5+ buttons (your castle): two per row

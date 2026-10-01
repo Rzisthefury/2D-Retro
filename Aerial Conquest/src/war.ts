@@ -31,6 +31,21 @@ interface MapArmy {
 
 type Difficulty = 'easy' | 'normal' | 'hard';
 
+/** One run's tallies for the victory screen (PLAN 13); reset by a new game and by NG+. */
+interface RunStats {
+  time: number;         // seconds played (map and map battles)
+  won: number; lost: number;        // map battles; lost counts falls and retreats
+  captured: number;     // nodes you took, live or by your armies
+  recruited: number; defected: number; rescued: number;
+  gold: number;         // all gold that came in
+  troopsLost: number;   // your units killed in your battles
+  bestCombo: number;
+}
+
+function freshStats(): RunStats {
+  return { time: 0, won: 0, lost: 0, captured: 0, recruited: 0, defected: 0, rescued: 0, gold: 0, troopsLost: 0, bestCombo: 0 };
+}
+
 /** n units in the default mix, every type present (rams, hounds 0). */
 function foeMixFull(n: number): Reserve { return { ...emptyReserve(), ...foeMix(n) }; }
 
@@ -79,6 +94,8 @@ class War {
   results: { fight: number; node: number; winner: Team; x: number; y: number }[] = [];   // fights decided since the map last looked
   // the Dominion's campaign (Phase 9)
   difficulty: Difficulty = 'normal';
+  ng = 0;                                     // New Game+ cycle (PLAN 13): Dominion x1.5 and war clock x0.8 per cycle
+  stats: RunStats = freshStats();
   enemyGold = 0;
   clock = 0;                                  // seconds to the next muster
   musters: { from: number; target: number; size: number; t: number; done?: boolean }[] = [];
@@ -120,11 +137,12 @@ class War {
     this.nodeForce.fill(null);
     this.refill.fill(0); this.grace.fill(0);
     this.enemyGold = 0; this.musters = []; this.won = false; this.events = [];
+    this.stats = freshStats();
     this.spTaken = this.camp.nodes.filter((n) => n.owner === 'player' && (n.type === 'castle' || n.type === 'keep')).map((n) => n.id);
     this.spPending = 0;
     // every territory castle but yours and the warlord's has a Lord (PLAN 9.1)
     this.generals = this.camp.territories.filter((t) => t.id !== WAR.startTerritory && t.id !== WAR.capitalTerritory).map((t) => makeLord(t, this.camp.castleOf(t.id).id));
-    this.clock = WAR.warClock[this.difficulty];
+    this.clock = this.clockInterval();
     this.enemyConvoyT = WAR.enemyConvoyEvery * 0.5;
     this.delivered = 0;
     for (const n of this.camp.nodes) if (n.owner === 'player' && n.type === 'castle') this.garrison[n.id] = this.recruitList(WAR.startGarrison, 0);
@@ -372,6 +390,7 @@ class War {
   /** A node changed hands: a captured castle starts with an empty garrison, a village with an empty store. */
   onCapture(n: MapNode) {
     this.awardSP(n);
+    if (n.owner === 'player') this.stats.captured++;
     // PLAN 8: grace - no offensive targets a territory for 90 s after you take its castle
     if (n.type === 'castle' && n.owner === 'player') this.grace[n.territory] = WAR.grace;
     if (n.type === 'castle') { this.garrison[n.id] = emptyReserve(); this.prod[n.id] = 0; this.sinceRam[n.id] = 0; this.mix[n.id] = 0; }
@@ -383,7 +402,7 @@ class War {
   /** Seconds between offensives (PLAN 8): by difficulty, 10% shorter per 3 territories you hold, floor 60%. */
   clockInterval(): number {
     const held = this.camp.territoriesHeld('player');
-    return WAR.warClock[this.difficulty] * Math.max(WAR.warClockFloor, 1 - WAR.warClockStep * Math.floor(held / 3));
+    return WAR.warClock[this.difficulty] * Math.max(WAR.warClockFloor, 1 - WAR.warClockStep * Math.floor(held / 3)) * Math.pow(WAR.ngClock, this.ng);
   }
 
   /** How many offensives may be under way at once: 1 + one per 4 territories you hold, cap 3 (Hard 4). */
@@ -559,6 +578,7 @@ class War {
   rescue(g: General) {
     if (g.status !== 'captive') return;
     g.status = 'reserve'; g.at = -1; g.captiveT = 0;
+    this.stats.rescued++;
     this.loyalty(g, WAR.loyaltyRescued);
     this.events.push({ kind: 'rescued', node: -1, target: -1, general: g.id });
   }
@@ -568,6 +588,7 @@ class War {
     g.status = 'reserve'; g.at = -1; g.army = -1; g.warned = false;
     g.loyalty = g.recruited > 0 ? WAR.loyaltyReRecruit : WAR.loyaltyStart;
     g.recruited++;
+    this.stats.recruited++;
   }
 
   /** Put a general in a castle of yours (or take them out with null). Respects the active cap. */
@@ -595,6 +616,7 @@ class War {
   defect(g: General) {
     const camp = this.camp;
     g.lordSince = 1 + Math.max(0, ...this.generals.map((x) => x.lordSince));
+    this.stats.defected++;
     this.events.push({ kind: 'defected', node: g.at, target: -1, general: g.id });
     if (g.status === 'castle') {
       const n = camp.nodes[g.at];
@@ -655,16 +677,19 @@ class War {
     return 1;
   }
 
-  /** An army's multiplier: x(1 + command) with a general, -20% without (PLAN 7.3); your troops' per-unit edge. */
+  /** The Dominion's NG+ multiplier on their strength (PLAN 13): x1.5 per cycle. */
+  ngMult(): number { return Math.pow(WAR.ngStats, this.ng); }
+
+  /** An army's multiplier: x(1 + command) with a general, -20% without (PLAN 7.3); your troops' per-unit edge; NG+ theirs. */
   private sideMult(team: Team, general: string | null): number {
     const g = this.general(general);
-    return (g ? 1 + command(g) : WAR.noGeneralMult) * (team === 'player' ? WAR.playerTroopMult * this.troopMult() : 1);
+    return (g ? 1 + command(g) : WAR.noGeneralMult) * (team === 'player' ? WAR.playerTroopMult * this.troopMult() : this.ngMult());
   }
 
   /** A node's defenders' multiplier (before fortification): x(1 + command) of its general or Lord. */
   nodeMult(n: MapNode): number {
     const g = n.owner === 'player' ? this.generalAt(n.id) : n.type === 'castle' ? this.lordAt(n.id) : null;
-    return (g ? 1 + command(g) : 1) * (n.owner === 'player' ? WAR.playerTroopMult * this.troopMult() : 1);
+    return (g ? 1 + command(g) : 1) * (n.owner === 'player' ? WAR.playerTroopMult * this.troopMult() : this.ngMult());
   }
 
   /** Where an army is on the map. */
