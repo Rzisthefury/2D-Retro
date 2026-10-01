@@ -15,6 +15,13 @@
 const TEAM_PLAYER = 0, TEAM_ENEMY = 1;
 const ST_ADVANCE = 0, ST_FIGHT = 1, ST_FLEE = 2;
 
+/** The knight's standing order to the player's side (PLAN 11.4). */
+type Order = 'follow' | 'charge' | 'hold' | 'focus';
+const ORDERS: Order[] = ['follow', 'charge', 'hold', 'focus'];
+
+type Reserve = Record<UnitType, number>;
+function emptyReserve(): Reserve { return { sword: 0, spear: 0, archer: 0, shield: 0, ram: 0, hound: 0 }; }
+
 function teamIndex(t: Team): number { return t === 'player' ? TEAM_PLAYER : TEAM_ENEMY; }
 function teamName(i: number): Team { return i === TEAM_PLAYER ? 'player' : 'enemy'; }
 
@@ -36,6 +43,7 @@ class Army {
   hp: Float32Array; maxHp: Float32Array; facing: Float32Array;
   cd: Float32Array; wind: Float32Array; flash: Float32Array; deadT: Float32Array;
   atk: Float32Array; armor: Float32Array; walk: Float32Array;
+  anchorX: Float32Array; anchorY: Float32Array;   // Hold: where each unit was told to stand
   type: Uint8Array; team: Uint8Array; state: Uint8Array; alive: Uint8Array; used: Uint8Array;
   uid: Uint32Array;
   tgt: (Combatant | null)[];
@@ -44,6 +52,13 @@ class Army {
   private nextUid = 1;
   private frame = 0;
   liveCount = [0, 0];
+
+  // reserves (PLAN 10.1): units past the live cap wait here and stream in from their side's edge
+  reserve: Reserve[] = [emptyReserve(), emptyReserve()];
+  streamT = [0, 0];
+  streamMult = [1, 1];                // < 1 streams faster (the Muster talent, Phase 11)
+  edge = [{ x: 0, y: 0, spread: 200 }, { x: 0, y: 0, spread: 200 }];
+  streamTier = 1;
   /** where each side's fighters are massed (knight and elites included), for units with nothing in sight */
   centre = [{ x: 0, y: 0, n: 0 }, { x: 0, y: 0, n: 0 }];
 
@@ -66,6 +81,7 @@ class Army {
     this.hp = f(); this.maxHp = f(); this.facing = f();
     this.cd = f(); this.wind = f(); this.flash = f(); this.deadT = f();
     this.atk = f(); this.armor = f(); this.walk = f();
+    this.anchorX = f(); this.anchorY = f();
     this.type = u(); this.team = u(); this.state = u(); this.alive = u(); this.used = u();
     this.uid = new Uint32Array(cap);
     this.tgt = new Array(cap).fill(null);
@@ -90,6 +106,58 @@ class Army {
     this.liveCount[0] = this.liveCount[1] = 0;
     this.arrows = 0;
     this.head.fill(-1);
+    this.reserve = [emptyReserve(), emptyReserve()];
+    this.streamT = [WAR.streamInterval, WAR.streamInterval];
+  }
+
+  /* ------------------------------------------------------------ reserves */
+
+  addReserve(side: Team, kind: UnitType, n = 1) { this.reserve[teamIndex(side)][kind] += n; }
+
+  reserveCount(side: Team): number {
+    const r = this.reserve[teamIndex(side)];
+    let n = 0;
+    for (const k of UNIT_ORDER) n += r[k];
+    return n;
+  }
+
+  /** Where a side's reinforcements walk on from. */
+  setEdge(side: Team, x: number, y: number, spread: number) { this.edge[teamIndex(side)] = { x, y, spread }; }
+
+  /** Every WAR.streamInterval, a side under its live cap brings up to WAR.streamBatch reserves on at its edge. */
+  private stream(dt: number) {
+    const cap = Army.liveCap();
+    for (let t = 0; t < 2; t++) {
+      const interval = WAR.streamInterval * this.streamMult[t];
+      const side = teamName(t);
+      if (this.reserveCount(side) === 0 || this.liveCount[t] >= cap) { this.streamT[t] = interval; continue; }
+      this.streamT[t] -= dt;
+      if (this.streamT[t] > 0) continue;
+      this.streamT[t] = interval;
+      const e = this.edge[t];
+      for (let n = Math.min(WAR.streamBatch, cap - this.liveCount[t]); n > 0; n--) {
+        const kind = this.drawReserve(t);
+        if (!kind) break;
+        if (this.spawn(kind, side, e.x + rnd(-20, 20), e.y + rnd(-e.spread, e.spread), this.streamTier) < 0) {
+          this.reserve[t][kind]++;   // no slot after all: put it back
+          break;
+        }
+      }
+    }
+  }
+
+  /** Take one unit out of a side's reserve, weighted by what is left. */
+  private drawReserve(t: number): UnitType | null {
+    const r = this.reserve[t];
+    let total = 0;
+    for (const k of UNIT_ORDER) total += r[k];
+    if (!total) return null;
+    let pick = Math.random() * total;
+    for (const k of UNIT_ORDER) {
+      if (pick < r[k]) { r[k]--; return k; }
+      pick -= r[k];
+    }
+    return null;
   }
 
   live(t: Team): number { return this.liveCount[teamIndex(t)]; }
@@ -117,6 +185,7 @@ class Army {
     this.walk[i] = Math.random() * 6.28;
     this.tgt[i] = null;
     this.refs[i] = null;
+    this.anchorX[i] = x; this.anchorY[i] = y;
     this.liveCount[t]++;
     return i;
   }
@@ -128,6 +197,23 @@ class Army {
     const r = this.refs[i];
     if (r && r.uid === this.uid[i]) return r;
     return (this.refs[i] = new MinionRef(this, i, this.uid[i]));
+  }
+
+  /** Hold: every player-side unit's anchor becomes where it stands now. */
+  anchorAll(side: Team) {
+    const t = teamIndex(side);
+    for (let i = 0; i < this.cap; i++) {
+      if (!this.alive[i] || this.team[i] !== t) continue;
+      this.anchorX[i] = this.x[i]; this.anchorY[i] = this.y[i];
+    }
+  }
+
+  /** Follow: each unit's own spot around the knight, so the warband rings you instead of piling up. */
+  formationSpot(i: number, kx: number, ky: number): { x: number; y: number } {
+    const u = this.uid[i];
+    const ang = u * 2.39996;                       // golden angle: an even scatter
+    const r = 44 + (u % 4) * 30;
+    return { x: kx + Math.cos(ang) * r, y: ky + Math.sin(ang) * r * 0.75 };
   }
 
   /* ------------------------------------------------------------- the grid */
@@ -198,6 +284,7 @@ class Army {
       this.think(g, i, dt);
     }
     this.separate(g, dt);
+    this.stream(dt);
     for (let i = 0; i < this.cap; i++) {
       if (!this.alive[i]) continue;
       this.x[i] += this.vx[i] * dt;
@@ -228,22 +315,42 @@ class Army {
 
   /** Nearest hostile in sight: minions via the grid, the knight and elites directly. */
   private pick(g: Game, i: number): Combatant | null {
-    const side = teamName(this.team[i]);
-    const x = this.x[i], y = this.y[i], sight = WAR.unitSight;
-    let best: Combatant | null = null, bd = sight * sight;
-    const j = this.nearestHostile(side, x, y, sight);
-    if (j >= 0) { best = this.ref(j); bd = (this.x[j] - x) ** 2 + (this.y[j] - y) ** 2; }
+    return this.pickIn(g, i, this.x[i], this.y[i], WAR.unitSight);
+  }
+
+  /**
+   * The hostile nearest to unit i among those within r of (cx, cy). Follow and
+   * Hold use this to keep the fight near the knight or the held spot.
+   */
+  private pickIn(g: Game, i: number, cx: number, cy: number, r: number): Combatant | null {
+    const side = teamName(this.team[i]), own = this.team[i];
+    const x = this.x[i], y = this.y[i], r2 = r * r;
+    let best: Combatant | null = null, bd = Infinity;
+    this.query(cx, cy, r, (j) => {
+      if (this.team[j] === own) return;
+      if ((this.x[j] - cx) ** 2 + (this.y[j] - cy) ** 2 > r2) return;
+      const d = (this.x[j] - x) ** 2 + (this.y[j] - y) ** 2;
+      if (d < bd) { bd = d; best = this.ref(j); }
+    });
     for (const e of g.enemies) {
-      if (!e.alive || e.team === side) continue;
+      if (!e.alive || e.team === side || (e.x - cx) ** 2 + (e.y - cy) ** 2 > r2) continue;
       const d = (e.x - x) ** 2 + (e.y - y) ** 2;
       if (d < bd) { bd = d; best = e; }
     }
     const k = g.player;
-    if (side === 'enemy' && k.alive) {
+    if (side === 'enemy' && k.alive && (k.x - cx) ** 2 + (k.y - cy) ** 2 <= r2) {
       const d = (k.x - x) ** 2 + (k.y - y) ** 2;
       if (d < bd) { bd = d; best = k; }
     }
     return best;
+  }
+
+  /** The area unit i may fight in under its side's order: [cx, cy, r], or null for anywhere in sight. */
+  private leash(g: Game, i: number, order: Order): [number, number, number] | null {
+    const d = this.def(i);
+    if (order === 'follow') return [g.player.x, g.player.y, WAR.followRange + WAR.followEngage];
+    if (order === 'hold') return [this.anchorX[i], this.anchorY[i], WAR.holdRadius + d.reach + d.radius];
+    return null;
   }
 
   private think(g: Game, i: number, dt: number) {
@@ -251,10 +358,19 @@ class Army {
     const own = this.team[i];
     if (this.cd[i] > 0) this.cd[i] -= dt;
 
+    // the player's side obeys the knight's order; the Dominion always charges
+    const order: Order = own === TEAM_PLAYER ? g.order : 'charge';
+    const zone = this.leash(g, i, order);
+
     // re-pick, staggered so ~1/10th of the units do it each frame
     let t = this.tgt[i];
-    if (!d.ignoresUnits && ((this.frame + i) % WAR.unitRetargetFrames === 0 || !t || !t.alive)) {
-      t = this.tgt[i] = this.pick(g, i);
+    const due = (this.frame + i) % WAR.unitRetargetFrames === 0 || !t || !t.alive;
+    if (!d.ignoresUnits) {
+      const ft = order === 'focus' ? g.focusTarget() : null;
+      if (ft) t = this.tgt[i] = ft;
+      else if (due) t = this.tgt[i] = zone ? this.pickIn(g, i, zone[0], zone[1], zone[2]) : this.pick(g, i);
+      // a target that has dragged the fight out of the order's area is let go
+      if (t && zone && (t.x - zone[0]) ** 2 + (t.y - zone[1]) ** 2 > (zone[2] + 40) ** 2) t = this.tgt[i] = null;
     }
 
     const sp = d.speed;
@@ -275,9 +391,20 @@ class Army {
     }
 
     if (!t || !t.alive) {
-      // nothing in sight: march on the enemy's centre (rams always do)
       this.wind[i] = 0;
       this.state[i] = ST_ADVANCE;
+      if (order === 'follow' && !d.ignoresUnits) {
+        // fall in around the knight, running to keep up when left behind
+        const k = g.player, s = this.formationSpot(i, k.x, k.y);
+        const far = dist(this.x[i], this.y[i], s.x, s.y);
+        if (far > 18) steer(s.x, s.y, far > 120 ? Math.max(1, (TUNING.moveSpeed * 1.05) / sp) : 1); else halt();
+        return;
+      }
+      if (order === 'hold' && !d.ignoresUnits) {
+        if (dist(this.x[i], this.y[i], this.anchorX[i], this.anchorY[i]) > 10) steer(this.anchorX[i], this.anchorY[i], 1); else halt();
+        return;
+      }
+      // Charge, or nothing in sight: march on the enemy's centre (rams always do)
       const c = this.centre[1 - own];
       if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40) steer(c.x, c.y, 1); else halt();
       return;

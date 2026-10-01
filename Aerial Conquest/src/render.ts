@@ -233,6 +233,32 @@ class Renderer {
     }
   }
 
+  /** The order wheel: four slices around the knight (Q / LB) or under the thumb (CMD). */
+  private drawWheel(c: CanvasRenderingContext2D, g: Game) {
+    const cx = clamp(g.wheelX, 90, VIEW_W - 90), cy = clamp(g.wheelY, 90, VIEW_H - 90);
+    const R = 74, r = 26;
+    c.save();
+    for (let s = 0; s < 4; s++) {
+      const o = Game.WHEEL[s];
+      const mid = [-Math.PI / 2, 0, Math.PI / 2, Math.PI][s];
+      const on = s === g.wheelDir, cur = o === g.order;
+      c.beginPath();
+      c.arc(cx, cy, R, mid - Math.PI / 4 + 0.04, mid + Math.PI / 4 - 0.04);
+      c.arc(cx, cy, r, mid + Math.PI / 4 - 0.04, mid - Math.PI / 4 + 0.04, true);
+      c.closePath();
+      c.fillStyle = on ? this.alpha(ORDER_COLOR[o], 0.55) : 'rgba(12,16,32,0.78)';
+      c.fill();
+      c.strokeStyle = cur || on ? ORDER_COLOR[o] : 'rgba(140,170,240,0.35)';
+      c.lineWidth = cur ? 2.5 : 1.5;
+      c.stroke();
+      c.font = '800 11px ui-monospace, Menlo, Consolas, monospace';
+      c.textAlign = 'center';
+      c.fillStyle = on ? '#ffffff' : ORDER_COLOR[o];
+      c.fillText(o.toUpperCase(), cx + Math.cos(mid) * (R + r) / 2, cy + Math.sin(mid) * (R + r) / 2 + 4);
+    }
+    c.restore();
+  }
+
   /** Arrows in flight: short shafts along their velocity. */
   private drawArrows(c: CanvasRenderingContext2D, a: Army) {
     if (!a.arrows) return;
@@ -1473,7 +1499,8 @@ class Renderer {
     c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
     c.fillStyle = PAL.dim;
     const allies = g.alliesAlive();
-    c.fillText(`groups cleared ${g.groupsCleared}  ·  foes ${g.foesAlive()}  ·  allies ${allies}`, VIEW_W - 18, 48);
+    const resE = g.army.reserveCount('enemy'), resP = g.army.reserveCount('player');
+    c.fillText(`groups cleared ${g.groupsCleared}  ·  foes ${g.foesAlive() - resE}${resE ? ` +${resE} reserve` : ''}  ·  allies ${allies}${resP ? ` +${resP}` : ''}`, VIEW_W - 18, 48);
     c.restore();
 
     // equipped gear, small, under the bars
@@ -1486,6 +1513,13 @@ class Renderer {
       c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
       c.fillText(`${g.apFree()} SP unspent — ${IS_TOUCH ? 'MENU' : 'TAB'}`, 18, 78);
     }
+    // the standing order
+    c.font = '800 12px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = ORDER_COLOR[g.order];
+    c.fillText(`ORDERS: ${g.order.toUpperCase()}`, 18, 96);
+    c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+    c.fillStyle = PAL.dim;
+    c.fillText(IS_TOUCH ? 'CMD: drag to a slice · tap to cycle' : 'hold Q + direction · tap Q to cycle', 18, 110);
     c.restore();
 
     if (!IS_TOUCH && g.inCombat()) this.drawCommandMenu(c, g);
@@ -1537,6 +1571,19 @@ class Renderer {
       c.restore();
     }
 
+    if (g.orderT > 0 && p.alive) {
+      c.save();
+      c.globalAlpha = clamp(g.orderT / 0.3, 0, 1);
+      c.textAlign = 'center';
+      c.font = '900 22px ui-monospace, Menlo, Consolas, monospace';
+      c.strokeStyle = 'rgba(0,0,0,0.75)'; c.lineWidth = 5;
+      const s = `ORDER: ${g.order.toUpperCase()}`;
+      c.strokeText(s, VIEW_W / 2, 132);
+      c.fillStyle = ORDER_COLOR[g.order];
+      c.fillText(s, VIEW_W / 2, 132);
+      c.restore();
+    }
+    if (g.wheelOpen && p.alive && !g.menuOpen) this.drawWheel(c, g);
     if (g.waveIntro > 0 && p.alive && g.inCombat()) this.drawGrace(c, g);
     if (IS_TOUCH && g.inCombat() && !g.menuOpen && p.alive) this.drawTouch(c, g);
     if (!p.alive) this.drawGameOver(c, g);
@@ -2254,6 +2301,7 @@ class Renderer {
         ['DSH', 'dash with i-frames (learn it in the talent tree first)'],
         ['MAG', 'cast the highlighted spell; tap a chip to change it'],
         ['Lock-on', 'automatic on touch — it picks the nearest enemy'],
+        ['CMD', 'press, drag to an order, release  ·  tap to cycle'],
         ['Menu', 'the icon on the right: gear, forge, talents, status'],
       ]
       : [
@@ -2262,7 +2310,8 @@ class Renderer {
         ['Dash / Lock-on', 'Shift  ·  L'],
         ['Magic', '1 Fire  2 Blizzard  3 Thunder  4 Cure'],
         ['Menu', 'Tab for gear, forge, talents and status'],
-        ['Potion / Pause', 'Q  ·  P'],
+        ['Orders', 'hold Q + direction  ·  tap Q to cycle'],
+        ['Potion / Pause', 'E  ·  P'],
         ['Tuning panel', '` opens every combat constant as a live slider'],
       ];
 

@@ -322,6 +322,9 @@ const UNITS: Record<UnitType, UnitDef> = {
 };
 const UNIT_ORDER: UnitType[] = ['sword', 'spear', 'archer', 'shield', 'ram', 'hound'];
 
+/** HUD colour of each order. */
+const ORDER_COLOR: Record<string, string> = { follow: '#8fb4ff', charge: '#ff8a5c', hold: '#69e29a', focus: '#ffd54a' };
+
 /* ----------------------------------------------------------------- bosses */
 
 // AF's boss AI, kept for castle lords, keep captains, generals and the warlord.
@@ -404,15 +407,25 @@ const WAR = {
   arrowSpeed: 420,
   arrowCapacity: 256,
 
+  // warband, orders and streaming (Phase 3, PLAN 7.1 / 10.1 / 11.4)
+  warbandBase: 12,           // warband cap before talents and L3 castles (PLAN 12.2: up to 60)
+  followRange: 220,          // Follow: stay within this of the knight
+  followEngage: 120,         // ...and fight hostiles up to this far past it
+  holdRadius: 90,            // Hold: fight within this of the spot the order was given
+  streamInterval: 1.5,       // seconds between reserve batches while a side is under its live cap
+  streamBatch: 6,            // units per batch
+  wheelTapTime: 0.25,        // Q / LB released within this, with no direction, cycles the order
+  wheelDeadZone: 22,         // touch radial: drag this far (logical px) to pick a slice
+  orderBanner: 0.9,          // seconds the "ORDER: CHARGE" banner shows
+
   // the Phase 0 test battlefield
   testField: { w: 1920, h: 1200 },
   testFieldTier: 1,
   testFieldLevel: 4,
   testRespawnDelay: 2.5,     // seconds between a cleared group and the next
   testAllies: 2,             // allied Shades fighting beside the knight on the test field
-  testAllyMinions: 16,       // allied minions topped up with each new group
-  testFoeMinions: 20,        // Dominion minions in the first group...
-  testFoeMinionsPerGroup: 8, // ...and this many more per group after
+  testFoeMinions: 30,        // Dominion minions in the first group (past the live cap they wait in reserve)...
+  testFoeMinionsPerGroup: 15, // ...and this many more per group after
   testMix: { sword: 0.4, spear: 0.2, archer: 0.25, shield: 0.15 },   // PLAN 6 default recruit mix
 };
 
@@ -450,6 +463,7 @@ const TOUCH_BTNS: TouchBtn[] = [
   { id: 'jump',   x: 768, y: 430, r: 33, label: 'JMP', color: '#7fb4ff' },
   { id: 'dash',   x: 878, y: 356, r: 33, label: 'DSH', color: '#69e29a' },
   { id: 'magic',  x: 776, y: 340, r: 31, label: 'MAG', color: '#c39bff' },
+  { id: 'command', x: 672, y: 456, r: 30, label: 'CMD', color: '#ffd54a' },   // opens the order wheel
 ];
 
 const TOUCH_CHIPS = { x: 920, y: 186, dy: 38, r: 16 };

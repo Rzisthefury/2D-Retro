@@ -771,6 +771,11 @@ class Enemy {
    * one is clearly closer, so units don't flip-flop between two foes.
    */
   pickTarget(g: Game) {
+    // generals (allied elites) obey Focus; under Follow / Hold / Charge they fight on their own judgement
+    if (this.team === 'player' && g.order === 'focus') {
+      const ft = g.focusTarget();
+      if (ft) { this.target = ft; return; }
+    }
     let best: Combatant | null = null, bd = Infinity;
     for (const c of g.hostilesOf(this.team)) {
       const d = dist(this.x, this.y, c.x, c.y);

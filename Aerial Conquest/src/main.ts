@@ -117,6 +117,16 @@ class Game {
   pickups: Pickup[] = [];
 
   army = new Army();
+
+  // orders (PLAN 11.4)
+  order: Order = 'follow';
+  wheelOpen = false;           // the order wheel is up
+  wheelTouch = false;          // ...opened by the touch radial (vs. Q / LB)
+  wheelT = 0;                  // how long Q / LB has been held
+  wheelDir = -1;               // highlighted slice: 0 up (Charge), 1 right (Focus), 2 down (Hold), 3 left (Follow)
+  wheelX = 0; wheelY = 0;      // where the wheel is drawn (screen px)
+  private focusCache: Combatant | null = null;
+  private focusFrame = -1;
   private minionStop = 0;      // hitstop frames minion kills have added this sim frame
   private minionSfxT = 0;      // rate limit on minion hit/death sounds
   perfWork = new Float32Array(600);   // ms of sim + draw per frame (ring buffer)
@@ -377,6 +387,7 @@ class Game {
 
     this.time += dt;
     if (this.toastT > 0) this.toastT -= dt;
+    if (this.orderT > 0) this.orderT -= dt;
     if (this.bannerT > 0) this.bannerT -= dt;
     if (this.comboDisplay > 0) this.comboDisplay--;
     if (this.comboTimer > 0 && --this.comboTimer === 0) this.comboCount = 0;
@@ -399,6 +410,7 @@ class Game {
     }
 
     this.input.takeTap();   // taps outside the touch controls do nothing on the field
+    this.updateWheel(dt);
     if (this.input.touchChip >= 0) {
       this.touchSpell = this.input.touchChip;
       this.sfx.guard();
@@ -428,6 +440,94 @@ class Game {
     this.updateTestField(dt);
     this.follow(false);
     this.input.endTick();
+  }
+
+  /* --------------------------------------------------------------- orders */
+
+  /** Slice -> order. Up = Charge, right = Focus, down = Hold, left = Follow. */
+  static readonly WHEEL: Order[] = ['charge', 'focus', 'hold', 'follow'];
+
+  /** Which slice a direction points at, or -1 inside the dead zone. */
+  private sliceOf(dx: number, dy: number, dead: number): number {
+    if (Math.hypot(dx, dy) < dead) return -1;
+    if (Math.abs(dy) >= Math.abs(dx)) return dy < 0 ? 0 : 2;
+    return dx > 0 ? 1 : 3;
+  }
+
+  /**
+   * Keyboard: hold Q + direction, release to give the order; tap Q to cycle.
+   * Pad: the same with LB + stick. Touch: CMD opens a radial under the thumb,
+   * drag to a slice and release (a tap with no drag cycles).
+   */
+  private updateWheel(dt: number) {
+    const inp = this.input;
+    const held = inp.isHeld('KeyQ') || inp.padLB;
+    if (held && !this.wheelTouch) {
+      if (!this.wheelOpen) { this.wheelOpen = true; this.wheelT = 0; this.wheelDir = -1; }
+      this.wheelT += dt;
+      inp.suppressMove = true;            // directions pick a slice instead of walking
+      const v = inp.wheelVector();
+      const s = this.sliceOf(v.x, v.y, 0.5);
+      if (s >= 0) this.wheelDir = s;
+      this.wheelX = this.player.x - this.camX; this.wheelY = this.player.y - this.camY - 30;
+    } else if (this.wheelOpen && !this.wheelTouch) {
+      if (this.wheelDir >= 0) this.issueOrder(Game.WHEEL[this.wheelDir]);
+      else if (this.wheelT < WAR.wheelTapTime) this.cycleOrder();
+      this.wheelOpen = false;
+      inp.suppressMove = false;
+    } else if (inp.wasPressed('command') && !this.wheelOpen) {
+      // a tap of Q shorter than one frame: down and up between ticks, never seen as held
+      this.cycleOrder();
+    }
+    if (inp.radial.active) {
+      this.wheelOpen = true; this.wheelTouch = true;
+      this.wheelX = inp.radial.ox; this.wheelY = inp.radial.oy;
+      this.wheelDir = this.sliceOf(inp.radial.dx, inp.radial.dy, WAR.wheelDeadZone);
+    }
+    if (inp.radialRelease) {
+      const r = inp.radialRelease;
+      inp.radialRelease = null;
+      const s = this.sliceOf(r.dx, r.dy, WAR.wheelDeadZone);
+      if (s >= 0) this.issueOrder(Game.WHEEL[s]); else this.cycleOrder();
+      this.wheelOpen = false; this.wheelTouch = false;
+    }
+  }
+
+  cycleOrder() {
+    this.issueOrder(ORDERS[(ORDERS.indexOf(this.order) + 1) % ORDERS.length]);
+  }
+
+  issueOrder(o: Order) {
+    this.order = o;
+    if (o === 'hold') this.army.anchorAll('player');
+    this.focusFrame = -1;
+    this.sfx.cast(o === 'charge' ? 720 : o === 'focus' ? 640 : o === 'hold' ? 420 : 520);
+    this.orderT = WAR.orderBanner;
+  }
+  orderT = 0;
+
+  /**
+   * What Focus points everyone at: your lock-on target if you have one,
+   * otherwise the hostile nearest the knight (structures join in Phase 4-5).
+   * Worked out once per frame.
+   */
+  focusTarget(): Combatant | null {
+    if (this.focusFrame === this.input.frame) return this.focusCache;
+    this.focusFrame = this.input.frame;
+    const p = this.player;
+    let best: Combatant | null = p.lock && p.lock.alive ? p.lock : null;
+    if (!best) {
+      let bd = Infinity;
+      for (const e of this.enemies) {
+        if (!e.alive || e.team !== 'enemy') continue;
+        const d = dist(e.x, e.y, p.x, p.y);
+        if (d < bd) { bd = d; best = e; }
+      }
+      const j = this.army.nearestHostile('player', p.x, p.y, Math.min(bd, 2000));
+      if (j >= 0) best = this.army.ref(j);
+    }
+    this.focusCache = best;
+    return best;
   }
 
   /** The camera follows the knight, clamped to the battlefield. */
@@ -500,6 +600,8 @@ class Game {
     this.pickups.length = 0;
     this.army.clear();
     p.lock = null;
+    this.order = 'follow';
+    this.wheelOpen = false; this.wheelTouch = false; this.input.suppressMove = false;
     this.placePlayer();
     p.refreshStats(true);
     p.potions = Math.max(p.potions, 3);
@@ -539,7 +641,10 @@ class Game {
     return out;
   }
 
-  /** Spawn `kinds` as a block of ranks around (cx, cy); archers at the back. */
+  /** The warband's size cap (PLAN 12.2: 12 base; talents and L3 castles add up to 60 in Phase 11). */
+  warbandCap(): number { return WAR.warbandBase; }
+
+  /** Spawn `kinds` as a block of ranks around (cx, cy); archers at the back. Past the live cap they go to reserve. */
   private spawnBlock(kinds: UnitType[], side: Team, cx: number, cy: number) {
     const f = this.field;
     const sorted = kinds.slice().sort((a, b) => (a === 'archer' ? 1 : 0) - (b === 'archer' ? 1 : 0));
@@ -548,7 +653,7 @@ class Game {
       const rank = Math.floor(idx / perRank), file = idx % perRank;
       const x = clamp(cx + back * rank * gap + rnd(-4, 4), f.x + 30, f.x + f.w - 30);
       const y = clamp(cy + (file - (perRank - 1) / 2) * gap + rnd(-4, 4), f.y + 30, f.y + f.h - 30);
-      this.army.spawn(k, side, x, y, WAR.testFieldTier);
+      if (this.army.spawn(k, side, x, y, WAR.testFieldTier) < 0) this.army.addReserve(side, k);
     });
   }
 
@@ -568,11 +673,15 @@ class Game {
   private spawnTestGroup() {
     this.topUpAllies();
     const p = this.player, f = this.field;
-    const haveAllies = this.army.live('player');
-    const addAllies = Math.max(0, WAR.testAllyMinions - haveAllies);
-    if (addAllies) this.spawnBlock(this.mixOf(addAllies), 'player', clamp(p.x - 90, f.x + 60, f.x + f.w - 60), p.y);
-    const foes = Math.min(Army.liveCap(), WAR.testFoeMinions + WAR.testFoeMinionsPerGroup * this.groupsCleared);
+    // the warband: topped back up to its cap, beside the knight
+    const addWarband = Math.max(0, this.warbandCap() - this.army.live('player') - this.army.reserveCount('player'));
+    if (addWarband) this.spawnBlock(this.mixOf(addWarband), 'player', clamp(p.x - 90, f.x + 60, f.x + f.w - 60), p.y);
+    // the Dominion: a block ahead of the knight; past the live cap the rest wait in reserve at their edge
+    const foes = WAR.testFoeMinions + WAR.testFoeMinionsPerGroup * this.groupsCleared;
     const fx = p.x + 520 < f.x + f.w - 120 ? p.x + 520 : p.x - 520;
+    const enemyEdgeX = fx > p.x ? f.x + f.w - 40 : f.x + 40;
+    this.army.setEdge('enemy', enemyEdgeX, p.y, 220);
+    this.army.setEdge('player', fx > p.x ? f.x + 40 : f.x + f.w - 40, p.y, 220);
     this.spawnBlock(this.mixOf(foes), 'enemy', clamp(fx, f.x + 120, f.x + f.w - 120), p.y);
     const ids = this.composition(this.groupsCleared + 1, ['shade', 'caster', 'flyer', 'bruiser']).slice(0, 3);
     for (let i = 0; i < ids.length; i++) {
@@ -711,7 +820,7 @@ class Game {
   }
 
   /** Dominion units still standing (allies don't count). */
-  foesAlive(): number { return this.enemies.filter((e) => e.alive && e.team === 'enemy').length + this.army.live('enemy'); }
+  foesAlive(): number { return this.enemies.filter((e) => e.alive && e.team === 'enemy').length + this.army.live('enemy') + this.army.reserveCount('enemy'); }
 
   /** Allies standing: elites and minions. */
   alliesAlive(): number { return this.enemies.filter((e) => e.alive && e.team === 'player').length + this.army.live('player'); }
@@ -1235,6 +1344,7 @@ class Game {
     this.comboCount = 0;
     this.menuMode = 'root';
     this.menuIndex = 0;
+    this.input.suppressMove = false;
     this.startTestField();
     this.banner('DEFEATED', 'The test field starts over. Gear, talents and materials are kept.', '#ff9d9d');
   }

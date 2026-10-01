@@ -28,6 +28,84 @@ No dependencies, no bundler, nothing to install.
 | `src/render.ts` | battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `battle`), test field, team-aware damage (`hostilesOf`), menus, save, debug panel |
 
+# Phase 3: warband, orders, streaming
+
+**What changed**
+
+- **Controls:** Potion moved from Q to **E**. **Q** is the order wheel
+  (PLAN 11.4). On the gamepad, **LB** is the order wheel, so Fire is no
+  longer on LB; cast it from the command menu (D-pad + confirm).
+- **The order wheel:**
+  - Keyboard: hold Q + direction (WASD or arrows) and release to give the
+    order. Tap Q to cycle; a tap shorter than one frame is caught on the
+    key-down edge.
+  - Gamepad: hold LB + stick; tap LB to cycle.
+  - Touch: a new **CMD** button opens a 4-slice radial under the thumb. Drag
+    toward a slice (past `WAR.wheelDeadZone`) and release; a tap cycles.
+  - Up = Charge, right = Focus, down = Hold, left = Follow.
+  - With Q or LB held, the knight stands still so the direction keys pick a
+    slice. On touch the other thumb keeps walking.
+  - The HUD shows the standing order with a hint, and an "ORDER: …" call-out
+    flashes when it changes.
+- **What the orders do** (player-side minions; Dominion units always charge):
+  - **Follow** (default): each unit has its own spot in a ring around the
+    knight (no pile-up) and runs to keep up. It only fights hostiles within
+    `WAR.followRange` + `followEngage` (220 + 120 px) of the knight, and lets go of a
+    target that drags the fight away.
+  - **Charge:** engage the nearest hostile in sight; with nothing in sight,
+    march on the enemy's centre.
+  - **Hold:** every unit's anchor is where it stood when the order was
+    given. It fights only within `WAR.holdRadius` (90 px) + its reach of
+    that spot and walks back to it.
+  - **Focus:** every unit targets the knight's lock-on target. With no lock,
+    it targets the hostile nearest the knight; structures join this in
+    Phases 4–5.
+  - Allied elites (stand-ins for generals) obey Focus. Under the other
+    orders they fight on their own judgement, which matches "generals obey
+    Charge/Focus", since Charge is their default anyway.
+- **Warband:** the knight's own squad, capped at `WAR.warbandBase` = 12
+  (PLAN 12.2). Talents and L3 castles raise it toward 60 in Phase 11. On the
+  test field it is topped up with each new group.
+- **Streaming (PLAN 10.1):** units past the live cap (100 per side, 60 on
+  phones) wait in a per-side reserve. While a side is under its cap, every
+  `WAR.streamInterval` (1.5 s) up to `WAR.streamBatch` (6) come on at that
+  side's edge, drawn by the reserve's mix. At the cap nothing streams.
+  `streamMult` is ready for the Muster talent. A test-field group now counts
+  its reserve, so it only clears once the reserve is spent too. Groups start
+  at 30 and grow by 15, so later groups overflow into reserve. The HUD shows
+  "+N reserve".
+
+**Verified**: headless Chromium, desktop + emulated iPhone 13, Phase 3
+suite 24/24:
+
+- **Done-when, keyboard:** tap Q cycles. Q+W/D/S/A gives
+  Charge/Focus/Hold/Follow with the wheel open, and the knight moves 0 px
+  while choosing.
+- **Done-when, pad:** LB + stick up/right/down/left gives the same four, and
+  tapping LB cycles. The pad was a stub injected through
+  `navigator.getGamepads`, because Playwright can't attach a real one.
+- **Done-when, touch:** a CMD tap cycles, and the radial drag in all four
+  directions gives the right order. The knight keeps walking on the stick
+  while the radial is open.
+- **Done-when, streaming:** with 100 at the cap and 30 in reserve, nothing
+  streamed for 2 s. After 20 kills it came back +6 at 1.56 s, +6 at 3.05 s
+  and +6 at 4.57 s, and all 18 newcomers appeared at the side's edge. Phone:
+  60 live, 20 in reserve; after 12 kills it was back to 60 with 8 left in
+  reserve.
+- Follow: after walking, the furthest warband unit was 135 px from the
+  knight, and a foe 500 px away was left alone. Switching to Charge, the
+  warband went and engaged it.
+- Hold: the knight walked 543 px; the warband stayed within 8 px of its
+  anchors, then caught back up on Follow.
+- Focus: all 10 units and the allied elite took the lock-on target; with no
+  lock, all of them took the hostile nearest the knight.
+- Potion: Q no longer drinks; E drinks (HP 30 → 100).
+- The test field fields a warband of 12. A big group overflows into reserve,
+  and the reserve counts toward the group.
+
+**Assumed / not checked**: a real gamepad (only the stub was tested); how
+the radial feels under a real thumb.
+
 # Phase 2: mass units
 
 Hundreds of minions on the field (PLAN 11.1–11.2), fighting each other, the

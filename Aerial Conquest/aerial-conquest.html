@@ -202,11 +202,12 @@
   <div><b>Lock-on / cycle</b> <span class="k">L</span> &nbsp; <b>Dash</b> <span class="k">Shift</span></div>
   <div><b>Command menu</b> <span class="k">&uarr;</span><span class="k">&darr;</span> <span class="k">Enter</span> <span class="k">Esc</span></div>
   <div><b>Magic</b> <span class="k">1</span> Fire <span class="k">2</span> Blizzard <span class="k">3</span> Thunder <span class="k">4</span> Cure</div>
-  <div><b>Potion</b> <span class="k">Q</span> &nbsp; <b>Pause</b> <span class="k">P</span> &nbsp; <b>Mute</b> <span class="k">M</span></div>
+  <div><b>Orders</b> hold <span class="k">Q</span> + direction &nbsp; <b>Potion</b> <span class="k">E</span></div>
+  <div><b>Pause</b> <span class="k">P</span> &nbsp; <b>Mute</b> <span class="k">M</span></div>
   <div><b>Gear / Synthesis / Talents</b> <span class="k">Tab</span></div>
   <div>On a phone: touch controls and auto lock-on turn on automatically.</div>
   <div><b>Retry</b> <span class="k">R</span> &nbsp; <b>Tuning</b> <span class="k">`</span></div>
-  <div>Gamepad works too: <b>&#9723;</b> attack, <b>&#10005;</b> jump, triggers lock-on.</div>
+  <div>Gamepad works too: <b>&#9723;</b> attack, <b>&#10005;</b> jump, triggers lock-on, hold <b>LB</b> + stick for orders.</div>
 </div>
 
 <footer>
@@ -408,6 +409,8 @@ const UNITS = {
     hound: { id: 'hound', name: 'Thornhound', hp: 22, dmg: 5, speed: 160, reach: 26, radius: 9, def: 1, windup: 0.3, cooldown: 0.8, power: 1, beast: true, side: 'enemy' },
 };
 const UNIT_ORDER = ['sword', 'spear', 'archer', 'shield', 'ram', 'hound'];
+/** HUD colour of each order. */
+const ORDER_COLOR = { follow: '#8fb4ff', charge: '#ff8a5c', hold: '#69e29a', focus: '#ffd54a' };
 function freshUpgrades() { return { vitality: 0, might: 0, arcana: 0 }; }
 /** The knight's base stats: AF's level-1 values plus whatever the upgrades buy. */
 function statsForKnight(u) {
@@ -451,15 +454,24 @@ const WAR = {
     unitCorpseTime: 0.45, // seconds a dead minion fades before its slot frees
     arrowSpeed: 420,
     arrowCapacity: 256,
+    // warband, orders and streaming (Phase 3, PLAN 7.1 / 10.1 / 11.4)
+    warbandBase: 12, // warband cap before talents and L3 castles (PLAN 12.2: up to 60)
+    followRange: 220, // Follow: stay within this of the knight
+    followEngage: 120, // ...and fight hostiles up to this far past it
+    holdRadius: 90, // Hold: fight within this of the spot the order was given
+    streamInterval: 1.5, // seconds between reserve batches while a side is under its live cap
+    streamBatch: 6, // units per batch
+    wheelTapTime: 0.25, // Q / LB released within this, with no direction, cycles the order
+    wheelDeadZone: 22, // touch radial: drag this far (logical px) to pick a slice
+    orderBanner: 0.9, // seconds the "ORDER: CHARGE" banner shows
     // the Phase 0 test battlefield
     testField: { w: 1920, h: 1200 },
     testFieldTier: 1,
     testFieldLevel: 4,
     testRespawnDelay: 2.5, // seconds between a cleared group and the next
     testAllies: 2, // allied Shades fighting beside the knight on the test field
-    testAllyMinions: 16, // allied minions topped up with each new group
-    testFoeMinions: 20, // Dominion minions in the first group...
-    testFoeMinionsPerGroup: 8, // ...and this many more per group after
+    testFoeMinions: 30, // Dominion minions in the first group (past the live cap they wait in reserve)...
+    testFoeMinionsPerGroup: 15, // ...and this many more per group after
     testMix: { sword: 0.4, spear: 0.2, archer: 0.25, shield: 0.15 }, // PLAN 6 default recruit mix
 };
 /* ------------------------------------------------------ tier scaling */
@@ -486,6 +498,7 @@ const TOUCH_BTNS = [
     { id: 'jump', x: 768, y: 430, r: 33, label: 'JMP', color: '#7fb4ff' },
     { id: 'dash', x: 878, y: 356, r: 33, label: 'DSH', color: '#69e29a' },
     { id: 'magic', x: 776, y: 340, r: 31, label: 'MAG', color: '#c39bff' },
+    { id: 'command', x: 672, y: 456, r: 30, label: 'CMD', color: '#ffd54a' }, // opens the order wheel
 ];
 const TOUCH_CHIPS = { x: 920, y: 186, dy: 38, r: 16 };
 // Menu geometry lives here because the renderer draws from it and the input
@@ -597,7 +610,7 @@ const KEYMAP = {
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
     Enter: 'confirm', Escape: 'cancel', Backspace: 'cancel',
     Digit1: 'spell1', Digit2: 'spell2', Digit3: 'spell3', Digit4: 'spell4', Digit5: 'spell5',
-    KeyQ: 'item', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back',
+    KeyE: 'item', KeyQ: 'command', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back',
 };
 // Movement is read separately so WASD can coexist with the arrow-key menu.
 const MOVE_KEYS = { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'] };
@@ -618,6 +631,13 @@ class InputState {
         this.touchChip = -1; // spell chip tapped this tick, -1 = none
         this.uiMode = false; // a full-screen UI owns the taps
         this.lastTap = null;
+        // the command wheel (PLAN 11.4)
+        this.padLB = false; // gamepad LB held
+        this.suppressMove = false; // the knight stands still while the keyboard/pad wheel is open
+        /** Touch radial: opened by pressing CMD, follows the thumb, picks on release. */
+        this.radial = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
+        /** Set on release of the touch radial: the final offset from where it opened. Game consumes it. */
+        this.radialRelease = null;
     }
     attach(target) {
         window.addEventListener('keydown', (e) => {
@@ -678,6 +698,17 @@ class InputState {
             }
             catch { /* not fatal */ }
             const hit = this.buttonAt(p.x, p.y);
+            if (hit === 'command') {
+                // the order wheel opens under the thumb; dragging toward a slice picks it on release
+                this.radial.active = true;
+                this.radial.id = e.pointerId;
+                this.radial.ox = p.x;
+                this.radial.oy = p.y;
+                this.radial.dx = 0;
+                this.radial.dy = 0;
+                this.litBtns.add('command');
+                return;
+            }
             if (hit) {
                 this.heldBtns.set(e.pointerId, hit);
                 this.litBtns.add(hit);
@@ -699,6 +730,12 @@ class InputState {
             }
         }, { passive: false });
         const move = (e) => {
+            if (this.radial.active && e.pointerId === this.radial.id) {
+                const p = this.toLogical(e);
+                this.radial.dx = p.x - this.radial.ox;
+                this.radial.dy = p.y - this.radial.oy;
+                return;
+            }
             if (!this.stick.active || e.pointerId !== this.stick.id)
                 return;
             e.preventDefault();
@@ -724,6 +761,12 @@ class InputState {
         };
         canvas.addEventListener('pointermove', move, { passive: false });
         const up = (e) => {
+            if (this.radial.active && e.pointerId === this.radial.id) {
+                this.radialRelease = { dx: this.radial.dx, dy: this.radial.dy };
+                this.radial.active = false;
+                this.radial.id = -1;
+                this.litBtns.delete('command');
+            }
             if (this.stick.active && e.pointerId === this.stick.id) {
                 this.stick.active = false;
                 this.stick.id = -1;
@@ -777,7 +820,7 @@ class InputState {
         const map = [
             [0, 'jump'], [2, 'attack'], [1, 'cancel'], [3, 'confirm'],
             [12, 'up'], [13, 'down'], [14, 'left'], [15, 'right'],
-            [6, 'lock'], [7, 'dash'], [5, 'dash'], [4, 'spell1'], [9, 'pause'], [8, 'menu'],
+            [6, 'lock'], [7, 'dash'], [5, 'dash'], [9, 'pause'], [8, 'menu'],
         ];
         for (const [btn, action] of map) {
             const down = !!gp.buttons[btn] && gp.buttons[btn].pressed;
@@ -785,6 +828,7 @@ class InputState {
                 this.press(action);
             this.prevPad[btn] = down;
         }
+        this.padLB = !!gp.buttons[4] && gp.buttons[4].pressed; // LB: hold for the order wheel
         const dz = (v) => (Math.abs(v) < 0.22 ? 0 : v);
         this.padAxis.x = dz(gp.axes[0] || 0);
         this.padAxis.y = dz(gp.axes[1] || 0);
@@ -808,8 +852,27 @@ class InputState {
     clearBuffer() { this.buffer.length = 0; }
     wasPressed(a) { return this.pressed.has(a); }
     isHeld(code) { return this.held.has(code); }
+    /** Direction held for the order wheel: WASD, arrow keys or the pad stick (ignores suppressMove). */
+    wheelVector() {
+        let x = 0, y = 0;
+        if (MOVE_KEYS.left.some((k) => this.held.has(k)) || this.held.has('ArrowLeft'))
+            x -= 1;
+        if (MOVE_KEYS.right.some((k) => this.held.has(k)) || this.held.has('ArrowRight'))
+            x += 1;
+        if (MOVE_KEYS.up.some((k) => this.held.has(k)) || this.held.has('ArrowUp'))
+            y -= 1;
+        if (MOVE_KEYS.down.some((k) => this.held.has(k)) || this.held.has('ArrowDown'))
+            y += 1;
+        if (x === 0 && y === 0) {
+            x = this.padAxis.x;
+            y = this.padAxis.y;
+        }
+        return { x, y };
+    }
     /** Normalised movement vector from WASD, the pad stick, or a thumb. */
     moveVector() {
+        if (this.suppressMove)
+            return { x: 0, y: 0 };
         if (this.stick.active && (this.stick.x || this.stick.y)) {
             return { x: this.stick.x, y: this.stick.y };
         }
@@ -1275,6 +1338,8 @@ function canLearn(set, t, apFree) {
  * ========================================================================= */
 const TEAM_PLAYER = 0, TEAM_ENEMY = 1;
 const ST_ADVANCE = 0, ST_FIGHT = 1, ST_FLEE = 2;
+const ORDERS = ['follow', 'charge', 'hold', 'focus'];
+function emptyReserve() { return { sword: 0, spear: 0, archer: 0, shield: 0, ram: 0, hound: 0 }; }
 function teamIndex(t) { return t === 'player' ? TEAM_PLAYER : TEAM_ENEMY; }
 function teamName(i) { return i === TEAM_PLAYER ? 'player' : 'enemy'; }
 /** A minion seen as a Combatant (x, y, z, radius, alive, team). Stale once its slot is reused. */
@@ -1297,6 +1362,12 @@ class Army {
         this.nextUid = 1;
         this.frame = 0;
         this.liveCount = [0, 0];
+        // reserves (PLAN 10.1): units past the live cap wait here and stream in from their side's edge
+        this.reserve = [emptyReserve(), emptyReserve()];
+        this.streamT = [0, 0];
+        this.streamMult = [1, 1]; // < 1 streams faster (the Muster talent, Phase 11)
+        this.edge = [{ x: 0, y: 0, spread: 200 }, { x: 0, y: 0, spread: 200 }];
+        this.streamTier = 1;
         /** where each side's fighters are massed (knight and elites included), for units with nothing in sight */
         this.centre = [{ x: 0, y: 0, n: 0 }, { x: 0, y: 0, n: 0 }];
         // uniform grid
@@ -1323,6 +1394,8 @@ class Army {
         this.atk = f();
         this.armor = f();
         this.walk = f();
+        this.anchorX = f();
+        this.anchorY = f();
         this.type = u();
         this.team = u();
         this.state = u();
@@ -1358,6 +1431,63 @@ class Army {
         this.liveCount[0] = this.liveCount[1] = 0;
         this.arrows = 0;
         this.head.fill(-1);
+        this.reserve = [emptyReserve(), emptyReserve()];
+        this.streamT = [WAR.streamInterval, WAR.streamInterval];
+    }
+    /* ------------------------------------------------------------ reserves */
+    addReserve(side, kind, n = 1) { this.reserve[teamIndex(side)][kind] += n; }
+    reserveCount(side) {
+        const r = this.reserve[teamIndex(side)];
+        let n = 0;
+        for (const k of UNIT_ORDER)
+            n += r[k];
+        return n;
+    }
+    /** Where a side's reinforcements walk on from. */
+    setEdge(side, x, y, spread) { this.edge[teamIndex(side)] = { x, y, spread }; }
+    /** Every WAR.streamInterval, a side under its live cap brings up to WAR.streamBatch reserves on at its edge. */
+    stream(dt) {
+        const cap = Army.liveCap();
+        for (let t = 0; t < 2; t++) {
+            const interval = WAR.streamInterval * this.streamMult[t];
+            const side = teamName(t);
+            if (this.reserveCount(side) === 0 || this.liveCount[t] >= cap) {
+                this.streamT[t] = interval;
+                continue;
+            }
+            this.streamT[t] -= dt;
+            if (this.streamT[t] > 0)
+                continue;
+            this.streamT[t] = interval;
+            const e = this.edge[t];
+            for (let n = Math.min(WAR.streamBatch, cap - this.liveCount[t]); n > 0; n--) {
+                const kind = this.drawReserve(t);
+                if (!kind)
+                    break;
+                if (this.spawn(kind, side, e.x + rnd(-20, 20), e.y + rnd(-e.spread, e.spread), this.streamTier) < 0) {
+                    this.reserve[t][kind]++; // no slot after all: put it back
+                    break;
+                }
+            }
+        }
+    }
+    /** Take one unit out of a side's reserve, weighted by what is left. */
+    drawReserve(t) {
+        const r = this.reserve[t];
+        let total = 0;
+        for (const k of UNIT_ORDER)
+            total += r[k];
+        if (!total)
+            return null;
+        let pick = Math.random() * total;
+        for (const k of UNIT_ORDER) {
+            if (pick < r[k]) {
+                r[k]--;
+                return k;
+            }
+            pick -= r[k];
+        }
+        return null;
     }
     live(t) { return this.liveCount[teamIndex(t)]; }
     /** Spawn one minion. Returns its slot, or -1 if the side is at its live cap or the arrays are full. */
@@ -1390,6 +1520,8 @@ class Army {
         this.walk[i] = Math.random() * 6.28;
         this.tgt[i] = null;
         this.refs[i] = null;
+        this.anchorX[i] = x;
+        this.anchorY[i] = y;
         this.liveCount[t]++;
         return i;
     }
@@ -1400,6 +1532,23 @@ class Army {
         if (r && r.uid === this.uid[i])
             return r;
         return (this.refs[i] = new MinionRef(this, i, this.uid[i]));
+    }
+    /** Hold: every player-side unit's anchor becomes where it stands now. */
+    anchorAll(side) {
+        const t = teamIndex(side);
+        for (let i = 0; i < this.cap; i++) {
+            if (!this.alive[i] || this.team[i] !== t)
+                continue;
+            this.anchorX[i] = this.x[i];
+            this.anchorY[i] = this.y[i];
+        }
+    }
+    /** Follow: each unit's own spot around the knight, so the warband rings you instead of piling up. */
+    formationSpot(i, kx, ky) {
+        const u = this.uid[i];
+        const ang = u * 2.39996; // golden angle: an even scatter
+        const r = 44 + (u % 4) * 30;
+        return { x: kx + Math.cos(ang) * r, y: ky + Math.sin(ang) * r * 0.75 };
     }
     /* ------------------------------------------------------------- the grid */
     rebuildGrid(f) {
@@ -1477,6 +1626,7 @@ class Army {
             this.think(g, i, dt);
         }
         this.separate(g, dt);
+        this.stream(dt);
         for (let i = 0; i < this.cap; i++) {
             if (!this.alive[i])
                 continue;
@@ -1525,16 +1675,29 @@ class Army {
     }
     /** Nearest hostile in sight: minions via the grid, the knight and elites directly. */
     pick(g, i) {
-        const side = teamName(this.team[i]);
-        const x = this.x[i], y = this.y[i], sight = WAR.unitSight;
-        let best = null, bd = sight * sight;
-        const j = this.nearestHostile(side, x, y, sight);
-        if (j >= 0) {
-            best = this.ref(j);
-            bd = (this.x[j] - x) ** 2 + (this.y[j] - y) ** 2;
-        }
+        return this.pickIn(g, i, this.x[i], this.y[i], WAR.unitSight);
+    }
+    /**
+     * The hostile nearest to unit i among those within r of (cx, cy). Follow and
+     * Hold use this to keep the fight near the knight or the held spot.
+     */
+    pickIn(g, i, cx, cy, r) {
+        const side = teamName(this.team[i]), own = this.team[i];
+        const x = this.x[i], y = this.y[i], r2 = r * r;
+        let best = null, bd = Infinity;
+        this.query(cx, cy, r, (j) => {
+            if (this.team[j] === own)
+                return;
+            if ((this.x[j] - cx) ** 2 + (this.y[j] - cy) ** 2 > r2)
+                return;
+            const d = (this.x[j] - x) ** 2 + (this.y[j] - y) ** 2;
+            if (d < bd) {
+                bd = d;
+                best = this.ref(j);
+            }
+        });
         for (const e of g.enemies) {
-            if (!e.alive || e.team === side)
+            if (!e.alive || e.team === side || (e.x - cx) ** 2 + (e.y - cy) ** 2 > r2)
                 continue;
             const d = (e.x - x) ** 2 + (e.y - y) ** 2;
             if (d < bd) {
@@ -1543,7 +1706,7 @@ class Army {
             }
         }
         const k = g.player;
-        if (side === 'enemy' && k.alive) {
+        if (side === 'enemy' && k.alive && (k.x - cx) ** 2 + (k.y - cy) ** 2 <= r2) {
             const d = (k.x - x) ** 2 + (k.y - y) ** 2;
             if (d < bd) {
                 bd = d;
@@ -1552,15 +1715,35 @@ class Army {
         }
         return best;
     }
+    /** The area unit i may fight in under its side's order: [cx, cy, r], or null for anywhere in sight. */
+    leash(g, i, order) {
+        const d = this.def(i);
+        if (order === 'follow')
+            return [g.player.x, g.player.y, WAR.followRange + WAR.followEngage];
+        if (order === 'hold')
+            return [this.anchorX[i], this.anchorY[i], WAR.holdRadius + d.reach + d.radius];
+        return null;
+    }
     think(g, i, dt) {
         const d = this.def(i);
         const own = this.team[i];
         if (this.cd[i] > 0)
             this.cd[i] -= dt;
+        // the player's side obeys the knight's order; the Dominion always charges
+        const order = own === TEAM_PLAYER ? g.order : 'charge';
+        const zone = this.leash(g, i, order);
         // re-pick, staggered so ~1/10th of the units do it each frame
         let t = this.tgt[i];
-        if (!d.ignoresUnits && ((this.frame + i) % WAR.unitRetargetFrames === 0 || !t || !t.alive)) {
-            t = this.tgt[i] = this.pick(g, i);
+        const due = (this.frame + i) % WAR.unitRetargetFrames === 0 || !t || !t.alive;
+        if (!d.ignoresUnits) {
+            const ft = order === 'focus' ? g.focusTarget() : null;
+            if (ft)
+                t = this.tgt[i] = ft;
+            else if (due)
+                t = this.tgt[i] = zone ? this.pickIn(g, i, zone[0], zone[1], zone[2]) : this.pick(g, i);
+            // a target that has dragged the fight out of the order's area is let go
+            if (t && zone && (t.x - zone[0]) ** 2 + (t.y - zone[1]) ** 2 > (zone[2] + 40) ** 2)
+                t = this.tgt[i] = null;
         }
         const sp = d.speed;
         const steer = (tx, ty, mult) => {
@@ -1578,9 +1761,26 @@ class Army {
             return;
         }
         if (!t || !t.alive) {
-            // nothing in sight: march on the enemy's centre (rams always do)
             this.wind[i] = 0;
             this.state[i] = ST_ADVANCE;
+            if (order === 'follow' && !d.ignoresUnits) {
+                // fall in around the knight, running to keep up when left behind
+                const k = g.player, s = this.formationSpot(i, k.x, k.y);
+                const far = dist(this.x[i], this.y[i], s.x, s.y);
+                if (far > 18)
+                    steer(s.x, s.y, far > 120 ? Math.max(1, (TUNING.moveSpeed * 1.05) / sp) : 1);
+                else
+                    halt();
+                return;
+            }
+            if (order === 'hold' && !d.ignoresUnits) {
+                if (dist(this.x[i], this.y[i], this.anchorX[i], this.anchorY[i]) > 10)
+                    steer(this.anchorX[i], this.anchorY[i], 1);
+                else
+                    halt();
+                return;
+            }
+            // Charge, or nothing in sight: march on the enemy's centre (rams always do)
             const c = this.centre[1 - own];
             if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40)
                 steer(c.x, c.y, 1);
@@ -3338,6 +3538,14 @@ class Enemy {
      * one is clearly closer, so units don't flip-flop between two foes.
      */
     pickTarget(g) {
+        // generals (allied elites) obey Focus; under Follow / Hold / Charge they fight on their own judgement
+        if (this.team === 'player' && g.order === 'focus') {
+            const ft = g.focusTarget();
+            if (ft) {
+                this.target = ft;
+                return;
+            }
+        }
         let best = null, bd = Infinity;
         for (const c of g.hostilesOf(this.team)) {
             const d = dist(this.x, this.y, c.x, c.y);
@@ -4241,6 +4449,31 @@ class Renderer {
                 c.fillRect(fx * 5 - (fx > 0 ? 0 : 5) + 1.5, -11, 2, 2);
             }
         }
+    }
+    /** The order wheel: four slices around the knight (Q / LB) or under the thumb (CMD). */
+    drawWheel(c, g) {
+        const cx = clamp(g.wheelX, 90, VIEW_W - 90), cy = clamp(g.wheelY, 90, VIEW_H - 90);
+        const R = 74, r = 26;
+        c.save();
+        for (let s = 0; s < 4; s++) {
+            const o = Game.WHEEL[s];
+            const mid = [-Math.PI / 2, 0, Math.PI / 2, Math.PI][s];
+            const on = s === g.wheelDir, cur = o === g.order;
+            c.beginPath();
+            c.arc(cx, cy, R, mid - Math.PI / 4 + 0.04, mid + Math.PI / 4 - 0.04);
+            c.arc(cx, cy, r, mid + Math.PI / 4 - 0.04, mid - Math.PI / 4 + 0.04, true);
+            c.closePath();
+            c.fillStyle = on ? this.alpha(ORDER_COLOR[o], 0.55) : 'rgba(12,16,32,0.78)';
+            c.fill();
+            c.strokeStyle = cur || on ? ORDER_COLOR[o] : 'rgba(140,170,240,0.35)';
+            c.lineWidth = cur ? 2.5 : 1.5;
+            c.stroke();
+            c.font = '800 11px ui-monospace, Menlo, Consolas, monospace';
+            c.textAlign = 'center';
+            c.fillStyle = on ? '#ffffff' : ORDER_COLOR[o];
+            c.fillText(o.toUpperCase(), cx + Math.cos(mid) * (R + r) / 2, cy + Math.sin(mid) * (R + r) / 2 + 4);
+        }
+        c.restore();
     }
     /** Arrows in flight: short shafts along their velocity. */
     drawArrows(c, a) {
@@ -5883,7 +6116,8 @@ class Renderer {
         c.font = '600 11px ui-monospace, Menlo, Consolas, monospace';
         c.fillStyle = PAL.dim;
         const allies = g.alliesAlive();
-        c.fillText(`groups cleared ${g.groupsCleared}  ·  foes ${g.foesAlive()}  ·  allies ${allies}`, VIEW_W - 18, 48);
+        const resE = g.army.reserveCount('enemy'), resP = g.army.reserveCount('player');
+        c.fillText(`groups cleared ${g.groupsCleared}  ·  foes ${g.foesAlive() - resE}${resE ? ` +${resE} reserve` : ''}  ·  allies ${allies}${resP ? ` +${resP}` : ''}`, VIEW_W - 18, 48);
         c.restore();
         // equipped gear, small, under the bars
         c.save();
@@ -5895,6 +6129,13 @@ class Renderer {
             c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
             c.fillText(`${g.apFree()} SP unspent — ${IS_TOUCH ? 'MENU' : 'TAB'}`, 18, 78);
         }
+        // the standing order
+        c.font = '800 12px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = ORDER_COLOR[g.order];
+        c.fillText(`ORDERS: ${g.order.toUpperCase()}`, 18, 96);
+        c.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+        c.fillStyle = PAL.dim;
+        c.fillText(IS_TOUCH ? 'CMD: drag to a slice · tap to cycle' : 'hold Q + direction · tap Q to cycle', 18, 110);
         c.restore();
         if (!IS_TOUCH && g.inCombat())
             this.drawCommandMenu(c, g);
@@ -5942,6 +6183,21 @@ class Renderer {
             }
             c.restore();
         }
+        if (g.orderT > 0 && p.alive) {
+            c.save();
+            c.globalAlpha = clamp(g.orderT / 0.3, 0, 1);
+            c.textAlign = 'center';
+            c.font = '900 22px ui-monospace, Menlo, Consolas, monospace';
+            c.strokeStyle = 'rgba(0,0,0,0.75)';
+            c.lineWidth = 5;
+            const s = `ORDER: ${g.order.toUpperCase()}`;
+            c.strokeText(s, VIEW_W / 2, 132);
+            c.fillStyle = ORDER_COLOR[g.order];
+            c.fillText(s, VIEW_W / 2, 132);
+            c.restore();
+        }
+        if (g.wheelOpen && p.alive && !g.menuOpen)
+            this.drawWheel(c, g);
         if (g.waveIntro > 0 && p.alive && g.inCombat())
             this.drawGrace(c, g);
         if (IS_TOUCH && g.inCombat() && !g.menuOpen && p.alive)
@@ -6697,6 +6953,7 @@ class Renderer {
                 ['DSH', 'dash with i-frames (learn it in the talent tree first)'],
                 ['MAG', 'cast the highlighted spell; tap a chip to change it'],
                 ['Lock-on', 'automatic on touch — it picks the nearest enemy'],
+                ['CMD', 'press, drag to an order, release  ·  tap to cycle'],
                 ['Menu', 'the icon on the right: gear, forge, talents, status'],
             ]
             : [
@@ -6705,7 +6962,8 @@ class Renderer {
                 ['Dash / Lock-on', 'Shift  ·  L'],
                 ['Magic', '1 Fire  2 Blizzard  3 Thunder  4 Cure'],
                 ['Menu', 'Tab for gear, forge, talents and status'],
-                ['Potion / Pause', 'Q  ·  P'],
+                ['Orders', 'hold Q + direction  ·  tap Q to cycle'],
+                ['Potion / Pause', 'E  ·  P'],
                 ['Tuning panel', '` opens every combat constant as a live slider'],
             ];
         const rules = [
@@ -6890,6 +7148,16 @@ class Game {
         this.rings = [];
         this.pickups = [];
         this.army = new Army();
+        // orders (PLAN 11.4)
+        this.order = 'follow';
+        this.wheelOpen = false; // the order wheel is up
+        this.wheelTouch = false; // ...opened by the touch radial (vs. Q / LB)
+        this.wheelT = 0; // how long Q / LB has been held
+        this.wheelDir = -1; // highlighted slice: 0 up (Charge), 1 right (Focus), 2 down (Hold), 3 left (Follow)
+        this.wheelX = 0;
+        this.wheelY = 0; // where the wheel is drawn (screen px)
+        this.focusCache = null;
+        this.focusFrame = -1;
         this.minionStop = 0; // hitstop frames minion kills have added this sim frame
         this.minionSfxT = 0; // rate limit on minion hit/death sounds
         this.perfWork = new Float32Array(600); // ms of sim + draw per frame (ring buffer)
@@ -6937,6 +7205,7 @@ class Game {
         this.bannerColor = '#ffd54a';
         this.bannerT = 0;
         this.deathT = 0;
+        this.orderT = 0;
         this.renderer = new Renderer(canvas);
         this.input.attach(canvas);
         const save = loadSave();
@@ -7165,6 +7434,8 @@ class Game {
         this.time += dt;
         if (this.toastT > 0)
             this.toastT -= dt;
+        if (this.orderT > 0)
+            this.orderT -= dt;
         if (this.bannerT > 0)
             this.bannerT -= dt;
         if (this.comboDisplay > 0)
@@ -7193,6 +7464,7 @@ class Game {
             return;
         }
         this.input.takeTap(); // taps outside the touch controls do nothing on the field
+        this.updateWheel(dt);
         if (this.input.touchChip >= 0) {
             this.touchSpell = this.input.touchChip;
             this.sfx.guard();
@@ -7224,6 +7496,108 @@ class Game {
         this.updateTestField(dt);
         this.follow(false);
         this.input.endTick();
+    }
+    /** Which slice a direction points at, or -1 inside the dead zone. */
+    sliceOf(dx, dy, dead) {
+        if (Math.hypot(dx, dy) < dead)
+            return -1;
+        if (Math.abs(dy) >= Math.abs(dx))
+            return dy < 0 ? 0 : 2;
+        return dx > 0 ? 1 : 3;
+    }
+    /**
+     * Keyboard: hold Q + direction, release to give the order; tap Q to cycle.
+     * Pad: the same with LB + stick. Touch: CMD opens a radial under the thumb,
+     * drag to a slice and release (a tap with no drag cycles).
+     */
+    updateWheel(dt) {
+        const inp = this.input;
+        const held = inp.isHeld('KeyQ') || inp.padLB;
+        if (held && !this.wheelTouch) {
+            if (!this.wheelOpen) {
+                this.wheelOpen = true;
+                this.wheelT = 0;
+                this.wheelDir = -1;
+            }
+            this.wheelT += dt;
+            inp.suppressMove = true; // directions pick a slice instead of walking
+            const v = inp.wheelVector();
+            const s = this.sliceOf(v.x, v.y, 0.5);
+            if (s >= 0)
+                this.wheelDir = s;
+            this.wheelX = this.player.x - this.camX;
+            this.wheelY = this.player.y - this.camY - 30;
+        }
+        else if (this.wheelOpen && !this.wheelTouch) {
+            if (this.wheelDir >= 0)
+                this.issueOrder(Game.WHEEL[this.wheelDir]);
+            else if (this.wheelT < WAR.wheelTapTime)
+                this.cycleOrder();
+            this.wheelOpen = false;
+            inp.suppressMove = false;
+        }
+        else if (inp.wasPressed('command') && !this.wheelOpen) {
+            // a tap of Q shorter than one frame: down and up between ticks, never seen as held
+            this.cycleOrder();
+        }
+        if (inp.radial.active) {
+            this.wheelOpen = true;
+            this.wheelTouch = true;
+            this.wheelX = inp.radial.ox;
+            this.wheelY = inp.radial.oy;
+            this.wheelDir = this.sliceOf(inp.radial.dx, inp.radial.dy, WAR.wheelDeadZone);
+        }
+        if (inp.radialRelease) {
+            const r = inp.radialRelease;
+            inp.radialRelease = null;
+            const s = this.sliceOf(r.dx, r.dy, WAR.wheelDeadZone);
+            if (s >= 0)
+                this.issueOrder(Game.WHEEL[s]);
+            else
+                this.cycleOrder();
+            this.wheelOpen = false;
+            this.wheelTouch = false;
+        }
+    }
+    cycleOrder() {
+        this.issueOrder(ORDERS[(ORDERS.indexOf(this.order) + 1) % ORDERS.length]);
+    }
+    issueOrder(o) {
+        this.order = o;
+        if (o === 'hold')
+            this.army.anchorAll('player');
+        this.focusFrame = -1;
+        this.sfx.cast(o === 'charge' ? 720 : o === 'focus' ? 640 : o === 'hold' ? 420 : 520);
+        this.orderT = WAR.orderBanner;
+    }
+    /**
+     * What Focus points everyone at: your lock-on target if you have one,
+     * otherwise the hostile nearest the knight (structures join in Phase 4-5).
+     * Worked out once per frame.
+     */
+    focusTarget() {
+        if (this.focusFrame === this.input.frame)
+            return this.focusCache;
+        this.focusFrame = this.input.frame;
+        const p = this.player;
+        let best = p.lock && p.lock.alive ? p.lock : null;
+        if (!best) {
+            let bd = Infinity;
+            for (const e of this.enemies) {
+                if (!e.alive || e.team !== 'enemy')
+                    continue;
+                const d = dist(e.x, e.y, p.x, p.y);
+                if (d < bd) {
+                    bd = d;
+                    best = e;
+                }
+            }
+            const j = this.army.nearestHostile('player', p.x, p.y, Math.min(bd, 2000));
+            if (j >= 0)
+                best = this.army.ref(j);
+        }
+        this.focusCache = best;
+        return best;
     }
     /** The camera follows the knight, clamped to the battlefield. */
     follow(snap) {
@@ -7304,6 +7678,10 @@ class Game {
         this.pickups.length = 0;
         this.army.clear();
         p.lock = null;
+        this.order = 'follow';
+        this.wheelOpen = false;
+        this.wheelTouch = false;
+        this.input.suppressMove = false;
         this.placePlayer();
         p.refreshStats(true);
         p.potions = Math.max(p.potions, 3);
@@ -7344,7 +7722,9 @@ class Game {
         }
         return out;
     }
-    /** Spawn `kinds` as a block of ranks around (cx, cy); archers at the back. */
+    /** The warband's size cap (PLAN 12.2: 12 base; talents and L3 castles add up to 60 in Phase 11). */
+    warbandCap() { return WAR.warbandBase; }
+    /** Spawn `kinds` as a block of ranks around (cx, cy); archers at the back. Past the live cap they go to reserve. */
     spawnBlock(kinds, side, cx, cy) {
         const f = this.field;
         const sorted = kinds.slice().sort((a, b) => (a === 'archer' ? 1 : 0) - (b === 'archer' ? 1 : 0));
@@ -7353,7 +7733,8 @@ class Game {
             const rank = Math.floor(idx / perRank), file = idx % perRank;
             const x = clamp(cx + back * rank * gap + rnd(-4, 4), f.x + 30, f.x + f.w - 30);
             const y = clamp(cy + (file - (perRank - 1) / 2) * gap + rnd(-4, 4), f.y + 30, f.y + f.h - 30);
-            this.army.spawn(k, side, x, y, WAR.testFieldTier);
+            if (this.army.spawn(k, side, x, y, WAR.testFieldTier) < 0)
+                this.army.addReserve(side, k);
         });
     }
     /** Debug / perf: clear the field and line up `n` allied minions against `n` Dominion minions. */
@@ -7376,12 +7757,16 @@ class Game {
     spawnTestGroup() {
         this.topUpAllies();
         const p = this.player, f = this.field;
-        const haveAllies = this.army.live('player');
-        const addAllies = Math.max(0, WAR.testAllyMinions - haveAllies);
-        if (addAllies)
-            this.spawnBlock(this.mixOf(addAllies), 'player', clamp(p.x - 90, f.x + 60, f.x + f.w - 60), p.y);
-        const foes = Math.min(Army.liveCap(), WAR.testFoeMinions + WAR.testFoeMinionsPerGroup * this.groupsCleared);
+        // the warband: topped back up to its cap, beside the knight
+        const addWarband = Math.max(0, this.warbandCap() - this.army.live('player') - this.army.reserveCount('player'));
+        if (addWarband)
+            this.spawnBlock(this.mixOf(addWarband), 'player', clamp(p.x - 90, f.x + 60, f.x + f.w - 60), p.y);
+        // the Dominion: a block ahead of the knight; past the live cap the rest wait in reserve at their edge
+        const foes = WAR.testFoeMinions + WAR.testFoeMinionsPerGroup * this.groupsCleared;
         const fx = p.x + 520 < f.x + f.w - 120 ? p.x + 520 : p.x - 520;
+        const enemyEdgeX = fx > p.x ? f.x + f.w - 40 : f.x + 40;
+        this.army.setEdge('enemy', enemyEdgeX, p.y, 220);
+        this.army.setEdge('player', fx > p.x ? f.x + 40 : f.x + f.w - 40, p.y, 220);
         this.spawnBlock(this.mixOf(foes), 'enemy', clamp(fx, f.x + 120, f.x + f.w - 120), p.y);
         const ids = this.composition(this.groupsCleared + 1, ['shade', 'caster', 'flyer', 'bruiser']).slice(0, 3);
         for (let i = 0; i < ids.length; i++) {
@@ -7522,7 +7907,7 @@ class Game {
         return out;
     }
     /** Dominion units still standing (allies don't count). */
-    foesAlive() { return this.enemies.filter((e) => e.alive && e.team === 'enemy').length + this.army.live('enemy'); }
+    foesAlive() { return this.enemies.filter((e) => e.alive && e.team === 'enemy').length + this.army.live('enemy') + this.army.reserveCount('enemy'); }
     /** Allies standing: elites and minions. */
     alliesAlive() { return this.enemies.filter((e) => e.alive && e.team === 'player').length + this.army.live('player'); }
     /** A unit's hit on another unit: physical, scaled by the attacker, light poise damage. */
@@ -8152,6 +8537,7 @@ class Game {
         this.comboCount = 0;
         this.menuMode = 'root';
         this.menuIndex = 0;
+        this.input.suppressMove = false;
         this.startTestField();
         this.banner('DEFEATED', 'The test field starts over. Gear, talents and materials are kept.', '#ff9d9d');
     }
@@ -8325,6 +8711,9 @@ class Game {
         this.rings.push({ x, y, z, r, maxR, life: 0.4, maxLife: 0.4, color });
     }
 }
+/* --------------------------------------------------------------- orders */
+/** Slice -> order. Up = Charge, right = Focus, down = Hold, left = Follow. */
+Game.WHEEL = ['charge', 'focus', 'hold', 'follow'];
 /* ==================================================== debug tuning panel */
 function buildDebugPanel(g) {
     var _a;

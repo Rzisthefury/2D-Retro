@@ -65,7 +65,7 @@ type Action =
   | 'up' | 'down' | 'left' | 'right'
   | 'confirm' | 'cancel'
   | 'spell1' | 'spell2' | 'spell3' | 'spell4' | 'spell5'
-  | 'item' | 'pause' | 'debug' | 'restart' | 'mute' | 'back';
+  | 'item' | 'pause' | 'debug' | 'restart' | 'mute' | 'back' | 'command';
 
 const KEYMAP: Record<string, Action> = {
   KeyJ: 'attack', Space: 'jump', KeyK: 'jump', KeyL: 'lock',
@@ -73,7 +73,7 @@ const KEYMAP: Record<string, Action> = {
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
   Enter: 'confirm', Escape: 'cancel', Backspace: 'cancel',
   Digit1: 'spell1', Digit2: 'spell2', Digit3: 'spell3', Digit4: 'spell4', Digit5: 'spell5',
-  KeyQ: 'item', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back',
+  KeyE: 'item', KeyQ: 'command', KeyP: 'pause', Backquote: 'debug', KeyR: 'restart', KeyM: 'mute', KeyB: 'back',
 };
 
 // Movement is read separately so WASD can coexist with the arrow-key menu.
@@ -98,6 +98,14 @@ class InputState {
   touchChip = -1;                         // spell chip tapped this tick, -1 = none
   uiMode = false;                         // a full-screen UI owns the taps
   lastTap: { x: number; y: number } | null = null;
+
+  // the command wheel (PLAN 11.4)
+  padLB = false;                          // gamepad LB held
+  suppressMove = false;                   // the knight stands still while the keyboard/pad wheel is open
+  /** Touch radial: opened by pressing CMD, follows the thumb, picks on release. */
+  radial = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
+  /** Set on release of the touch radial: the final offset from where it opened. Game consumes it. */
+  radialRelease: { dx: number; dy: number } | null = null;
 
   attach(target: HTMLElement | Window) {
     window.addEventListener('keydown', (e) => {
@@ -152,6 +160,13 @@ class InputState {
       try { canvas.setPointerCapture(e.pointerId); } catch { /* not fatal */ }
       const hit = this.buttonAt(p.x, p.y);
 
+      if (hit === 'command') {
+        // the order wheel opens under the thumb; dragging toward a slice picks it on release
+        this.radial.active = true; this.radial.id = e.pointerId;
+        this.radial.ox = p.x; this.radial.oy = p.y; this.radial.dx = 0; this.radial.dy = 0;
+        this.litBtns.add('command');
+        return;
+      }
       if (hit) {
         this.heldBtns.set(e.pointerId, hit);
         this.litBtns.add(hit);
@@ -170,6 +185,11 @@ class InputState {
     }, { passive: false });
 
     const move = (e: PointerEvent) => {
+      if (this.radial.active && e.pointerId === this.radial.id) {
+        const p = this.toLogical(e);
+        this.radial.dx = p.x - this.radial.ox; this.radial.dy = p.y - this.radial.oy;
+        return;
+      }
       if (!this.stick.active || e.pointerId !== this.stick.id) return;
       e.preventDefault();
       const p = this.toLogical(e);
@@ -186,6 +206,11 @@ class InputState {
     canvas.addEventListener('pointermove', move, { passive: false });
 
     const up = (e: PointerEvent) => {
+      if (this.radial.active && e.pointerId === this.radial.id) {
+        this.radialRelease = { dx: this.radial.dx, dy: this.radial.dy };
+        this.radial.active = false; this.radial.id = -1;
+        this.litBtns.delete('command');
+      }
       if (this.stick.active && e.pointerId === this.stick.id) {
         this.stick.active = false; this.stick.id = -1; this.stick.x = 0; this.stick.y = 0;
       }
@@ -233,13 +258,14 @@ class InputState {
     const map: [number, Action][] = [
       [0, 'jump'], [2, 'attack'], [1, 'cancel'], [3, 'confirm'],
       [12, 'up'], [13, 'down'], [14, 'left'], [15, 'right'],
-      [6, 'lock'], [7, 'dash'], [5, 'dash'], [4, 'spell1'], [9, 'pause'], [8, 'menu'],
+      [6, 'lock'], [7, 'dash'], [5, 'dash'], [9, 'pause'], [8, 'menu'],
     ];
     for (const [btn, action] of map) {
       const down = !!gp.buttons[btn] && gp.buttons[btn].pressed;
       if (down && !this.prevPad[btn]) this.press(action);
       this.prevPad[btn] = down;
     }
+    this.padLB = !!gp.buttons[4] && gp.buttons[4].pressed;   // LB: hold for the order wheel
     const dz = (v: number) => (Math.abs(v) < 0.22 ? 0 : v);
     this.padAxis.x = dz(gp.axes[0] || 0);
     this.padAxis.y = dz(gp.axes[1] || 0);
@@ -269,8 +295,20 @@ class InputState {
 
   isHeld(code: string): boolean { return this.held.has(code); }
 
+  /** Direction held for the order wheel: WASD, arrow keys or the pad stick (ignores suppressMove). */
+  wheelVector(): { x: number; y: number } {
+    let x = 0, y = 0;
+    if (MOVE_KEYS.left.some((k) => this.held.has(k)) || this.held.has('ArrowLeft')) x -= 1;
+    if (MOVE_KEYS.right.some((k) => this.held.has(k)) || this.held.has('ArrowRight')) x += 1;
+    if (MOVE_KEYS.up.some((k) => this.held.has(k)) || this.held.has('ArrowUp')) y -= 1;
+    if (MOVE_KEYS.down.some((k) => this.held.has(k)) || this.held.has('ArrowDown')) y += 1;
+    if (x === 0 && y === 0) { x = this.padAxis.x; y = this.padAxis.y; }
+    return { x, y };
+  }
+
   /** Normalised movement vector from WASD, the pad stick, or a thumb. */
   moveVector(): { x: number; y: number } {
+    if (this.suppressMove) return { x: 0, y: 0 };
     if (this.stick.active && (this.stick.x || this.stick.y)) {
       return { x: this.stick.x, y: this.stick.y };
     }
