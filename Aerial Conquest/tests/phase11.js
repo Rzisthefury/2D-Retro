@@ -101,6 +101,7 @@ async function desktop(browser) {
     const bt = GAME.battle;
     for (const g of bt.gates) g.damage(GAME, 1e9);
     bt.captain.applyDamage(GAME, 1e8, 0, 0, 0, 0);
+    const a = GAME.army; for (const k of Object.keys(a.reserve[1])) a.reserve[1][k] = 0; for (let i = 0; i < a.cap; i++) if (a.alive[i] && a.team[i] === 1) a.hurt(GAME, i, 1e9, 0, 0, false); for (const e of GAME.enemies) if (e.team === 'enemy') e.applyDamage(GAME, 1e8, 0, 0, 0, 0);   // the garrison must break too (playtest update)
     GAME.simulate(0.5);
     return { before, after: GAME.player.skillPoints, notes: bt.notes.join(' | '), captain: bt.spec.captainName };
   });

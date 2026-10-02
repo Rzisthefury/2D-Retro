@@ -12999,7 +12999,7 @@ class Game {
         this.war.results = [];
         this.war.captured = [];
         this.syncWar();
-        if (this.newSpells.length) {
+        if (this.newSpells.length && this.bannerT <= 0) { // after whatever banner is up (a capture's comes first)
             const names = this.newSpells.map((id) => SPELLS.find((s) => s.id === id).name);
             this.banner(`YOU LEARN ${names.join(' AND ').toUpperCase()}`, 'cast it in battle: the spell keys, or MAG', '#9fd8ff');
             this.storyLine = { text: `The Order's old magic answers: ${names.join(' and ')}.`, t: WAR.storyLineTime };
