@@ -477,8 +477,13 @@ class Army {
         if (dist(this.x[i], this.y[i], s.x, s.y) > 14) go(s.x, s.y, 1); else halt();
         return;
       }
-      // otherwise march on the enemy's centre (behind a shut gate: stand)
+      // otherwise march on the enemy's centre; a defender whose enemy is still behind its shut gate holds its post
+      // (the gateway counts as reachable from both sides for walking, so without this they'd crowd the inside of the gate)
       const c = this.centre[1 - own];
+      if (own === TEAM_ENEMY && c.n && g.battle.doors.length && !g.battle.reachable(this.x[i], this.y[i], c.x, c.y)) {
+        if (dist(this.x[i], this.y[i], this.anchorX[i], this.anchorY[i]) > 14) go(this.anchorX[i], this.anchorY[i], 1); else halt();
+        return;
+      }
       if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40) go(c.x, c.y, 1); else halt();
       return;
     }

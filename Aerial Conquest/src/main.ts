@@ -2164,7 +2164,14 @@ class Game {
 
   /* -------------------------------------------------------------- damage */
 
+  /** Nothing hits through a closed gate or a wall: attacker and target in different zones with no open way between. */
+  blocked(ax: number, ay: number, tx: number, ty: number): boolean {
+    const b = this.battle;
+    return !!b && b.doors.length > 0 && !b.reachable(ax, ay, tx, ty);
+  }
+
   hitEnemy(e: Enemy, def: AttackDef, p: Player) {
+    if (this.blocked(p.x, p.y, e.x, e.y)) return;
     const guardMult = e.guardCheck(p.x, p.y, def);
     const angle = Math.atan2(e.y - p.y, e.x - p.x);
 
@@ -2244,7 +2251,7 @@ class Game {
   enemyStrike(e: Enemy, reach: number, mult: number) {
     let hit = false;
     for (const t of this.hostilesOf(e.team)) {
-      if (!inArc(e.x, e.y, e.z, e.facing, reach, 1.0, t.x, t.y, t.z, t.radius)) continue;
+      if (!inArc(e.x, e.y, e.z, e.facing, reach, 1.0, t.x, t.y, t.z, t.radius) || this.blocked(e.x, e.y, t.x, t.y)) continue;
       hit = true;
       const ang = Math.atan2(t.y - e.y, t.x - e.x);
       if (t instanceof Player) this.unitHitsKnight(e, mult, ang, 240, 22);
@@ -2259,7 +2266,7 @@ class Game {
     // minions in the arc: an elite's swing mows through them
     const a = this.army, own = teamIndex(e.team);
     a.query(e.x, e.y, reach + 24, (j) => {
-      if (a.team[j] === own) return;
+      if (a.team[j] === own || this.blocked(e.x, e.y, a.x[j], a.y[j])) return;
       if (!inArc(e.x, e.y, e.z, e.facing, reach, 1.0, a.x[j], a.y[j], 0, a.def(j).radius)) return;
       hit = true;
       const r = physDamage(e.def.power * mult * WAR.unitDamageMult * (e.str / e.def.str), e.str, a.armor[j]);
@@ -2286,14 +2293,14 @@ class Game {
   /** A boss's area attack landing at (x, y): hits every hostile on the ground in the ring. Being in the air clears it. */
   bossShock(e: Enemy, x: number, y: number, r: number, mult: number) {
     for (const t of this.hostilesOf(e.team)) {
-      if (t.z > 26 + (t instanceof Enemy ? t.def.hover : 0) || dist(x, y, t.x, t.y) > r + t.radius) continue;
+      if (t.z > 26 + (t instanceof Enemy ? t.def.hover : 0) || dist(x, y, t.x, t.y) > r + t.radius || this.blocked(x, y, t.x, t.y)) continue;
       const ang = Math.atan2(t.y - y, t.x - x);
       if (t instanceof Player) this.unitHitsKnight(e, mult, ang, 320, 26);
       else if (t instanceof Enemy) this.unitHitsUnit(e, t, mult, ang, 220);
     }
     const a = this.army, own = teamIndex(e.team);
     a.query(x, y, r + 24, (j) => {
-      if (a.team[j] === own || dist(x, y, a.x[j], a.y[j]) > r + a.def(j).radius) return;
+      if (a.team[j] === own || dist(x, y, a.x[j], a.y[j]) > r + a.def(j).radius || this.blocked(x, y, a.x[j], a.y[j])) return;
       const res = physDamage(e.def.power * mult * WAR.unitDamageMult * (e.str / e.def.str), e.str, a.armor[j]);
       a.hurt(this, j, res.dmg, Math.atan2(a.y[j] - y, a.x[j] - x), 220, false);
     });
@@ -2387,6 +2394,7 @@ class Game {
       t.damage(this, Math.max(1, Math.round(power * m)));
       return;
     }
+    if (this.blocked(a.x[i], a.y[i], t.x, t.y)) return;   // the target moved behind a shut gate mid-swing
     if (t instanceof MinionRef) {
       if (!t.alive) return;
       const mult = a.def(t.i).beast && d.vsBeast ? d.vsBeast : 1;
@@ -2440,7 +2448,7 @@ class Game {
     const reach = p.reach(def);
     let any = false;
     a.query(p.x, p.y, reach + 24, (j) => {
-      if (a.team[j] !== TEAM_ENEMY || hits.has(a.uid[j])) return;
+      if (a.team[j] !== TEAM_ENEMY || hits.has(a.uid[j]) || this.blocked(p.x, p.y, a.x[j], a.y[j])) return;
       if (!inArc(p.x, p.y, p.z, p.facing, reach, def.arc, a.x[j], a.y[j], 0, a.def(j).radius)) return;
       hits.add(a.uid[j]);
       any = true;
@@ -2511,12 +2519,12 @@ class Game {
       const range = surge ? 330 : 260;
       const pool: { x: number; y: number; z: number; h: number; res: number; hit: (r: DamageResult) => void }[] = [];
       for (const e of this.enemies) {
-        if (!e.alive || e.team !== 'enemy' || dist(e.x, e.y, p.x, p.y) >= range) continue;
+        if (!e.alive || e.team !== 'enemy' || dist(e.x, e.y, p.x, p.y) >= range || this.blocked(p.x, p.y, e.x, e.y)) continue;
         pool.push({ x: e.x, y: e.y, z: e.z, h: e.def.height, res: e.mres, hit: (r) => e.applyDamage(this, r.dmg, 26, Math.atan2(e.y - p.y, e.x - p.x), 60, 0) });
       }
       const a = this.army;
       a.query(p.x, p.y, range, (j) => {
-        if (a.team[j] !== TEAM_ENEMY || dist(a.x[j], a.y[j], p.x, p.y) >= range) return;
+        if (a.team[j] !== TEAM_ENEMY || dist(a.x[j], a.y[j], p.x, p.y) >= range || this.blocked(p.x, p.y, a.x[j], a.y[j])) return;
         pool.push({ x: a.x[j], y: a.y[j], z: 0, h: 16, res: a.armor[j], hit: (r) => { a.hurt(this, j, r.dmg, Math.atan2(a.y[j] - p.y, a.x[j] - p.x), 60, true); } });
       });
       const targets = pool.sort((m, n) => dist(m.x, m.y, p.x, p.y) - dist(n.x, n.y, p.x, p.y)).slice(0, surge ? 5 : 3);
