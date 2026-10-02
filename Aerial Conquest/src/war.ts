@@ -206,6 +206,18 @@ class War {
     return (1 + (t.drill ? c.drill : 0) + (t.host ? c.hostHp : 0)) * (1 + (t.steel ? c.steel : 0));
   }
 
+  /** Spells earned by first captures (Michael): keep -> Fire, castle -> Cure, tier-3 castle -> Blizzard, tier-4 castle -> Thunder. */
+  earnedSpells(): string[] {
+    const out: string[] = [];
+    for (const id of this.spTaken) {
+      const n = this.camp.nodes[id];
+      if (!n || n.territory === WAR.startTerritory) continue;
+      const tier = this.camp.territories[n.territory].tier;
+      for (const [spell, [type, minTier]] of Object.entries(WAR.spellUnlock)) if (n.type === type && tier >= minTier && !out.includes(spell)) out.push(spell);
+    }
+    return out;
+  }
+
   /** SP the first time a castle or keep is yours (PLAN 12.2): 2 a castle (+4 the capital), 1 a keep. */
   private awardSP(n: MapNode) {
     if (n.owner !== 'player' || (n.type !== 'castle' && n.type !== 'keep') || this.spTaken.includes(n.id)) return;

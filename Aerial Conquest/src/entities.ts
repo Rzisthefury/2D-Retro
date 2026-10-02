@@ -83,6 +83,7 @@ class Player {
   weapon: WeaponDef = WEAPONS[0];
   armor: ArmorDef = ARMORS[0];
   talents: TalentSet = {};
+  spells: string[] = [];         // learned spell ids (earned by conquest; the test field and debug list allow all)
   ownedWeapons: string[] = ['w1'];
   ownedArmors: string[] = ['a1'];
   inv: Inventory = {};
@@ -515,6 +516,7 @@ class Player {
   }
 
   tryCast(g: Game, s: SpellDef): boolean {
+    if (!g.spellKnown(s.id)) { g.toast(g.spellHint(s.id)); return false; }
     if (this.charging) { g.toast('MP CHARGING'); return false; }
     if (s.drainAll) {
       if (this.hasT('efficure')) {

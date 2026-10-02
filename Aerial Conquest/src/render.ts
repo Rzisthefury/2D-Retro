@@ -71,7 +71,10 @@ class Renderer {
     const showPlayer = g.screen !== 'title' && (g.player.alive || g.deathT < 2);
     if (showPlayer) drawables.push({ y: g.player.y, fn: () => this.drawPlayer(c, g.player, g) });
     for (const p of g.projectiles) drawables.push({ y: p.y, fn: () => this.drawProjectile(c, p) });
-    for (const s of g.battle.structures) if (onScreen(s.x, s.y)) drawables.push({ y: s.y, fn: () => this.drawStructure(c, s, g) });
+    // structures by their whole footprint: a long wall's anchor (bottom centre) can be off screen while most of it shows
+    const rectOnScreen = (s: Structure) =>
+      s.x + s.w / 2 > cam.x - 80 && s.x - s.w / 2 < cam.x + VIEW_W + 80 && s.y > cam.y - 80 && s.y - s.h < cam.y + VIEW_H + 160;
+    for (const s of g.battle.structures) if (rectOnScreen(s)) drawables.push({ y: s.y, fn: () => this.drawStructure(c, s, g) });
     drawables.sort((a, b) => a.y - b.y);
 
     for (const e of g.enemies) {
@@ -3287,6 +3290,7 @@ class Renderer {
       ['Combo hits', String(p.groundTable().length)],
       ['Dash charges', p.hasT('dash') ? String(p.maxDash()) : 'not learned'],
       ['Potions / Ethers', `${p.potions} / ${p.ethers}`],
+      ['Spells', SPELLS.filter((s) => p.spells.includes(s.id)).map((s) => s.name).join(', ') || 'none yet: take a keep'],
     ];
     c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
     for (const [k, v] of rows) {
@@ -3400,7 +3404,7 @@ class Renderer {
       const s = SPELLS[i];
       const cy = TOUCH_CHIPS.y + i * TOUCH_CHIPS.dy;
       const on = g.touchSpell === i;
-      const ok = g.player.canCast(s);
+      const known = g.spellKnown(s.id), ok = known && g.player.canCast(s);
       c.globalAlpha = on ? 0.9 : 0.38;
       c.fillStyle = on ? s.color : 'rgba(16,20,36,0.7)';
       c.beginPath(); c.arc(TOUCH_CHIPS.x, cy, TOUCH_CHIPS.r, 0, Math.PI * 2); c.fill();
@@ -3408,7 +3412,7 @@ class Renderer {
       c.lineWidth = 2;
       c.beginPath(); c.arc(TOUCH_CHIPS.x, cy, TOUCH_CHIPS.r, 0, Math.PI * 2); c.stroke();
       c.fillStyle = on ? '#0d1020' : (ok ? s.color : '#5d6480');
-      c.fillText(s.name[0], TOUCH_CHIPS.x, cy + 4);
+      c.fillText(known ? s.name[0] : '\u2022', TOUCH_CHIPS.x, cy + 4);
     }
 
     // menu button

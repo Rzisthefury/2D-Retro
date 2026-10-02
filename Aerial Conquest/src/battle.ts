@@ -255,7 +255,7 @@ class Battle {
       case 'village': return 'Burn every house';
       case 'field': return 'Rout or destroy the Dominion army';
       case 'outpost': return 'Hold the ring 10 s with no enemy inside';
-      case 'keep': return this.gates.some((s) => s.alive) ? 'Break the keep gate' : `Defeat ${this.spec.captainName || 'the Captain'}`;
+      case 'keep': return this.gates.some((s) => s.alive) ? 'Break the keep gate' : this.captain && this.captain.alive ? `Defeat ${this.spec.captainName || 'the Captain'}` : 'Break the garrison';
       case 'castle': {
         const [outer, inner] = this.gates;
         if (outer && outer.alive) return 'Break the outer gate';
@@ -276,7 +276,12 @@ class Battle {
       case 'village': return frac(this.houses);
       case 'field': return this.startFoes ? clamp(1 - g.foeStrength() / this.startFoes, 0, 1) : 0;
       case 'outpost': { const r = this.ring; return r ? clamp(r.progress / r.need, 0, 1) : 0; }
-      case 'keep': { const gt = this.gates[0]; return (gt && !gt.alive ? 0.5 : gt ? 0.5 * (1 - gt.hp / gt.maxHp) : 0) + (this.captain && !this.captain.alive ? 0.5 : 0); }
+      case 'keep': {
+        // gate 40%, Captain 30%, the garrison broken 30% (down to WAR.keepBreak of its strength)
+        const gt = this.gates[0], gate = gt && !gt.alive ? 1 : gt ? 1 - gt.hp / gt.maxHp : 0;
+        const left = g.foeStrength() / Math.max(1, this.startFoes), broken = clamp((1 - left) / (1 - WAR.keepBreak), 0, 1);
+        return 0.4 * gate + (this.captain && !this.captain.alive ? 0.3 : 0) + 0.3 * broken;
+      }
       case 'castle': {
         const gs = this.gates, t = this.throne;
         const gp = gs.reduce((s, x) => s + (1 - x.hp / x.maxHp), 0) / Math.max(1, gs.length);

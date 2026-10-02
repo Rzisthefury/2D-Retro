@@ -223,7 +223,7 @@ interface SpellDef {
 const SPELLS: SpellDef[] = [
   { id: 'fire', name: 'Fire', cost: 14, power: 30, kind: 'projectile', color: '#ff7a3d', cast: 12, recovery: 16, desc: 'Homing fireball' },
   { id: 'blizzard', name: 'Blizzard', cost: 12, power: 24, kind: 'pierce', color: '#63d7ff', cast: 10, recovery: 14, desc: 'Piercing shard, slows' },
-  { id: 'thunder', name: 'Thunder', cost: 26, power: 34, kind: 'strike', color: '#ffe14d', cast: 18, recovery: 22, desc: 'Bolts on nearby foes' },
+  { id: 'thunder', name: 'Thunder', cost: 26, power: 34, kind: 'strike', color: '#ffe14d', cast: 18, recovery: 22, desc: 'Strikes every foe around you' },
   // Cure eats the entire gauge whatever is left in it, exactly like KH2 — which
   // is what makes the recharge lock a real decision instead of a formality.
   { id: 'cure', name: 'Cure', cost: 0, power: 52, kind: 'heal', color: '#7dffa8', cast: 16, recovery: 20, drainAll: true, desc: 'Heals, spends ALL MP' },
@@ -475,8 +475,8 @@ const WAR = {
   // battle length (PLAN 10.2 time bands): the knight cuts down ~3 units a second, so a
   // battle lasts as long as its Dominion army does. Each type brings this many more
   // units on from its edge during the fight (default mix), at this pace (x stream interval)
-  battleReinforce: { village: 200, field: 340, outpost: 650, keep: 100, castle: 60, convoy: 150, defense: 300, rescue: 160 } as Record<string, number>,
-  battlePace: { village: 2.5, field: 3, outpost: 0.4, keep: 2, castle: 2.5, convoy: 2, defense: 3.5, rescue: 1.5 } as Record<string, number>,
+  battleReinforce: { village: 200, field: 340, outpost: 650, keep: 340, castle: 60, convoy: 150, defense: 300, rescue: 160 } as Record<string, number>,
+  battlePace: { village: 2.5, field: 3, outpost: 0.4, keep: 3, castle: 2.5, convoy: 2, defense: 3.5, rescue: 1.5 } as Record<string, number>,
   captainStats: { hp: 1300, attack: 11, defense: 8 },   // Phase 14: from 2000 / 14   // keep Captain (boss data, tier 1; scaled like AF bosses)
   lordStats: { hp: 640, attack: 15, defense: 10 },     // castle Lord
   commanderMult: 1.6,        // field / defense commander
@@ -489,7 +489,8 @@ const WAR = {
   villageGarrison: 30,       // village defenders at level 1 (*default*)...
   villageGarrisonPerLevel: 10,         // ...+ this per level above 1
   outpostGarrison: 90,       // (Phase 14: from 50, so the ring is fought over)
-  keepGarrison: 50,          // keep defenders before its level bonus (*default*)...
+  keepBreak: 0.25,           // a keep falls when its Captain is down and its garrison is at or under this share of its strength
+  keepGarrison: 120,          // keep defenders before its level bonus (*default*)...
   keepDefenders: [0, 10, 20],          // ...+ PLAN 5.2's L1/L2/L3 bonus
   // Phase 14 balance: your villages, outposts and keeps hold a local militia (free, refilling) so the
   // Dominion has to fight for them; without it any 6-unit squad retook them on arrival
@@ -563,7 +564,13 @@ const WAR = {
   enemyDamage: { easy: 0.7, normal: 1, hard: 1.3 } as Record<string, number>,   // Dominion damage in your battles
   ngStats: 1.5,              // Dominion HP and damage (and sim strength) x this per NG+ cycle
   ngClock: 0.8,              // war clock x this per NG+ cycle
-  storyLineTime: 7,          // seconds a story line (first keep / castle / general) stays on the map
+  storyLineTime: 7,
+  // spells are earned (Michael): the first capture of this kind of node, at this territory tier or higher
+  spellUnlock: { fire: ['keep', 1], cure: ['castle', 1], blizzard: ['castle', 3], thunder: ['castle', 4] } as Record<string, [NodeType, number]>,
+  thunderRadius: 200,        // Thunder strikes every enemy this close (Storm Surge: thunderSurgeRadius)
+  thunderSurgeRadius: 280,
+  thunderPowerMult: 0.8,     // per target, since it hits everyone in the ring
+  thunderBoltFx: 10,         // full bolt effects on this many targets (the rest flash), to keep big crowds cheap          // seconds a story line (first keep / castle / general) stays on the map
 
   // Thornhounds and the warlord (Phase 11, PLAN 11.2 / 11.3)
   houndPack: 6,
