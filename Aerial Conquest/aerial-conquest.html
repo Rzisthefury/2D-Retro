@@ -504,7 +504,8 @@ const WAR = {
     castleProduction: [8, 13, 20], // castle troops / min by level (PLAN 5.2: 6 / 10 / 16; Phase 14 balance)
     outpostHold: 10, // seconds in the ring with no enemy inside (pauses, never resets)
     gateHp: 1500, // gate HP at tier 1 (x tier HP scale); knights do x0.3, rams x4
-    keepGateMult: 4.0, // keep gates against the base (Phase 14: from 4.5)
+    keepGateMult: 1.3, // keep gates against the base (from 4.5; Michael: the gate took far too long)
+    keepGateKnight: 1, // the knight's share of a hit on a keep gate (castle gates: 0.3, rams do the work)
     ironGateMult: 1.6, // a castle whose keep is still the Dominion's (PLAN 10.2)
     throneHp: 5600, // castle throne at tier 1 (knights and units x0.3, rams can't)
     cellRingRadius: 70, // rescue: stand this close to the cell...
@@ -2023,8 +2024,16 @@ class Army {
                     halt();
                 return;
             }
-            // otherwise march on the enemy's centre (behind a shut gate: stand)
+            // otherwise march on the enemy's centre; a defender whose enemy is still behind its shut gate holds its post
+            // (the gateway counts as reachable from both sides for walking, so without this they'd crowd the inside of the gate)
             const c = this.centre[1 - own];
+            if (own === TEAM_ENEMY && c.n && g.battle.doors.length && !g.battle.reachable(this.x[i], this.y[i], c.x, c.y)) {
+                if (dist(this.x[i], this.y[i], this.anchorX[i], this.anchorY[i]) > 14)
+                    go(this.anchorX[i], this.anchorY[i], 1);
+                else
+                    halt();
+                return;
+            }
             if (c.n && dist(this.x[i], this.y[i], c.x, c.y) > 40)
                 go(c.x, c.y, 1);
             else
@@ -2201,6 +2210,7 @@ class Structure {
         this.need = 0;
         this.ringR = 0;
         this.contested = false; // outpost: an enemy is in the ring (progress paused)
+        this.knightMult = 0.3; // gates and thrones: the knight's share of a hit (rams do the real work); keep gates take it all
         // wagons: travel along the road, x-ward, until they leave
         this.speed = 0;
         this.escaped = false;
@@ -2224,7 +2234,7 @@ class Structure {
         if (this.kind === 'building')
             return src === 'fire' ? 2 : 1;
         if (this.kind === 'gate')
-            return src === 'ram' ? 4 : 0.3;
+            return src === 'ram' ? 4 : src === 'knight' ? this.knightMult : 0.3;
         if (this.kind === 'throne')
             return src === 'ram' ? 0 : 0.3;
         return 1;
@@ -2591,6 +2601,7 @@ class Battle {
         const gateHp = Math.round(WAR.gateHp * WAR.keepGateMult * TIER_SCALING.hpMultiplier(this.spec.tier));
         this.foeEdge = { x: x1 - 60, y: cy, spread: 60 }; // the barracks: reinforcements come from inside
         const gate = new Structure('gate', 'enemy', x0, cy + gap / 2, t + 8, gap, gateHp, 'Keep gate');
+        gate.knightMult = WAR.keepGateKnight; // no rams at a keep early on: the knight breaks it
         this.structures.push(gate);
         this.rooms.push({ x0, y0, x1, y1 });
         this.doors.push({ a: { x: x0 - 60, y: cy }, b: { x: x0 + 60, y: cy }, za: 0, zb: 1, gate, halfGap: gap / 2 - 14 });
@@ -14576,7 +14587,14 @@ class Game {
         }
     }
     /* -------------------------------------------------------------- damage */
+    /** Nothing hits through a closed gate or a wall: attacker and target in different zones with no open way between. */
+    blocked(ax, ay, tx, ty) {
+        const b = this.battle;
+        return !!b && b.doors.length > 0 && !b.reachable(ax, ay, tx, ty);
+    }
     hitEnemy(e, def, p) {
+        if (this.blocked(p.x, p.y, e.x, e.y))
+            return;
         const guardMult = e.guardCheck(p.x, p.y, def);
         const angle = Math.atan2(e.y - p.y, e.x - p.x);
         if (guardMult < 1) {
@@ -14657,7 +14675,7 @@ class Game {
     enemyStrike(e, reach, mult) {
         let hit = false;
         for (const t of this.hostilesOf(e.team)) {
-            if (!inArc(e.x, e.y, e.z, e.facing, reach, 1.0, t.x, t.y, t.z, t.radius))
+            if (!inArc(e.x, e.y, e.z, e.facing, reach, 1.0, t.x, t.y, t.z, t.radius) || this.blocked(e.x, e.y, t.x, t.y))
                 continue;
             hit = true;
             const ang = Math.atan2(t.y - e.y, t.x - e.x);
@@ -14677,7 +14695,7 @@ class Game {
         // minions in the arc: an elite's swing mows through them
         const a = this.army, own = teamIndex(e.team);
         a.query(e.x, e.y, reach + 24, (j) => {
-            if (a.team[j] === own)
+            if (a.team[j] === own || this.blocked(e.x, e.y, a.x[j], a.y[j]))
                 return;
             if (!inArc(e.x, e.y, e.z, e.facing, reach, 1.0, a.x[j], a.y[j], 0, a.def(j).radius))
                 return;
@@ -14705,7 +14723,7 @@ class Game {
     /** A boss's area attack landing at (x, y): hits every hostile on the ground in the ring. Being in the air clears it. */
     bossShock(e, x, y, r, mult) {
         for (const t of this.hostilesOf(e.team)) {
-            if (t.z > 26 + (t instanceof Enemy ? t.def.hover : 0) || dist(x, y, t.x, t.y) > r + t.radius)
+            if (t.z > 26 + (t instanceof Enemy ? t.def.hover : 0) || dist(x, y, t.x, t.y) > r + t.radius || this.blocked(x, y, t.x, t.y))
                 continue;
             const ang = Math.atan2(t.y - y, t.x - x);
             if (t instanceof Player)
@@ -14715,7 +14733,7 @@ class Game {
         }
         const a = this.army, own = teamIndex(e.team);
         a.query(x, y, r + 24, (j) => {
-            if (a.team[j] === own || dist(x, y, a.x[j], a.y[j]) > r + a.def(j).radius)
+            if (a.team[j] === own || dist(x, y, a.x[j], a.y[j]) > r + a.def(j).radius || this.blocked(x, y, a.x[j], a.y[j]))
                 return;
             const res = physDamage(e.def.power * mult * WAR.unitDamageMult * (e.str / e.def.str), e.str, a.armor[j]);
             a.hurt(this, j, res.dmg, Math.atan2(a.y[j] - y, a.x[j] - x), 220, false);
@@ -14828,6 +14846,8 @@ class Game {
             t.damage(this, Math.max(1, Math.round(power * m)));
             return;
         }
+        if (this.blocked(a.x[i], a.y[i], t.x, t.y))
+            return; // the target moved behind a shut gate mid-swing
         if (t instanceof MinionRef) {
             if (!t.alive)
                 return;
@@ -14891,7 +14911,7 @@ class Game {
         const reach = p.reach(def);
         let any = false;
         a.query(p.x, p.y, reach + 24, (j) => {
-            if (a.team[j] !== TEAM_ENEMY || hits.has(a.uid[j]))
+            if (a.team[j] !== TEAM_ENEMY || hits.has(a.uid[j]) || this.blocked(p.x, p.y, a.x[j], a.y[j]))
                 return;
             if (!inArc(p.x, p.y, p.z, p.facing, reach, def.arc, a.x[j], a.y[j], 0, a.def(j).radius))
                 return;
@@ -14973,13 +14993,13 @@ class Game {
             const range = surge ? 330 : 260;
             const pool = [];
             for (const e of this.enemies) {
-                if (!e.alive || e.team !== 'enemy' || dist(e.x, e.y, p.x, p.y) >= range)
+                if (!e.alive || e.team !== 'enemy' || dist(e.x, e.y, p.x, p.y) >= range || this.blocked(p.x, p.y, e.x, e.y))
                     continue;
                 pool.push({ x: e.x, y: e.y, z: e.z, h: e.def.height, res: e.mres, hit: (r) => e.applyDamage(this, r.dmg, 26, Math.atan2(e.y - p.y, e.x - p.x), 60, 0) });
             }
             const a = this.army;
             a.query(p.x, p.y, range, (j) => {
-                if (a.team[j] !== TEAM_ENEMY || dist(a.x[j], a.y[j], p.x, p.y) >= range)
+                if (a.team[j] !== TEAM_ENEMY || dist(a.x[j], a.y[j], p.x, p.y) >= range || this.blocked(p.x, p.y, a.x[j], a.y[j]))
                     return;
                 pool.push({ x: a.x[j], y: a.y[j], z: 0, h: 16, res: a.armor[j], hit: (r) => { a.hurt(this, j, r.dmg, Math.atan2(a.y[j] - p.y, a.x[j] - p.x), 60, true); } });
             });

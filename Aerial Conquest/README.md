@@ -32,6 +32,51 @@ No dependencies, no bundler, nothing to install.
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
 
+# Fix: keep gates (Michael's playtest of Millbrook Keep)
+
+**Reported:**
+1. The keep's gate took far too long to break.
+2. Defenders crowded the inside of the gate, and you could kill them
+   through it before it broke.
+
+**Cause:**
+1. Knights did 30% damage to gates (a rule meant for castle gates, where
+   rams do the work). With keep gate HP at ×4 the base, Millbrook's
+   (tier 2 while its outpost stands) took **295 s** with a new game's
+   12-strong warband, **458 s** alone.
+2. A defender with no target "marches on the enemy's centre", and the
+   pathfinding treats a spot within 60 px of a gateway as reachable from
+   either side. With your troops pressed against the gate, the whole
+   garrison walked up to its inside. On top of that, melee arcs, boss
+   shockwaves and Thunder never checked for walls.
+
+**Changed:**
+- **Keep gates** take the knight's full hit (`WAR.keepGateKnight` 1;
+  castle gates stay at 0.3) and have less HP (`WAR.keepGateMult` 4.0 →
+  1.3).
+- **Defenders** whose enemy is still behind their closed gate hold their
+  posts (`Army.think`).
+- **Nothing hits through a closed gate or a wall** (`Game.blocked`):
+  - the knight's swings and Whirl, and the hits on elites;
+  - elites' and minions' melee;
+  - boss shockwaves;
+  - Thunder's targets.
+  - Arrows and spell bolts already stopped on walls and gates.
+
+**Verified** (headless Chromium):
+- Millbrook's gate falls in **43 s** with the starting warband (50 s
+  alone).
+- With your troops pressed against the gate: **68** defenders crowded its
+  inside on the old build, **0** now.
+- **Point blank through the closed gate:**
+  - old build: a swing took a defender from 54 to 36 HP, a Whirl to 25;
+  - now: no damage from either.
+  - With the gate down, the same swing lands (54 → 36).
+- Phase 14 suite 7/7 (three new gate checks); Phases 0-13 all pass.
+- **Four campaigns:** won in 165-188 min (as before).
+  - Whole keep battles now take about 50-60 s, under PLAN's ~3 min,
+    because the gate used to be most of the fight.
+
 # Phase 14: balance + index.html card
 
 **How it was balanced:** a new harness, `tests/campaign14.js`, plays a

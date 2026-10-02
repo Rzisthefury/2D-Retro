@@ -461,7 +461,8 @@ const WAR = {
   castleProduction: [8, 13, 20],      // castle troops / min by level (PLAN 5.2: 6 / 10 / 16; Phase 14 balance)
   outpostHold: 10,           // seconds in the ring with no enemy inside (pauses, never resets)
   gateHp: 1500,              // gate HP at tier 1 (x tier HP scale); knights do x0.3, rams x4
-  keepGateMult: 4.0,         // keep gates against the base (Phase 14: from 4.5)
+  keepGateMult: 1.3,         // keep gates against the base (from 4.5; Michael: the gate took far too long)
+  keepGateKnight: 1,         // the knight's share of a hit on a keep gate (castle gates: 0.3, rams do the work)
   ironGateMult: 1.6,         // a castle whose keep is still the Dominion's (PLAN 10.2)
   throneHp: 5600,            // castle throne at tier 1 (knights and units x0.3, rams can't)
   cellRingRadius: 70,        // rescue: stand this close to the cell...

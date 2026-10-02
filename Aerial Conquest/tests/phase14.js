@@ -47,6 +47,32 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     });
     check('your villages and keeps raise a militia (6 / 12 at L1) that drifts back 2 a minute', rules.village === 6 && rules.keep === 12 && rules.full.join() === '6,12' && rules.after60 === 2, JSON.stringify(rules));
     check('the Dominion never targets your last castle (an empty Last Camp is no target)', rules.plan === null, JSON.stringify(rules));
+
+    // ---- keep gates (Michael, after Phase 14): quicker to break; nothing swarms or is hit through them while they stand
+    const kg = await p2.evaluate(() => {
+      const out = {};
+      const start = () => { GAME.startNewGame(1, 'normal'); GAME.story = null; GAME.war.tick = () => {}; const c = GAME.camp; GAME.attackNode(c.territories[1].nodes.find((m) => m.type === 'keep')); return GAME.battle; };
+      // the first keep a new game meets (Millbrook, tier 2 while its outpost stands), knight + the 12-strong warband, autopilot
+      let b = start(), g = b.gates[0];
+      GAME.god = true; GAME.autopilot = true;
+      while (g.alive && b.time < 300) GAME.simulate(1);
+      out.gate = { hp: g.maxHp, tier: b.spec.tier, downAt: Math.round(b.time) };
+      // your warband pressed against the gate: the garrison stays at its posts
+      b = start(); g = b.gates[0]; const a = GAME.army, P = GAME.player, cy = b.h / 2; GAME.god = true; GAME.autopilot = false; g.hp = g.maxHp = 1e9;
+      GAME.simulate(2);
+      for (let t = 0; t < 30; t++) { P.x = g.x - 30; P.y = cy; for (let i = 0; i < a.cap; i++) if (a.alive[i] && a.team[i] === 0) { a.x[i] = g.x - 26 - Math.random() * 20; a.y[i] = cy + (Math.random() - 0.5) * 80; } GAME.simulate(0.5); }
+      let near = 0; for (let i = 0; i < a.cap; i++) if (a.alive[i] && a.team[i] === 1 && b.zone(a.x[i], a.y[i]) === 1 && a.x[i] < g.x + 120 && Math.abs(a.y[i] - cy) < 120) near++;
+      out.swarm = near;
+      // point blank through the shut gate: swing and Whirl do nothing; once it's down they land
+      const hit = (def) => { const j = a.spawn('sword', 'enemy', g.x + 22, cy, b.spec.tier), hp0 = a.hp[j]; P.x = g.x - 22; P.y = cy; P.facing = 0; a.rebuildGrid(GAME.field); GAME.hitMinions(def, P, new Set()); const r = hp0 - a.hp[j]; a.hurt(GAME, j, 1e9, 0, 0, false); return Math.round(r); };
+      out.through = [hit(GROUND_COMBO[0]), hit(WHIRL)];
+      g.damage(GAME, 1e9); out.open = hit(GROUND_COMBO[0]);
+      GAME.enterCampaign();
+      return out;
+    });
+    check('keep gate: Millbrook\'s (tier 2) falls inside 60 s to the knight and a new game\'s 12-strong warband', kg.gate.tier === 2 && kg.gate.downAt <= 60, JSON.stringify(kg.gate));
+    check('keep gate: with your troops pressed against it, no defenders crowd its inside', kg.swarm === 0, JSON.stringify(kg));
+    check('keep gate: point blank through it, a swing and a Whirl do no damage; once it\'s down the swing lands', kg.through[0] === 0 && kg.through[1] === 0 && kg.open > 0, JSON.stringify(kg));
     await p2.close();
   } catch (e) { check('script ran to completion', false, String(e && e.stack || e)); }
   await browser.close();

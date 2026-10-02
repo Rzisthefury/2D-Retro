@@ -73,6 +73,7 @@ class Structure {
   need = 0;
   ringR = 0;
   contested = false;             // outpost: an enemy is in the ring (progress paused)
+  knightMult = 0.3;              // gates and thrones: the knight's share of a hit (rams do the real work); keep gates take it all
   // wagons: travel along the road, x-ward, until they leave
   speed = 0;
   escaped = false;
@@ -92,7 +93,7 @@ class Structure {
   mult(src: 'knight' | 'fire' | 'unit' | 'ram'): number {
     if (this.kind === 'wall' || this.kind === 'captureRing' || this.kind === 'cell') return 0;
     if (this.kind === 'building') return src === 'fire' ? 2 : 1;
-    if (this.kind === 'gate') return src === 'ram' ? 4 : 0.3;
+    if (this.kind === 'gate') return src === 'ram' ? 4 : src === 'knight' ? this.knightMult : 0.3;
     if (this.kind === 'throne') return src === 'ram' ? 0 : 0.3;
     return 1;
   }
@@ -418,6 +419,7 @@ class Battle {
     const gateHp = Math.round(WAR.gateHp * WAR.keepGateMult * TIER_SCALING.hpMultiplier(this.spec.tier));
     this.foeEdge = { x: x1 - 60, y: cy, spread: 60 };   // the barracks: reinforcements come from inside
     const gate = new Structure('gate', 'enemy', x0, cy + gap / 2, t + 8, gap, gateHp, 'Keep gate');
+    gate.knightMult = WAR.keepGateKnight;   // no rams at a keep early on: the knight breaks it
     this.structures.push(gate);
     this.rooms.push({ x0, y0, x1, y1 });
     this.doors.push({ a: { x: x0 - 60, y: cy }, b: { x: x0 + 60, y: cy }, za: 0, zb: 1, gate, halfGap: gap / 2 - 14 });
