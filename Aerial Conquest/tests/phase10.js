@@ -47,6 +47,8 @@ async function desktop(browser) {
   page.on('console', (m) => { if (m.type() === 'error' && !ignorable(m.text())) errors.push(m.text()); });
   await page.goto(URL); await page.evaluate(() => localStorage.clear()); await page.reload(); await wait(700);
   await titleStart(page);
+  // the playtest update grew keep garrisons (50 -> 120); these sim / join checks were sized for 50, and test mechanics, not keep size
+  await page.evaluate(() => { WAR.keepGarrison = 50; });
   const b = await geom(page);
   await fresh(page);
 

@@ -27,6 +27,7 @@ interface SaveData {
   inv: Inventory; weapons: string[]; armors: string[];
   weapon: string; armor: string; talents: TalentSet;
   potions: number; ethers: number;
+  spells: string[];                  // learned spells (earned by conquest)
   hero: HeroStyle; blade: BladeStyle;
   war: number[][] | null;            // node owners and levels (Campaign.save); null = a fresh war
   econ: object | null;               // gold in the villages, garrisons, convoys, warband (War.save)
@@ -77,7 +78,7 @@ function freshSave(): SaveData {
     skillPoints: WAR.startSkillPoints, upgrades: freshUpgrades(), gold: 0,
     inv: {}, weapons: ['w1'], armors: ['a1'],
     weapon: 'w1', armor: 'a1', talents: {},
-    potions: 3, ethers: 2,
+    potions: 3, ethers: 2, spells: [],
     hero: 'wayfarer', blade: 'longsword',
     war: null, econ: null,
     difficulty: 'normal', ng: 0, stats: null, story: [], at: 0,
@@ -97,6 +98,7 @@ function loadSave(): SaveData {
         }
       }
       d.potions = Math.max(0, j.potions | 0);
+      if (Array.isArray(j.spells)) d.spells = j.spells.filter((x: unknown) => SPELLS.some((s) => s.id === x));
       d.gold = Math.max(0, j.gold | 0);
       d.ethers = Math.max(0, j.ethers | 0);
       if (j.inv && typeof j.inv === 'object') {
@@ -150,6 +152,7 @@ function applySave(p: Player, d: SaveData) {
   p.talents = { ...d.talents };
   p.potions = d.potions;
   p.ethers = d.ethers;
+  p.spells = d.spells.slice();
   p.dashCharges = p.maxDash();
   p.refreshStats(true);
 }
@@ -883,6 +886,14 @@ class Game {
     }
     if (this.war.results.length) this.save();
     this.war.results = []; this.war.captured = [];
+    this.syncWar();
+    if (this.newSpells.length && this.bannerT <= 0) {   // after whatever banner is up (a capture's comes first)
+      const names = this.newSpells.map((id) => SPELLS.find((s) => s.id === id)!.name);
+      this.banner(`YOU LEARN ${names.join(' AND ').toUpperCase()}`, 'cast it in battle: the spell keys, or MAG', '#9fd8ff');
+      this.storyLine = { text: `The Order's old magic answers: ${names.join(' and ')}.`, t: WAR.storyLineTime };
+      this.newSpells = [];
+      this.save();
+    }
     this.checkStory();
     if (this.story) return;
     this.autosaveT += dt;
@@ -1252,7 +1263,12 @@ class Game {
         break;
       }
       case 'keep':
-        if (b.gates.every((s) => !s.alive) && b.captain && !b.captain.alive) { b.outcome = `${b.spec.name} taken — ${b.spec.captainName || 'the Captain'} defeated`; this.finishBattle('win'); return; }
+        // the gate, the Captain, then the garrison broken: at WAR.keepBreak of its strength the rest flee (Michael: a longer fight inside)
+        if (b.gates.every((s) => !s.alive) && b.captain && !b.captain.alive && this.foeStrength() <= b.startFoes * WAR.keepBreak) {
+          b.outcome = `${b.spec.name} taken — ${b.spec.captainName || 'the Captain'} defeated, the garrison broken`;
+          this.army.routSide('enemy');
+          this.finishBattle('win'); return;
+        }
         break;
       case 'castle': {
         const t = b.throne!;
@@ -1382,6 +1398,7 @@ class Game {
       for (const e of this.war.events) if (e.kind === 'sp') b.notes.push(`+${e.target} SP: ${this.camp.nodes[e.node].name}, first capture`);
       this.war.events = this.war.events.filter((e) => e.kind !== 'sp');
       this.syncWar();
+      for (const id of this.newSpells) b.notes.push(`spell learned: ${SPELLS.find((s) => s.id === id)!.name}`);
       if (b.spec.generalId) {
         const g = this.war.general(b.spec.generalId)!;
         b.notes.push(result === 'win' ? `${g.name}: loyalty ${Math.round(g.loyalty)} (fought beside you)` : result === 'lose' ? `${g.name} is taken` : `${g.name} withdraws with you`);
@@ -1416,6 +1433,7 @@ class Game {
         for (const e of this.war.events) if (e.kind === 'sp') b.notes.push(`+${e.target} SP: first capture`);
         this.war.events = this.war.events.filter((e) => e.kind !== 'sp');
         this.syncWar();
+        for (const id of this.newSpells) b.notes.push(`spell learned: ${SPELLS.find((s) => s.id === id)!.name}`);
       }
       // spoils (PLAN 12.3): 1-3 commons x tier; a castle's Lord pays its territory's rare, the warlord the top one
       const n = rndInt(WAR.spoilMats[0], WAR.spoilMats[1]) * b.spec.tier;
@@ -1516,7 +1534,7 @@ class Game {
       case 'village': goal = nearestOf(b.houses); break;
       case 'field': goal = b.leader && b.leader.alive ? b.leader : anyFoe(); break;
       case 'outpost': { const r = b.ring!; spot = { x: r.x, y: r.y }; guard = r.ringR + 20; break; }
-      case 'keep': goal = nearestOf(b.gates) || (b.captain && b.captain.alive ? b.captain : null); break;
+      case 'keep': goal = nearestOf(b.gates) || (b.captain && b.captain.alive ? b.captain : anyFoe()); break;
       case 'castle': {
         const t = b.throne!;
         goal = b.gates.find((s) => s.alive) || null;
@@ -1994,8 +2012,22 @@ class Game {
   warbandCap(): number { this.syncWar(); return this.war.warbandCap(); }
 
   /** Hand the war the knight's talents, and the knight the SP the war has awarded for first captures (PLAN 12.2). */
+  newSpells: string[] = [];    // spells learned since the last announcement
+
+  /** Can the knight cast this? Learned, or anywhere on the test field and the debug list. */
+  spellKnown(id: string): boolean {
+    return this.player.spells.includes(id) || this.battleFrom === 'sandbox' || (this.screen === 'battle' && this.battle.spec.kind === 'test');
+  }
+
+  /** How a locked spell is learned. */
+  spellHint(id: string): string {
+    const u = WAR.spellUnlock[id], s = SPELLS.find((x) => x.id === id)!;
+    return `${s.name.toUpperCase()}: TAKE ${u[1] > 1 ? `A TIER-${u[1]} ` : 'A '}${u[0].toUpperCase()} TO LEARN IT`;
+  }
+
   syncWar() {
     const p = this.player, w = this.war;
+    for (const id of w.earnedSpells()) if (!p.spells.includes(id)) { p.spells.push(id); this.newSpells.push(id); }
     w.talents = p.talents;
     w.loyaltyMult = p.hasT('presence') ? WAR.presenceMult : 1;   // Warlord's Presence
     if (w.spPending > 0) { p.skillPoints += w.spPending; w.spPending = 0; }
@@ -2513,10 +2545,12 @@ class Game {
     }
 
     if (s.kind === 'strike') {
-      // Thunder: bolts on up to three nearby enemies.
+      // Thunder (Michael): strikes every Dominion unit in a ring around the knight, elites and minions alike
       const surge = p.hasT('surge');
-      // Thunder picks the nearest Dominion targets, elites and minions alike
-      const range = surge ? 330 : 260;
+      const range = surge ? WAR.thunderSurgeRadius : WAR.thunderRadius;
+      this.ring(p.x, p.y, 0, 20, range, s.color);
+      this.ring(p.x, p.y, 0, range * 0.5, range, '#fff6b0');
+      this.shake(6 * TUNING.shakeScale);
       const pool: { x: number; y: number; z: number; h: number; res: number; hit: (r: DamageResult) => void }[] = [];
       for (const e of this.enemies) {
         if (!e.alive || e.team !== 'enemy' || dist(e.x, e.y, p.x, p.y) >= range || this.blocked(p.x, p.y, e.x, e.y)) continue;
@@ -2527,12 +2561,14 @@ class Game {
         if (a.team[j] !== TEAM_ENEMY || dist(a.x[j], a.y[j], p.x, p.y) >= range || this.blocked(p.x, p.y, a.x[j], a.y[j])) return;
         pool.push({ x: a.x[j], y: a.y[j], z: 0, h: 16, res: a.armor[j], hit: (r) => { a.hurt(this, j, r.dmg, Math.atan2(a.y[j] - p.y, a.x[j] - p.x), 60, true); } });
       });
-      const targets = pool.sort((m, n) => dist(m.x, m.y, p.x, p.y) - dist(n.x, n.y, p.x, p.y)).slice(0, surge ? 5 : 3);
-      if (!targets.length) { this.toast('NO TARGET'); return; }
+      const targets = pool.sort((m, n) => dist(m.x, m.y, p.x, p.y) - dist(n.x, n.y, p.x, p.y));
+      let fx = 0;
       for (const e of targets) {
-        const r = magicDamage(s.power * fm, p.stats.mag, e.res);
+        const r = magicDamage(s.power * fm * WAR.thunderPowerMult, p.stats.mag, e.res);
         e.hit(r);
-        this.floatText(e.x, e.y, e.z + e.h + 10, String(r.dmg), s.color, 18);
+        this.registerHit();
+        this.floatText(e.x, e.y, e.z + e.h + 10, String(r.dmg), s.color, fx < WAR.thunderBoltFx ? 18 : 13);
+        if (fx++ >= WAR.thunderBoltFx) { this.burst(e.x, e.y, e.z + 10, 4, s.color); continue; }   // big crowds: a flash each, bolts on the nearest
         this.burst(e.x, e.y, e.z + 10, 16, s.color);
         this.ring(e.x, e.y, e.z, 6, 70, s.color);
         // vertical bolt
@@ -2736,8 +2772,8 @@ class Game {
     if (this.menuMode === 'magic') {
       const rows: MenuRow[] = SPELLS.map((s) => ({
         label: s.name,
-        right: s.drainAll ? 'ALL' : String(s.cost),
-        enabled: p.canCast(s),
+        right: !this.spellKnown(s.id) ? 'LOCKED' : s.drainAll ? 'ALL' : String(s.cost),
+        enabled: p.canCast(s) && this.spellKnown(s.id),
         act: () => { p.tryCast(this, s); this.menuMode = 'root'; this.menuIndex = 1; },
       }));
       rows.push({ label: 'Back', enabled: true, act: () => { this.menuMode = 'root'; this.menuIndex = 1; } });
@@ -2917,7 +2953,7 @@ class Game {
       skillPoints: p.skillPoints, upgrades: p.upgrades, gold: p.gold,
       inv: p.inv, weapons: p.ownedWeapons, armors: p.ownedArmors,
       weapon: p.weapon.id, armor: p.armor.id, talents: p.talents,
-      potions: p.potions, ethers: p.ethers,
+      potions: p.potions, ethers: p.ethers, spells: p.spells,
       hero: this.heroStyle, blade: this.bladeStyle,
       war: this.camp.save(),
       econ: this.war.save(),

@@ -64,7 +64,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       let near = 0; for (let i = 0; i < a.cap; i++) if (a.alive[i] && a.team[i] === 1 && b.zone(a.x[i], a.y[i]) === 1 && a.x[i] < g.x + 120 && Math.abs(a.y[i] - cy) < 120) near++;
       out.swarm = near;
       // point blank through the shut gate: swing and Whirl do nothing; once it's down they land
-      const hit = (def) => { const j = a.spawn('sword', 'enemy', g.x + 22, cy, b.spec.tier), hp0 = a.hp[j]; P.x = g.x - 22; P.y = cy; P.facing = 0; a.rebuildGrid(GAME.field); GAME.hitMinions(def, P, new Set()); const r = hp0 - a.hp[j]; a.hurt(GAME, j, 1e9, 0, 0, false); return Math.round(r); };
+      const hit = (def) => { const j = a.spawn('sword', 'enemy', g.x + 22, cy, b.spec.tier, true), hp0 = a.hp[j]; P.x = g.x - 22; P.y = cy; P.facing = 0; a.rebuildGrid(GAME.field); GAME.hitMinions(def, P, new Set()); const r = hp0 - a.hp[j]; a.hurt(GAME, j, 1e9, 0, 0, false); return Math.round(r); };
       out.through = [hit(GROUND_COMBO[0]), hit(WHIRL)];
       g.damage(GAME, 1e9); out.open = hit(GROUND_COMBO[0]);
       GAME.enterCampaign();

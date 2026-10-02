@@ -366,7 +366,7 @@ const AIR_COMBO = [
 const SPELLS = [
     { id: 'fire', name: 'Fire', cost: 14, power: 30, kind: 'projectile', color: '#ff7a3d', cast: 12, recovery: 16, desc: 'Homing fireball' },
     { id: 'blizzard', name: 'Blizzard', cost: 12, power: 24, kind: 'pierce', color: '#63d7ff', cast: 10, recovery: 14, desc: 'Piercing shard, slows' },
-    { id: 'thunder', name: 'Thunder', cost: 26, power: 34, kind: 'strike', color: '#ffe14d', cast: 18, recovery: 22, desc: 'Bolts on nearby foes' },
+    { id: 'thunder', name: 'Thunder', cost: 26, power: 34, kind: 'strike', color: '#ffe14d', cast: 18, recovery: 22, desc: 'Strikes every foe around you' },
     // Cure eats the entire gauge whatever is left in it, exactly like KH2 — which
     // is what makes the recharge lock a real decision instead of a formality.
     { id: 'cure', name: 'Cure', cost: 0, power: 52, kind: 'heal', color: '#7dffa8', cast: 16, recovery: 20, drainAll: true, desc: 'Heals, spends ALL MP' },
@@ -518,8 +518,8 @@ const WAR = {
     // battle length (PLAN 10.2 time bands): the knight cuts down ~3 units a second, so a
     // battle lasts as long as its Dominion army does. Each type brings this many more
     // units on from its edge during the fight (default mix), at this pace (x stream interval)
-    battleReinforce: { village: 200, field: 340, outpost: 650, keep: 100, castle: 60, convoy: 150, defense: 300, rescue: 160 },
-    battlePace: { village: 2.5, field: 3, outpost: 0.4, keep: 2, castle: 2.5, convoy: 2, defense: 3.5, rescue: 1.5 },
+    battleReinforce: { village: 200, field: 340, outpost: 650, keep: 340, castle: 60, convoy: 150, defense: 300, rescue: 160 },
+    battlePace: { village: 2.5, field: 3, outpost: 0.4, keep: 3, castle: 2.5, convoy: 2, defense: 3.5, rescue: 1.5 },
     captainStats: { hp: 1300, attack: 11, defense: 8 }, // Phase 14: from 2000 / 14   // keep Captain (boss data, tier 1; scaled like AF bosses)
     lordStats: { hp: 640, attack: 15, defense: 10 }, // castle Lord
     commanderMult: 1.6, // field / defense commander
@@ -531,7 +531,8 @@ const WAR = {
     villageGarrison: 30, // village defenders at level 1 (*default*)...
     villageGarrisonPerLevel: 10, // ...+ this per level above 1
     outpostGarrison: 90, // (Phase 14: from 50, so the ring is fought over)
-    keepGarrison: 50, // keep defenders before its level bonus (*default*)...
+    keepBreak: 0.25, // a keep falls when its Captain is down and its garrison is at or under this share of its strength
+    keepGarrison: 120, // keep defenders before its level bonus (*default*)...
     keepDefenders: [0, 10, 20], // ...+ PLAN 5.2's L1/L2/L3 bonus
     // Phase 14 balance: your villages, outposts and keeps hold a local militia (free, refilling) so the
     // Dominion has to fight for them; without it any 6-unit squad retook them on arrival
@@ -600,7 +601,13 @@ const WAR = {
     enemyDamage: { easy: 0.7, normal: 1, hard: 1.3 }, // Dominion damage in your battles
     ngStats: 1.5, // Dominion HP and damage (and sim strength) x this per NG+ cycle
     ngClock: 0.8, // war clock x this per NG+ cycle
-    storyLineTime: 7, // seconds a story line (first keep / castle / general) stays on the map
+    storyLineTime: 7,
+    // spells are earned (Michael): the first capture of this kind of node, at this territory tier or higher
+    spellUnlock: { fire: ['keep', 1], cure: ['castle', 1], blizzard: ['castle', 3], thunder: ['castle', 4] },
+    thunderRadius: 200, // Thunder strikes every enemy this close (Storm Surge: thunderSurgeRadius)
+    thunderSurgeRadius: 280,
+    thunderPowerMult: 0.8, // per target, since it hits everyone in the ring
+    thunderBoltFx: 10, // full bolt effects on this many targets (the rest flash), to keep big crowds cheap          // seconds a story line (first keep / castle / general) stays on the map
     // Thornhounds and the warlord (Phase 11, PLAN 11.2 / 11.3)
     houndPack: 6,
     houndPacks: [0, 0, 0, 1, 2], // packs guarding a node, by battle tier
@@ -2415,7 +2422,7 @@ class Battle {
             case 'village': return 'Burn every house';
             case 'field': return 'Rout or destroy the Dominion army';
             case 'outpost': return 'Hold the ring 10 s with no enemy inside';
-            case 'keep': return this.gates.some((s) => s.alive) ? 'Break the keep gate' : `Defeat ${this.spec.captainName || 'the Captain'}`;
+            case 'keep': return this.gates.some((s) => s.alive) ? 'Break the keep gate' : this.captain && this.captain.alive ? `Defeat ${this.spec.captainName || 'the Captain'}` : 'Break the garrison';
             case 'castle': {
                 const [outer, inner] = this.gates;
                 if (outer && outer.alive)
@@ -2441,8 +2448,10 @@ class Battle {
                 return r ? clamp(r.progress / r.need, 0, 1) : 0;
             }
             case 'keep': {
-                const gt = this.gates[0];
-                return (gt && !gt.alive ? 0.5 : gt ? 0.5 * (1 - gt.hp / gt.maxHp) : 0) + (this.captain && !this.captain.alive ? 0.5 : 0);
+                // gate 40%, Captain 30%, the garrison broken 30% (down to WAR.keepBreak of its strength)
+                const gt = this.gates[0], gate = gt && !gt.alive ? 1 : gt ? 1 - gt.hp / gt.maxHp : 0;
+                const left = g.foeStrength() / Math.max(1, this.startFoes), broken = clamp((1 - left) / (1 - WAR.keepBreak), 0, 1);
+                return 0.4 * gate + (this.captain && !this.captain.alive ? 0.3 : 0) + 0.3 * broken;
             }
             case 'castle': {
                 const gs = this.gates, t = this.throne;
@@ -3436,6 +3445,20 @@ class War {
     troopMult() {
         const t = this.talents, c = WAR.command;
         return (1 + (t.drill ? c.drill : 0) + (t.host ? c.hostHp : 0)) * (1 + (t.steel ? c.steel : 0));
+    }
+    /** Spells earned by first captures (Michael): keep -> Fire, castle -> Cure, tier-3 castle -> Blizzard, tier-4 castle -> Thunder. */
+    earnedSpells() {
+        const out = [];
+        for (const id of this.spTaken) {
+            const n = this.camp.nodes[id];
+            if (!n || n.territory === WAR.startTerritory)
+                continue;
+            const tier = this.camp.territories[n.territory].tier;
+            for (const [spell, [type, minTier]] of Object.entries(WAR.spellUnlock))
+                if (n.type === type && tier >= minTier && !out.includes(spell))
+                    out.push(spell);
+        }
+        return out;
     }
     /** SP the first time a castle or keep is yours (PLAN 12.2): 2 a castle (+4 the capital), 1 a keep. */
     awardSP(n) {
@@ -5578,6 +5601,7 @@ class Player {
         this.weapon = WEAPONS[0];
         this.armor = ARMORS[0];
         this.talents = {};
+        this.spells = []; // learned spell ids (earned by conquest; the test field and debug list allow all)
         this.ownedWeapons = ['w1'];
         this.ownedArmors = ['a1'];
         this.inv = {};
@@ -6080,6 +6104,10 @@ class Player {
         return s.drainAll ? this.mp > 0 : this.mp >= s.cost;
     }
     tryCast(g, s) {
+        if (!g.spellKnown(s.id)) {
+            g.toast(g.spellHint(s.id));
+            return false;
+        }
         if (this.charging) {
             g.toast('MP CHARGING');
             return false;
@@ -7161,8 +7189,10 @@ class Renderer {
             drawables.push({ y: g.player.y, fn: () => this.drawPlayer(c, g.player, g) });
         for (const p of g.projectiles)
             drawables.push({ y: p.y, fn: () => this.drawProjectile(c, p) });
+        // structures by their whole footprint: a long wall's anchor (bottom centre) can be off screen while most of it shows
+        const rectOnScreen = (s) => s.x + s.w / 2 > cam.x - 80 && s.x - s.w / 2 < cam.x + VIEW_W + 80 && s.y > cam.y - 80 && s.y - s.h < cam.y + VIEW_H + 160;
         for (const s of g.battle.structures)
-            if (onScreen(s.x, s.y))
+            if (rectOnScreen(s))
                 drawables.push({ y: s.y, fn: () => this.drawStructure(c, s, g) });
         drawables.sort((a, b) => a.y - b.y);
         for (const e of g.enemies) {
@@ -11468,6 +11498,7 @@ class Renderer {
             ['Combo hits', String(p.groundTable().length)],
             ['Dash charges', p.hasT('dash') ? String(p.maxDash()) : 'not learned'],
             ['Potions / Ethers', `${p.potions} / ${p.ethers}`],
+            ['Spells', SPELLS.filter((s) => p.spells.includes(s.id)).map((s) => s.name).join(', ') || 'none yet: take a keep'],
         ];
         c.font = '600 13px ui-monospace, Menlo, Consolas, monospace';
         for (const [k, v] of rows) {
@@ -11589,7 +11620,7 @@ class Renderer {
             const s = SPELLS[i];
             const cy = TOUCH_CHIPS.y + i * TOUCH_CHIPS.dy;
             const on = g.touchSpell === i;
-            const ok = g.player.canCast(s);
+            const known = g.spellKnown(s.id), ok = known && g.player.canCast(s);
             c.globalAlpha = on ? 0.9 : 0.38;
             c.fillStyle = on ? s.color : 'rgba(16,20,36,0.7)';
             c.beginPath();
@@ -11601,7 +11632,7 @@ class Renderer {
             c.arc(TOUCH_CHIPS.x, cy, TOUCH_CHIPS.r, 0, Math.PI * 2);
             c.stroke();
             c.fillStyle = on ? '#0d1020' : (ok ? s.color : '#5d6480');
-            c.fillText(s.name[0], TOUCH_CHIPS.x, cy + 4);
+            c.fillText(known ? s.name[0] : '\u2022', TOUCH_CHIPS.x, cy + 4);
         }
         // menu button
         c.globalAlpha = 0.42;
@@ -11967,7 +11998,7 @@ function freshSave() {
         skillPoints: WAR.startSkillPoints, upgrades: freshUpgrades(), gold: 0,
         inv: {}, weapons: ['w1'], armors: ['a1'],
         weapon: 'w1', armor: 'a1', talents: {},
-        potions: 3, ethers: 2,
+        potions: 3, ethers: 2, spells: [],
         hero: 'wayfarer', blade: 'longsword',
         war: null, econ: null,
         difficulty: 'normal', ng: 0, stats: null, story: [], at: 0,
@@ -11987,6 +12018,8 @@ function loadSave() {
                 }
             }
             d.potions = Math.max(0, j.potions | 0);
+            if (Array.isArray(j.spells))
+                d.spells = j.spells.filter((x) => SPELLS.some((s) => s.id === x));
             d.gold = Math.max(0, j.gold | 0);
             d.ethers = Math.max(0, j.ethers | 0);
             if (j.inv && typeof j.inv === 'object') {
@@ -12055,6 +12088,7 @@ function applySave(p, d) {
     p.talents = { ...d.talents };
     p.potions = d.potions;
     p.ethers = d.ethers;
+    p.spells = d.spells.slice();
     p.dashCharges = p.maxDash();
     p.refreshStats(true);
 }
@@ -12188,6 +12222,8 @@ class Game {
         this.orderT = 0;
         this.musicBig = false; // hysteresis for the 60+ live units step
         this.portrait = false; // a phone held upright: the game is frozen behind the rotate prompt
+        /** Hand the war the knight's talents, and the knight the SP the war has awarded for first captures (PLAN 12.2). */
+        this.newSpells = []; // spells learned since the last announcement
         this.renderer = new Renderer(canvas);
         this.input.attach(canvas);
         SAVE_SLOT = lastSlot();
@@ -12962,6 +12998,14 @@ class Game {
             this.save();
         this.war.results = [];
         this.war.captured = [];
+        this.syncWar();
+        if (this.newSpells.length && this.bannerT <= 0) { // after whatever banner is up (a capture's comes first)
+            const names = this.newSpells.map((id) => SPELLS.find((s) => s.id === id).name);
+            this.banner(`YOU LEARN ${names.join(' AND ').toUpperCase()}`, 'cast it in battle: the spell keys, or MAG', '#9fd8ff');
+            this.storyLine = { text: `The Order's old magic answers: ${names.join(' and ')}.`, t: WAR.storyLineTime };
+            this.newSpells = [];
+            this.save();
+        }
         this.checkStory();
         if (this.story)
             return;
@@ -13447,8 +13491,10 @@ class Game {
                 break;
             }
             case 'keep':
-                if (b.gates.every((s) => !s.alive) && b.captain && !b.captain.alive) {
-                    b.outcome = `${b.spec.name} taken — ${b.spec.captainName || 'the Captain'} defeated`;
+                // the gate, the Captain, then the garrison broken: at WAR.keepBreak of its strength the rest flee (Michael: a longer fight inside)
+                if (b.gates.every((s) => !s.alive) && b.captain && !b.captain.alive && this.foeStrength() <= b.startFoes * WAR.keepBreak) {
+                    b.outcome = `${b.spec.name} taken — ${b.spec.captainName || 'the Captain'} defeated, the garrison broken`;
+                    this.army.routSide('enemy');
                     this.finishBattle('win');
                     return;
                 }
@@ -13635,6 +13681,8 @@ class Game {
                     b.notes.push(`+${e.target} SP: ${this.camp.nodes[e.node].name}, first capture`);
             this.war.events = this.war.events.filter((e) => e.kind !== 'sp');
             this.syncWar();
+            for (const id of this.newSpells)
+                b.notes.push(`spell learned: ${SPELLS.find((s) => s.id === id).name}`);
             if (b.spec.generalId) {
                 const g = this.war.general(b.spec.generalId);
                 b.notes.push(result === 'win' ? `${g.name}: loyalty ${Math.round(g.loyalty)} (fought beside you)` : result === 'lose' ? `${g.name} is taken` : `${g.name} withdraws with you`);
@@ -13690,6 +13738,8 @@ class Game {
                         b.notes.push(`+${e.target} SP: first capture`);
                 this.war.events = this.war.events.filter((e) => e.kind !== 'sp');
                 this.syncWar();
+                for (const id of this.newSpells)
+                    b.notes.push(`spell learned: ${SPELLS.find((s) => s.id === id).name}`);
             }
             // spoils (PLAN 12.3): 1-3 commons x tier; a castle's Lord pays its territory's rare, the warlord the top one
             const n = rndInt(WAR.spoilMats[0], WAR.spoilMats[1]) * b.spec.tier;
@@ -13808,7 +13858,7 @@ class Game {
                 break;
             }
             case 'keep':
-                goal = nearestOf(b.gates) || (b.captain && b.captain.alive ? b.captain : null);
+                goal = nearestOf(b.gates) || (b.captain && b.captain.alive ? b.captain : anyFoe());
                 break;
             case 'castle': {
                 const t = b.throne;
@@ -14405,9 +14455,22 @@ class Game {
     }
     /** The warband's size cap (PLAN 12.2: 12 base; talents and L3 castles add up to 60 in Phase 11). */
     warbandCap() { this.syncWar(); return this.war.warbandCap(); }
-    /** Hand the war the knight's talents, and the knight the SP the war has awarded for first captures (PLAN 12.2). */
+    /** Can the knight cast this? Learned, or anywhere on the test field and the debug list. */
+    spellKnown(id) {
+        return this.player.spells.includes(id) || this.battleFrom === 'sandbox' || (this.screen === 'battle' && this.battle.spec.kind === 'test');
+    }
+    /** How a locked spell is learned. */
+    spellHint(id) {
+        const u = WAR.spellUnlock[id], s = SPELLS.find((x) => x.id === id);
+        return `${s.name.toUpperCase()}: TAKE ${u[1] > 1 ? `A TIER-${u[1]} ` : 'A '}${u[0].toUpperCase()} TO LEARN IT`;
+    }
     syncWar() {
         const p = this.player, w = this.war;
+        for (const id of w.earnedSpells())
+            if (!p.spells.includes(id)) {
+                p.spells.push(id);
+                this.newSpells.push(id);
+            }
         w.talents = p.talents;
         w.loyaltyMult = p.hasT('presence') ? WAR.presenceMult : 1; // Warlord's Presence
         if (w.spPending > 0) {
@@ -14987,10 +15050,12 @@ class Game {
             return;
         }
         if (s.kind === 'strike') {
-            // Thunder: bolts on up to three nearby enemies.
+            // Thunder (Michael): strikes every Dominion unit in a ring around the knight, elites and minions alike
             const surge = p.hasT('surge');
-            // Thunder picks the nearest Dominion targets, elites and minions alike
-            const range = surge ? 330 : 260;
+            const range = surge ? WAR.thunderSurgeRadius : WAR.thunderRadius;
+            this.ring(p.x, p.y, 0, 20, range, s.color);
+            this.ring(p.x, p.y, 0, range * 0.5, range, '#fff6b0');
+            this.shake(6 * TUNING.shakeScale);
             const pool = [];
             for (const e of this.enemies) {
                 if (!e.alive || e.team !== 'enemy' || dist(e.x, e.y, p.x, p.y) >= range || this.blocked(p.x, p.y, e.x, e.y))
@@ -15003,15 +15068,17 @@ class Game {
                     return;
                 pool.push({ x: a.x[j], y: a.y[j], z: 0, h: 16, res: a.armor[j], hit: (r) => { a.hurt(this, j, r.dmg, Math.atan2(a.y[j] - p.y, a.x[j] - p.x), 60, true); } });
             });
-            const targets = pool.sort((m, n) => dist(m.x, m.y, p.x, p.y) - dist(n.x, n.y, p.x, p.y)).slice(0, surge ? 5 : 3);
-            if (!targets.length) {
-                this.toast('NO TARGET');
-                return;
-            }
+            const targets = pool.sort((m, n) => dist(m.x, m.y, p.x, p.y) - dist(n.x, n.y, p.x, p.y));
+            let fx = 0;
             for (const e of targets) {
-                const r = magicDamage(s.power * fm, p.stats.mag, e.res);
+                const r = magicDamage(s.power * fm * WAR.thunderPowerMult, p.stats.mag, e.res);
                 e.hit(r);
-                this.floatText(e.x, e.y, e.z + e.h + 10, String(r.dmg), s.color, 18);
+                this.registerHit();
+                this.floatText(e.x, e.y, e.z + e.h + 10, String(r.dmg), s.color, fx < WAR.thunderBoltFx ? 18 : 13);
+                if (fx++ >= WAR.thunderBoltFx) {
+                    this.burst(e.x, e.y, e.z + 10, 4, s.color);
+                    continue;
+                } // big crowds: a flash each, bolts on the nearest
                 this.burst(e.x, e.y, e.z + 10, 16, s.color);
                 this.ring(e.x, e.y, e.z, 6, 70, s.color);
                 // vertical bolt
@@ -15289,8 +15356,8 @@ class Game {
         if (this.menuMode === 'magic') {
             const rows = SPELLS.map((s) => ({
                 label: s.name,
-                right: s.drainAll ? 'ALL' : String(s.cost),
-                enabled: p.canCast(s),
+                right: !this.spellKnown(s.id) ? 'LOCKED' : s.drainAll ? 'ALL' : String(s.cost),
+                enabled: p.canCast(s) && this.spellKnown(s.id),
                 act: () => { p.tryCast(this, s); this.menuMode = 'root'; this.menuIndex = 1; },
             }));
             rows.push({ label: 'Back', enabled: true, act: () => { this.menuMode = 'root'; this.menuIndex = 1; } });
@@ -15514,7 +15581,7 @@ class Game {
             skillPoints: p.skillPoints, upgrades: p.upgrades, gold: p.gold,
             inv: p.inv, weapons: p.ownedWeapons, armors: p.ownedArmors,
             weapon: p.weapon.id, armor: p.armor.id, talents: p.talents,
-            potions: p.potions, ethers: p.ethers,
+            potions: p.potions, ethers: p.ethers, spells: p.spells,
             hero: this.heroStyle, blade: this.bladeStyle,
             war: this.camp.save(),
             econ: this.war.save(),

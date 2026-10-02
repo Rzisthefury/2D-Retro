@@ -175,10 +175,14 @@ async function desktop(browser) {
     return { afterGate: GAME.battle.result, objective: b.objective, captain: b.captain.alive };
   });
   check('keep: breaking the gate alone is not the win; the objective turns to the Captain', kp.afterGate === null && /captain|varn/i.test(kp.objective) && kp.captain, JSON.stringify(kp));
+  // since the playtest update the garrison must break too (WAR.keepBreak): the Captain, then the rest
   await page.evaluate(() => GAME.battle.captain.applyDamage(GAME, 1e7, 0, 0, 0, 0));
   await sim(page, 1);
+  const midK = await page.evaluate(() => ({ result: GAME.battle.result, objective: GAME.battle.objective }));
+  await page.evaluate(() => { const a = GAME.army; for (const k of Object.keys(a.reserve[1])) a.reserve[1][k] = 0; for (let i = 0; i < a.cap; i++) if (a.alive[i] && a.team[i] === 1) a.hurt(GAME, i, 1e9, 0, 0, false); for (const e of GAME.enemies) if (e.team === 'enemy') e.applyDamage(GAME, 1e8, 0, 0, 0, 0); });
+  await sim(page, 1);
   r = await res(page);
-  check('keep: gate broken AND Captain defeated -> win', r.result === 'win', JSON.stringify(r));
+  check('keep: gate broken AND Captain defeated AND the garrison broken -> win (the Captain alone is not)', midK.result === null && r.result === 'win', JSON.stringify({ midK, r }));
   await begin(page, 'keep');
   await page.evaluate(() => GAME.battle.captain.applyDamage(GAME, 1e7, 0, 0, 0, 0));
   await sim(page, 2);

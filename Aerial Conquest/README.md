@@ -32,6 +32,80 @@ No dependencies, no bundler, nothing to install.
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
 
+# Update: invisible wall, longer keep fight, earned spells, Thunder ring
+
+**Invisible wall.** Structures were culled by a single anchor point, the
+bottom-centre of their footprint. A long wall whose anchor was off
+screen vanished even while most of it was in view. Every keep and castle
+wall could do it. They're now culled by their whole footprint.
+
+**Longer keep fight** (Michael: more defenders inside):
+- A keep is now won when the gate is down, the Captain is beaten, **and
+  the garrison is broken**: down to a quarter of its strength
+  (`WAR.keepBreak` 0.25), after which the rest flee. Before, the Captain
+  alone ended it however many defenders were left, so more defenders
+  changed nothing. The objective reads "Break the garrison" once the
+  Captain falls.
+- Garrison 50 → **120** (`keepGarrison`), battle reinforcements 100 →
+  **340**, streamed in steady waves (`battlePace.keep` 2 → 3).
+- Millbrook (tier 1) with ~30 troops on autopilot: **won 6 of 6 at about
+  160 s** (gate down at 22 s). It used to end at about 60 s.
+
+**Earned spells** (Michael: by conquest; Cure fairly early). All four
+start locked, and each is learned by the first capture of a node type:
+
+| spell | learned by |
+|---|---|
+| Fire | your first keep |
+| Cure | your first castle (the first territory, early) |
+| Blizzard | your first tier-3 castle |
+| Thunder | your first tier-4 castle |
+
+- Rules live in `WAR.spellUnlock` and are derived from your first
+  captures, so existing saves get credit for what they already took.
+- Learned spells are kept on the knight: saved, and kept through New
+  Game+.
+- **Locked:**
+  - casting tells you how to learn the spell ("FIRE: TAKE A KEEP TO
+    LEARN IT");
+  - the Magic menu shows LOCKED; touch chips show a dot.
+- **Learned:** a banner (after any capture banner) and a portrait line;
+  battle results list "spell learned".
+- The Status tab lists your spells.
+- The test field and the debug battle list keep all four, for practice.
+
+**Thunder** strikes **every** Dominion unit within **200 px** of you
+(Storm Surge: 280 px), at 80% of its old per-target damage, with a ring
+showing the radius.
+- It respects walls and closed gates.
+- Full bolt effects on the nearest 10 targets; the rest flash, which
+  keeps big crowds cheap.
+
+**Verified** (headless Chromium): new suite `tests/update1.js` **11/11**.
+- With the camera on a keep wall's top half and its anchor 160 px below
+  the screen, the wall is drawn.
+- **Spells:**
+  - A new game knows none; casting one is refused with no MP spent.
+  - Keep → Fire, castle → Cure, tier-3 castle → Blizzard, tier-4 castle
+    → Thunder.
+  - They survive a reload and New Game+; the test field has all four.
+- **Thunder:** 16 of 16 at 150 px hit, 0 at 250 or 340 px. With Storm
+  Surge, 250 px is hit and 340 px is not.
+- **Keep:** the Captain down with the garrison standing is not the win;
+  breaking the garrison is. Millbrook ran 2-4 min, 3 of 3.
+- **Regressions:** Phases 0-14 all pass. Phase 5's debug-list timing is
+  now 6 of 8 in band (keeps now in).
+  - Phases 5 and 11 now break the garrison after the Captain.
+  - Phases 8 and 10 pin the old 50-defender keep: their sim checks were
+    sized for it.
+  - Phase 14's through-the-gate check spawns past the live cap.
+- **Four Normal campaigns on autopilot:** 173, 181, 185, 194 min, all
+  won. Keeps now take about 160 s each.
+
+**Not verified:** how the earned-spell pacing feels by hand. Fire comes
+at your first keep. Cure at your first castle is typically 15-25 min in,
+going by the harness.
+
 # Fix: keep gates (Michael's playtest of Millbrook Keep)
 
 **Reported:**
