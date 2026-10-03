@@ -624,11 +624,12 @@ interface TouchBtn { id: string; x: number; y: number; r: number; label: string;
 const TOUCH_STICK = { x: 118, y: 424, r: 64, knob: 30, dead: 0.17 };
 
 const TOUCH_BTNS: TouchBtn[] = [
-  { id: 'attack', x: 866, y: 448, r: 42, label: 'ATK', color: '#ff9d5c' },
-  { id: 'jump',   x: 768, y: 430, r: 33, label: 'JMP', color: '#7fb4ff' },
-  { id: 'dash',   x: 878, y: 356, r: 33, label: 'DSH', color: '#69e29a' },
-  { id: 'magic',  x: 776, y: 340, r: 31, label: 'MAG', color: '#c39bff' },
-  { id: 'command', x: 672, y: 456, r: 30, label: 'CMD', color: '#ffd54a' },   // opens the order wheel
+  { id: 'attack', x: 862, y: 446, r: 58, label: 'ATK', color: '#ff9d5c' },   // the big one (Michael: bigger on phones)
+  { id: 'jump',   x: 750, y: 454, r: 33, label: 'JMP', color: '#7fb4ff' },
+  { id: 'dash',   x: 876, y: 350, r: 33, label: 'DSH', color: '#69e29a' },
+  { id: 'magic',  x: 772, y: 344, r: 31, label: 'MAG', color: '#c39bff' },
+  { id: 'command', x: 664, y: 462, r: 30, label: 'CMD', color: '#ffd54a' },   // opens the order wheel
+  { id: 'item',   x: 676, y: 378, r: 28, label: 'POT', color: '#ff7a9a' },   // drink a potion (E on a keyboard)
 ];
 
 const TOUCH_CHIPS = { x: 920, y: 186, dy: 38, r: 16 };

@@ -282,7 +282,9 @@ class Game {
       case 'slot': return ['Continue', 'New Game', 'Back'];
       case 'difficulty': return ['Easy', 'Normal', 'Hard', 'Back'];
     }
-    return this.hasSave() ? ['Continue', 'Play', 'Options', 'How to Play'] : ['Play', 'Options', 'How to Play'];
+    // phones have no ` key: the tuning panel gets a row (Michael)
+    const tail = IS_TOUCH ? ['Tuning'] : [];
+    return this.hasSave() ? ['Continue', 'Play', 'Options', 'How to Play', ...tail] : ['Play', 'Options', 'How to Play', ...tail];
   }
 
   /** Where title row i sits: the slot picker's rows are taller (they carry a summary), options' tighter. */
@@ -423,6 +425,11 @@ class Game {
       case 'How to Play':
         this.titleMode = 'help'; this.titleIndex = 0;
         break;
+      case 'Tuning': {
+        const panel = document.getElementById('debug');
+        if (panel) panel.classList.toggle('open');
+        break;
+      }
       case 'Back':
         if (this.titleMode === 'slot' || this.titleMode === 'difficulty') { this.titleMode = 'slots'; this.titleIndex = this.pendingSlot - 1; }
         else { this.titleMode = 'root'; this.titleIndex = 0; }
@@ -3072,7 +3079,7 @@ function buildDebugPanel(g: Game) {
   const groups: Record<string, Tunable[]> = {};
   for (const t of TUNABLES) (groups[t.group] ||= []).push(t);
 
-  let html = '<div class="dbg-head">TUNING <span class="dbg-hint">` to hide</span></div>';
+  let html = `<div class="dbg-head">TUNING <span class="dbg-hint">${IS_TOUCH ? '<button data-act="close">Close</button>' : '` to hide'}</span></div>`;
   html += '<div class="dbg-actions">'
     + '<button data-act="heal">Full heal</button>'
     + '<button data-act="upgrade">+1 rank all upgrades</button>'
@@ -3112,6 +3119,7 @@ function buildDebugPanel(g: Game) {
   panel.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
     btn.addEventListener('click', () => {
       switch (btn.dataset.act) {
+        case 'close': panel.classList.remove('open'); break;
         case 'heal':
           g.player.hp = g.player.stats.maxHp;
           g.player.mp = g.player.stats.maxMp;
