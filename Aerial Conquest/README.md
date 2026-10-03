@@ -32,6 +32,30 @@ No dependencies, no bundler, nothing to install.
 | `src/render.ts` | the campaign map, battlefield, characters, VFX, HUD, pause menu, title |
 | `src/main.ts` | `Game`: loop, screens (`title`, `campaign` map, `battle`, debug `sandbox` battle list), battle flow and results, test field, team-aware damage, orders, menus, save, debug panel |
 
+# Update: mobile controls
+
+- **Attack button** is bigger on phones: radius 42 → **58**, with a
+  larger label. Jump, dash, magic and command moved a little to make
+  room.
+- **Potion button (POT)** on phones: drinks a potion, like E on a
+  keyboard. It shows how many you have and dims when you're out.
+- **Tuning on phones:** a **Tuning** row on the title menu opens the
+  tuning panel, and the panel has a **Close** button. Desktop is
+  unchanged: no extra row, and ` still toggles the panel.
+
+**Verified** (headless Chromium, emulated iPhone 13): `tests/update2.js`
+**6/6**.
+- **Layout:** attack radius 58, the potion button present, every button
+  on screen, none overlapping each other, the menu button or the spell
+  chips.
+- **Attack:** a tap 52 px from the attack button's centre (outside the
+  old button) swings.
+- **Potion:** a POT tap took potions 3 → 2 and HP 30 → 100.
+- **Tuning:** the title shows Tuning; tapping it opens the panel; Close
+  shuts it. The desktop title is unchanged.
+- **Regressions:** the suites that tap touch controls (Phases 0, 1, 2,
+  3, 5, 6, 12, 13 and update1) all pass.
+
 # Update: invisible wall, longer keep fight, earned spells, Thunder ring
 
 **Invisible wall.** Structures were culled by a single anchor point, the

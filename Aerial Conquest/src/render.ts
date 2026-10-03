@@ -3380,7 +3380,7 @@ class Renderer {
     c.textAlign = 'center';
     for (const b of TOUCH_BTNS) {
       const lit = inp.touchHeld(b.id);
-      const usable = b.id !== 'dash' || g.player.hasT('dash');
+      const usable = b.id === 'dash' ? g.player.hasT('dash') : b.id === 'item' ? g.player.potions > 0 : true;
       c.globalAlpha = usable ? (lit ? 0.85 : 0.42) : 0.16;
       c.fillStyle = 'rgba(16,20,36,0.7)';
       c.beginPath(); c.arc(b.x, b.y, b.r, 0, Math.PI * 2); c.fill();
@@ -3388,7 +3388,11 @@ class Renderer {
       c.lineWidth = lit ? 4 : 2.5;
       c.beginPath(); c.arc(b.x, b.y, b.r, 0, Math.PI * 2); c.stroke();
       c.fillStyle = b.color;
-      c.fillText(b.label, b.x, b.y + 5);
+      c.font = `800 ${b.id === 'attack' ? 17 : 13}px ui-monospace, Menlo, Consolas, monospace`;
+      c.fillText(b.label, b.x, b.y + (b.id === 'attack' ? 6 : 5));
+      c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
+      // potions left, under the potion button
+      if (b.id === 'item') { c.font = '700 11px ui-monospace, Menlo, Consolas, monospace'; c.fillText(`x${g.player.potions}`, b.x, b.y + b.r + 12); c.font = '800 13px ui-monospace, Menlo, Consolas, monospace'; }
       // dash charges as pips under the button
       if (b.id === 'dash' && usable) {
         for (let i = 0; i < g.player.maxDash(); i++) {
@@ -3544,8 +3548,9 @@ class Renderer {
     } else if (g.titleMode === 'slots') {
       c.fillText(IS_TOUCH ? 'tap a slot' : '\u2191\u2193 and ENTER  ·  ESC back', VIEW_W / 2, VIEW_H - 22);
     } else if (cur) {
-      c.fillText(`Continue: Slot ${g.slot}  ·  ${cur.land}/12 territories  ·  ${fmtPlayTime(cur.time)}`, VIEW_W / 2, VIEW_H - 62);
-      if (cur.ng) { c.fillStyle = '#ff9a5c'; c.font = '900 14px ui-monospace, Menlo, Consolas, monospace'; c.fillText(`NEW GAME+ ${cur.ng}`, VIEW_W / 2, VIEW_H - 40); }
+      const low = rows.length > 4 ? 30 : 0;   // five rows (the phone's Tuning row): the hint drops below them
+      c.fillText(`Continue: Slot ${g.slot}  ·  ${cur.land}/12 territories  ·  ${fmtPlayTime(cur.time)}`, VIEW_W / 2, VIEW_H - 62 + low);
+      if (cur.ng) { c.fillStyle = '#ff9a5c'; c.font = '900 14px ui-monospace, Menlo, Consolas, monospace'; c.fillText(`NEW GAME+ ${cur.ng}`, VIEW_W / 2, VIEW_H - 40 + low * 0.8); }
     } else {
       c.fillText(IS_TOUCH ? 'tap an option to begin' : 'arrow keys and ENTER, or click', VIEW_W / 2, VIEW_H - 46);
     }

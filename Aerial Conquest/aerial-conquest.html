@@ -648,11 +648,12 @@ const LEVEL_SCALING = {
 };
 const TOUCH_STICK = { x: 118, y: 424, r: 64, knob: 30, dead: 0.17 };
 const TOUCH_BTNS = [
-    { id: 'attack', x: 866, y: 448, r: 42, label: 'ATK', color: '#ff9d5c' },
-    { id: 'jump', x: 768, y: 430, r: 33, label: 'JMP', color: '#7fb4ff' },
-    { id: 'dash', x: 878, y: 356, r: 33, label: 'DSH', color: '#69e29a' },
-    { id: 'magic', x: 776, y: 340, r: 31, label: 'MAG', color: '#c39bff' },
-    { id: 'command', x: 672, y: 456, r: 30, label: 'CMD', color: '#ffd54a' }, // opens the order wheel
+    { id: 'attack', x: 862, y: 446, r: 58, label: 'ATK', color: '#ff9d5c' }, // the big one (Michael: bigger on phones)
+    { id: 'jump', x: 750, y: 454, r: 33, label: 'JMP', color: '#7fb4ff' },
+    { id: 'dash', x: 876, y: 350, r: 33, label: 'DSH', color: '#69e29a' },
+    { id: 'magic', x: 772, y: 344, r: 31, label: 'MAG', color: '#c39bff' },
+    { id: 'command', x: 664, y: 462, r: 30, label: 'CMD', color: '#ffd54a' }, // opens the order wheel
+    { id: 'item', x: 676, y: 378, r: 28, label: 'POT', color: '#ff7a9a' }, // drink a potion (E on a keyboard)
 ];
 const TOUCH_CHIPS = { x: 920, y: 186, dy: 38, r: 16 };
 // Menu geometry lives here because the renderer draws from it and the input
@@ -11593,7 +11594,7 @@ class Renderer {
         c.textAlign = 'center';
         for (const b of TOUCH_BTNS) {
             const lit = inp.touchHeld(b.id);
-            const usable = b.id !== 'dash' || g.player.hasT('dash');
+            const usable = b.id === 'dash' ? g.player.hasT('dash') : b.id === 'item' ? g.player.potions > 0 : true;
             c.globalAlpha = usable ? (lit ? 0.85 : 0.42) : 0.16;
             c.fillStyle = 'rgba(16,20,36,0.7)';
             c.beginPath();
@@ -11605,7 +11606,15 @@ class Renderer {
             c.arc(b.x, b.y, b.r, 0, Math.PI * 2);
             c.stroke();
             c.fillStyle = b.color;
-            c.fillText(b.label, b.x, b.y + 5);
+            c.font = `800 ${b.id === 'attack' ? 17 : 13}px ui-monospace, Menlo, Consolas, monospace`;
+            c.fillText(b.label, b.x, b.y + (b.id === 'attack' ? 6 : 5));
+            c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
+            // potions left, under the potion button
+            if (b.id === 'item') {
+                c.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+                c.fillText(`x${g.player.potions}`, b.x, b.y + b.r + 12);
+                c.font = '800 13px ui-monospace, Menlo, Consolas, monospace';
+            }
             // dash charges as pips under the button
             if (b.id === 'dash' && usable) {
                 for (let i = 0; i < g.player.maxDash(); i++) {
@@ -11783,11 +11792,12 @@ class Renderer {
             c.fillText(IS_TOUCH ? 'tap a slot' : '\u2191\u2193 and ENTER  ·  ESC back', VIEW_W / 2, VIEW_H - 22);
         }
         else if (cur) {
-            c.fillText(`Continue: Slot ${g.slot}  ·  ${cur.land}/12 territories  ·  ${fmtPlayTime(cur.time)}`, VIEW_W / 2, VIEW_H - 62);
+            const low = rows.length > 4 ? 30 : 0; // five rows (the phone's Tuning row): the hint drops below them
+            c.fillText(`Continue: Slot ${g.slot}  ·  ${cur.land}/12 territories  ·  ${fmtPlayTime(cur.time)}`, VIEW_W / 2, VIEW_H - 62 + low);
             if (cur.ng) {
                 c.fillStyle = '#ff9a5c';
                 c.font = '900 14px ui-monospace, Menlo, Consolas, monospace';
-                c.fillText(`NEW GAME+ ${cur.ng}`, VIEW_W / 2, VIEW_H - 40);
+                c.fillText(`NEW GAME+ ${cur.ng}`, VIEW_W / 2, VIEW_H - 40 + low * 0.8);
             }
         }
         else {
@@ -12248,7 +12258,9 @@ class Game {
             case 'slot': return ['Continue', 'New Game', 'Back'];
             case 'difficulty': return ['Easy', 'Normal', 'Hard', 'Back'];
         }
-        return this.hasSave() ? ['Continue', 'Play', 'Options', 'How to Play'] : ['Play', 'Options', 'How to Play'];
+        // phones have no ` key: the tuning panel gets a row (Michael)
+        const tail = IS_TOUCH ? ['Tuning'] : [];
+        return this.hasSave() ? ['Continue', 'Play', 'Options', 'How to Play', ...tail] : ['Play', 'Options', 'How to Play', ...tail];
     }
     /** Where title row i sits: the slot picker's rows are taller (they carry a summary), options' tighter. */
     titleRowAt(i) {
@@ -12425,6 +12437,12 @@ class Game {
                 this.titleMode = 'help';
                 this.titleIndex = 0;
                 break;
+            case 'Tuning': {
+                const panel = document.getElementById('debug');
+                if (panel)
+                    panel.classList.toggle('open');
+                break;
+            }
             case 'Back':
                 if (this.titleMode === 'slot' || this.titleMode === 'difficulty') {
                     this.titleMode = 'slots';
@@ -15697,7 +15715,7 @@ function buildDebugPanel(g) {
     const groups = {};
     for (const t of TUNABLES)
         (groups[_a = t.group] || (groups[_a] = [])).push(t);
-    let html = '<div class="dbg-head">TUNING <span class="dbg-hint">` to hide</span></div>';
+    let html = `<div class="dbg-head">TUNING <span class="dbg-hint">${IS_TOUCH ? '<button data-act="close">Close</button>' : '` to hide'}</span></div>`;
     html += '<div class="dbg-actions">'
         + '<button data-act="heal">Full heal</button>'
         + '<button data-act="upgrade">+1 rank all upgrades</button>'
@@ -15736,6 +15754,9 @@ function buildDebugPanel(g) {
     panel.querySelectorAll('button').forEach((btn) => {
         btn.addEventListener('click', () => {
             switch (btn.dataset.act) {
+                case 'close':
+                    panel.classList.remove('open');
+                    break;
                 case 'heal':
                     g.player.hp = g.player.stats.maxHp;
                     g.player.mp = g.player.stats.maxMp;
